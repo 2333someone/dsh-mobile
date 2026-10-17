@@ -1,10 +1,10 @@
 /**
  * dsh-mobile —— 掌上 dsh（host 半 + 客户端设置页）。
  *
- * host 半（本文件）：
- * - /m/       手机页面（未配对输入 6 位码；已配对进入工作区/会话/聊天 UI）
- * - /m/api    移动端 RPC + 桌面设置页 RPC
- * - /m/icon.svg  插件图标
+ * 双 HTTP 面：
+ * - 共享 webServer（回环）：/m/ 页面 + /m/api —— 供桌面 GUI 设置面板同源调用。
+ * - 独立监听 0.0.0.0:<mobilePort>（默认 19387）：同一套路由 —— 供手机/局域网/
+ *   公网反代访问。不依赖 GUI 的动态端口与绑定，LAN 开箱即用。
  *
  * 配对（dsh-palm 方向）：桌面设置页「生成配对码」→ 手机在 /m/ 输入该 6 位码
  * → 宿主机校验后下发 HttpOnly 设备 cookie。一次性 token，5 分钟过期。
@@ -12,6 +12,7 @@
  * 客户端设置页（client.js）在 dsh 设置面板注册「掌上 dsh」段：出码、设备管理、
  * 访问地址展示。
  */
+import { createServer } from 'node:http'
 import { randomBytes, randomInt } from 'node:crypto'
 import { homedir, networkInterfaces } from 'node:os'
 import { join, basename } from 'node:path'
@@ -29,6 +30,7 @@ const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
 const MAX_DEVICES = 16
+const DEFAULT_MOBILE_PORT = 19387
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -105,6 +107,8 @@ function lanIPv4Addresses() {
     .flat()
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => i.address)
+    // 169.254.0.0/16 是 APIPA 链路本地地址，手机连不上，别展示。
+    .filter((a) => !a.startsWith('169.254.'))
 }
 
 // ── device store ────────────────────────────────────────────────────────────
@@ -168,6 +172,8 @@ export function apply(ctx, config) {
   const cfg = {
     enabled: true,
     publicBaseUrl: '',
+    mobilePort: DEFAULT_MOBILE_PORT,
+    mobileHost: '0.0.0.0',
     devicesFile: defaultDevicesFile(),
     ...(config || {}),
   }
@@ -175,7 +181,7 @@ export function apply(ctx, config) {
   if (!cfg.enabled) return
 
   const devices = loadDevices(cfg.devicesFile)
-  let pairToken = null // { code, expiresAt } —— 桌面出码后待手机输入
+  let pairToken = null // { code, expiresAt }
 
   const cookieName = COOKIE_NAME
 
@@ -226,10 +232,12 @@ export function apply(ctx, config) {
   }
 
   function accessAddresses() {
-    const port = ctx.webServer && typeof ctx.webServer.port === 'number' ? ctx.webServer.port : null
-    const lan = port ? lanIPv4Addresses().map((a) => `http://${a}:${port}`) : []
-    const publicBase = typeof cfg.publicBaseUrl === 'string' && cfg.publicBaseUrl.trim() !== '' ? cfg.publicBaseUrl.trim().replace(/\/+$/, '') : null
-    return { lan, publicBase }
+    const port = Number(cfg.mobilePort) || DEFAULT_MOBILE_PORT
+    const lan = lanIPv4Addresses().map((a) => `http://${a}:${port}`)
+    const publicBase = typeof cfg.publicBaseUrl === 'string' && cfg.publicBaseUrl.trim() !== ''
+      ? cfg.publicBaseUrl.trim().replace(/\/+$/, '')
+      : null
+    return { lan, publicBase, port }
   }
 
   // ── API handlers ──────────────────────────────────────────────────────────
@@ -400,14 +408,7 @@ export function apply(ctx, config) {
     fn(req, res)
   }
 
-  async function handleApi(req, res) {
-    let url
-    try {
-      url = new URL(req.url || '/', 'http://localhost')
-    } catch {
-      sendJson(res, 400, { ok: false, error: 'bad url' })
-      return
-    }
+  async function handleApi(req, res, url) {
     const sub = url.pathname.slice(API_PREFIX.length).replace(/\/+$/, '')
     const method = (req.method || 'GET').toUpperCase()
     const key = `${method} ${sub}`
@@ -450,35 +451,80 @@ export function apply(ctx, config) {
     }
   }
 
-  // ── page / icon / redirect ────────────────────────────────────────────────
-  function servePage(_req, res) {
-    sendHtml(res, 200, mobileHtml())
+  // ── shared request router (both HTTP faces use this) ──────────────────────
+  async function routeRequest(req, res) {
+    let url
+    try {
+      url = new URL(req.url || '/', 'http://localhost')
+    } catch {
+      sendJson(res, 400, { ok: false, error: 'bad url' })
+      return
+    }
+    const path = url.pathname
+    if (path === '/m') {
+      res.statusCode = 302
+      res.setHeader('Location', MOBILE_ROOT)
+      res.end()
+      return
+    }
+    if (path === MOBILE_ROOT) {
+      sendHtml(res, 200, mobileHtml())
+      return
+    }
+    if (path === ICON_PATH) {
+      sendText(res, 200, 'image/svg+xml', iconSvg())
+      return
+    }
+    if (path === API_PREFIX || path.startsWith(API_PREFIX + '/')) {
+      await handleApi(req, res, url)
+      return
+    }
+    sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
-  function serveIcon(_req, res) {
-    sendText(res, 200, 'image/svg+xml', iconSvg())
-  }
-
-  function redirectToRoot(_req, res) {
-    res.statusCode = 302
-    res.setHeader('Location', MOBILE_ROOT)
-    res.end()
-  }
-
-  // ── register routes + sweep ───────────────────────────────────────────────
+  // ── face 1: shared webServer (loopback; powers the GUI settings panel) ────
   ctx.effect(() => {
     const routes = [
-      { kind: 'exact', path: '/m', handler: redirectToRoot },
-      { kind: 'exact', path: MOBILE_ROOT, handler: servePage },
-      { kind: 'exact', path: ICON_PATH, handler: serveIcon },
-      { kind: 'prefix', path: API_PREFIX, handler: handleApi },
+      { kind: 'exact', path: '/m', handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: MOBILE_ROOT, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: ICON_PATH, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'prefix', path: API_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))
     return () => {
       for (const dispose of disposers) dispose()
     }
-  }, 'dsh-mobile: routes')
+  }, 'dsh-mobile: webServer routes')
 
+  // ── face 2: dedicated 0.0.0.0 listener for phone / LAN / public ───────────
+  ctx.effect(() => {
+    const port = Number(cfg.mobilePort) || DEFAULT_MOBILE_PORT
+    const host = cfg.mobileHost || '0.0.0.0'
+    const server = createServer((req, res) => {
+      routeRequest(req, res).catch((err) => {
+        try {
+          sendJson(res, 500, { ok: false, error: String((err && err.message) || err) })
+        } catch {}
+      })
+    })
+    server.on('error', (err) => {
+      if (err && err.code === 'EADDRINUSE') {
+        console.warn(`[dsh-mobile] 端口 ${port} 已被占用，手机独立监听未启动。可改 config.mobilePort。`)
+      } else {
+        console.error('[dsh-mobile] mobile listener error:', err && err.message)
+      }
+    })
+    server.listen(port, host, () => {
+      console.log(`[dsh-mobile] mobile listener on http://${host}:${port}/m/`)
+    })
+    return () => {
+      try {
+        server.close()
+      } catch {}
+    }
+  }, 'dsh-mobile: mobile listener')
+
+  // ── presence sweep ────────────────────────────────────────────────────────
   ctx.effect(() => {
     const timer = setInterval(() => {
       const now = Date.now()
@@ -491,5 +537,5 @@ export function apply(ctx, config) {
     return () => clearInterval(timer)
   }, 'dsh-mobile: sweep')
 
-  console.log(`[dsh-mobile] mounted: /m/ page + /m/api RPC (devices: ${devices.size})`)
+  console.log(`[dsh-mobile] mounted: /m/ + /m/api on webServer and 0.0.0.0:${cfg.mobilePort} (devices: ${devices.size})`)
 }

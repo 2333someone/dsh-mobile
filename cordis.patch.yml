@@ -1,15 +1,19 @@
 # dsh-mobile: standalone mobile surface for the dsh web GUI.
-# Host-only bundle: inserts one plugin row that mounts the pairing state
-# machine, the /m/ phone page, the /m/api RPC channel and the loopback-only
-# /m/admin approval page on the existing webServer.
+# Inserts one plugin row that mounts the pairing state machine, the /m/ phone
+# page, and the /m/api RPC channel.
 #
-# `publicBaseUrl` is informational: the admin page shows it (and the detected
-# LAN address) so the phone knows where to connect. Actual public reachability
-# comes from your reverse proxy -> this host's webServer binding, which this
-# plugin does NOT change (bind 0.0.0.0 yourself or via your deployment tooling).
+# Two HTTP faces share the same state:
+#   - the GUI's webServer (loopback) -> powers the in-app settings panel
+#   - a dedicated 0.0.0.0:<mobilePort> listener -> phone / LAN / public proxy
+# The dedicated listener is what makes LAN and the existing reverse proxy work
+# without touching the GUI's bind address or its dynamic port.
+#
+# `publicBaseUrl` is informational: the settings panel displays it so the phone
+# knows the public address. Leave it empty if you only use LAN.
 - insert:
     - id: dsh-mobile
       name: 'dsh-mobile'
       config:
         enabled: true
-        publicBaseUrl: ''
+        mobilePort: 19387
+        publicBaseUrl: 'https://dshm.elysia.xin:45632'
