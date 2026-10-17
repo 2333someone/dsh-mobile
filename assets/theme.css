@@ -103,6 +103,10 @@
 .chat-picker-more {
   display: none !important;
 }
+/* 内联面板遮罩透明：避免打开底部抽屉前短暂闪一下暗色（仍可点击关闭） */
+.chat-picker-scrim {
+  background: transparent !important;
+}
 /* ── 输入框上方工具行：+ / 模型 / 上下文用量 统一成图标 ───────────── */
 #dm-tools {
   flex: none;
