@@ -235,6 +235,39 @@ async function deliverNotify(config, event) {
   return results.some((r) => r.status === 'fulfilled')
 }
 
+/** 语音转写：按顺序尝试 OpenAI 兼容的 /audio/transcriptions 服务。 */
+async function transcribeAudio(base64Audio, services) {
+  if (typeof fetch !== 'function') return null
+  if (typeof base64Audio !== 'string' || base64Audio === '') return null
+  const list = (Array.isArray(services) ? services : []).filter(
+    (s) => s && typeof s.baseURL === 'string' && s.baseURL.trim() !== '',
+  )
+  if (list.length === 0) return null
+  let buffer
+  try {
+    buffer = Buffer.from(base64Audio, 'base64')
+  } catch {
+    return null
+  }
+  for (const svc of list) {
+    try {
+      const base = String(svc.baseURL).trim().replace(/\/+$/, '')
+      const url = base.endsWith('/audio/transcriptions') ? base : `${base}/audio/transcriptions`
+      const form = new FormData()
+      form.append('file', new Blob([buffer], { type: 'audio/wav' }), 'audio.wav')
+      if (typeof svc.model === 'string' && svc.model !== '') form.append('model', svc.model)
+      const headers = {}
+      if (typeof svc.apiKey === 'string' && svc.apiKey !== '') headers.Authorization = `Bearer ${svc.apiKey}`
+      const res = await fetch(url, { method: 'POST', headers, body: form })
+      if (!res.ok) continue
+      const json = await res.json()
+      const text = typeof json.text === 'string' ? json.text.trim() : ''
+      if (text !== '') return text
+    } catch {}
+  }
+  return null
+}
+
 // ── message text extraction (fallback simple API) ───────────────────────────
 function textOfEventData(data) {
   if (!data || typeof data !== 'object') return ''
@@ -311,6 +344,7 @@ export function apply(ctx, config) {
     devicesFile: defaultDevicesFile(),
     pairCode: DEFAULT_PAIR_CODE,
     pushConfigFile: join(homedir(), '.dsh', 'dsh-mobile-push.json'),
+    transcribeServices: [],
     ...(config || {}),
   }
 
@@ -765,10 +799,26 @@ export function apply(ctx, config) {
       }
       // ── 语音 / 附件 / 文件 ──
       case 'mobile.voiceServices': {
-        return { ok: true, value: { services: [] } }
+        const list = Array.isArray(cfg.transcribeServices) ? cfg.transcribeServices : []
+        return {
+          ok: true,
+          value: {
+            services: list.map((s) => ({ name: s.name || '转写服务', baseURL: s.baseURL || '', model: s.model || '' })),
+          },
+        }
       }
       case 'mobile.transcribe': {
-        return { ok: false, error: { code: 'unavailable', message: '语音转写暂未开放' } }
+        const text = await transcribeAudio(payload.audio, payload.services)
+        if (text === null) {
+          return {
+            ok: false,
+            error: {
+              code: 'transcribe-failed',
+              message: '转写失败：请在手机「设置 → 语音服务」添加一个 OpenAI 兼容的转写服务',
+            },
+          }
+        }
+        return { ok: true, value: { text } }
       }
       case 'mobile.readAttachment': {
         // 0.1.5 起消息事件只带 attachmentId 引用；宿主按「该会话确实引用过这张图」授权。
@@ -827,7 +877,10 @@ export function apply(ctx, config) {
     }
     let envelope
     try {
-      envelope = await readJsonBody(req, method === 'session.prompt' ? PROMPT_BODY : SMALL_BODY)
+      const budget = method === 'session.prompt'
+        ? PROMPT_BODY
+        : method === 'mobile.transcribe' ? 12 * 1024 * 1024 : SMALL_BODY
+      envelope = await readJsonBody(req, budget)
     } catch {
       sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'invalid json body' } })
       return
