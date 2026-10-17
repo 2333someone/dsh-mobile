@@ -1,0 +1,15 @@
+# dsh-mobile: standalone mobile surface for the dsh web GUI.
+# Host-only bundle: inserts one plugin row that mounts the pairing state
+# machine, the /m/ phone page, the /m/api RPC channel and the loopback-only
+# /m/admin approval page on the existing webServer.
+#
+# `publicBaseUrl` is informational: the admin page shows it (and the detected
+# LAN address) so the phone knows where to connect. Actual public reachability
+# comes from your reverse proxy -> this host's webServer binding, which this
+# plugin does NOT change (bind 0.0.0.0 yourself or via your deployment tooling).
+- insert:
+    - id: dsh-mobile
+      name: 'dsh-mobile'
+      config:
+        enabled: true
+        publicBaseUrl: ''
