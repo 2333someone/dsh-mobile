@@ -157,8 +157,8 @@
   background: var(--bg-hover, rgba(127, 127, 127, 0.12)) !important;
 }
 .chat-context .chat-context-ring {
-  width: 20px !important;
-  height: 20px !important;
+  width: 16px !important;
+  height: 16px !important;
 }
 /* 灰阶进度：已用=灰色，剩余=淡灰色；≥80% 仍变红 */
 .chat-context .chat-context-ring-track {
