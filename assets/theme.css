@@ -74,7 +74,8 @@
   padding-bottom: 5px !important;
 }
 
-/* ── 隐藏 App 内置麦克风：改用手机输入法自带的语音输入 ────────────── */
+/* ── 输入栏里的原始「+」「麦克风」隐藏：改用上方工具行图标 ────────── */
+.chat-attach-btn[aria-label="添加内容"],
 .chat-attach-btn[aria-label="语音输入"] {
   display: none !important;
 }
@@ -157,28 +158,65 @@
   background: #4d6bfe;
   color: #fff;
 }
-/* 给自定义模型按钮在输入栏里留出位置 */
-.chat-input {
-  margin-left: 44px !important;
+/* ── 输入框上方工具行：+ / 模型 / 上下文用量 统一成图标 ───────────── */
+#dm-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-/* 自定义模型按钮：与「+」「麦克风」同一个 .chat-attach-btn 视觉 */
+#dm-tools .dm-tool-btn,
 #dm-model-btn {
-  position: fixed;
-  z-index: 80;
-  width: 40px;
-  height: 40px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: none;
   border-radius: 10px;
   background: transparent;
   color: var(--text-secondary, #6b6e78);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.15s ease;
+  cursor: pointer;
 }
+#dm-tools .dm-tool-btn:active,
 #dm-model-btn:active {
   background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+/* 上下文用量：图标化 = 环形进度 + 环心百分比（颜色随占用：正常蓝 / ≥80% 红） */
+.chat-context {
+  position: relative !important;
+  flex: none !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-left: none !important;
+  padding-left: 0 !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  /* 未加载时 bundle 会渲染裸文本「上下文 --」，用 0 字号藏掉；环与数字各自有字号 */
+  font-size: 0 !important;
+}
+.chat-context .chat-context-ring {
+  width: 32px !important;
+  height: 32px !important;
+}
+.chat-context .chat-context-text {
+  position: absolute !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 8px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.3px !important;
+  line-height: 1 !important;
+  font-variant-numeric: tabular-nums !important;
+  color: inherit !important;
+  pointer-events: none !important;
 }
 
 

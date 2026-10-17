@@ -291,7 +291,7 @@ function assetText(name) {
   return asset(name).toString('utf8')
 }
 
-// 输入栏左侧的自定义「模型」按钮：打开 bundle 小弹窗，并在其下方无缝拼接「思考强度」区块。
+// 输入框上方工具行：把「+」「模型」「上下文用量」统一成图标排列。
 const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="模型"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6M9 12h6M9 15h3"/></svg></button><script>
 (function () {
   var btn = document.getElementById('dm-model-btn');
@@ -318,21 +318,34 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
     };
   }
 
-  function bar() { return document.querySelector('.chat-inputbar'); }
-  function plus() { var b = bar(); return b ? b.querySelector('.chat-attach-btn') : null; }
+  function toolsRow() { return document.querySelector('.chat-tools'); }
   function pill() { return document.querySelector('.chat-pill[aria-label^="切换模型"]'); }
   function panelEl() { return document.querySelector('.chat-picker-panel'); }
   function effortEl() { return document.getElementById('dm-effort'); }
   function visible(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
 
-  function place() {
-    var p = plus();
-    if (!p) { btn.style.display = 'none'; return; }
-    var r = p.getBoundingClientRect();
-    if (!r || r.width === 0) { btn.style.display = 'none'; return; }
-    btn.style.left = Math.round(r.right + 6) + 'px';
-    btn.style.top = Math.round(r.top + (r.height - 40) / 2) + 'px';
-    if (btn.style.display !== 'flex') btn.style.display = 'flex';
+  // 把「+」和模型按钮放进输入框上方的工具行（同一层，随页面出现）。
+  function ensureTools() {
+    var t = toolsRow();
+    if (!t) return;
+    var row = document.getElementById('dm-tools');
+    if (!row) {
+      row = document.createElement('div');
+      row.id = 'dm-tools';
+      var attach = document.createElement('button');
+      attach.type = 'button';
+      attach.className = 'dm-tool-btn';
+      attach.setAttribute('aria-label', '添加内容');
+      attach.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+      attach.onclick = function (e) {
+        e.preventDefault();
+        var b = document.querySelector('.chat-attach-btn[aria-label="添加内容"]');
+        if (b) b.click();
+      };
+      row.appendChild(attach);
+      row.appendChild(btn);
+    }
+    if (row.parentNode !== t) t.insertBefore(row, t.firstChild);
   }
 
   function rpc(method, payload) {
@@ -455,14 +468,12 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
   });
 
   setInterval(function () {
-    place();
+    ensureTools();
     if (visible(panelEl())) { ensureEffort(false); positionEffort(); }
     else { removeEffort(); }
   }, 120);
-  window.addEventListener('resize', place);
-  window.addEventListener('scroll', place, true);
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', place);
-  place();
+  window.addEventListener('resize', function () { if (visible(panelEl())) positionEffort(); });
+  ensureTools();
   loadCatalog(false);
 })();
 </script>`
@@ -522,6 +533,17 @@ export function apply(ctx, config) {
     pairCode: DEFAULT_PAIR_CODE,
     pushConfigFile: join(homedir(), '.dsh', 'dsh-mobile-push.json'),
     transcribeServices: [],
+    // 手机端模型列表里隐藏的老模型（DeepSeek v3.x / R1 与旧混元）；可在配置里覆盖。
+    hiddenModels: [
+      'cn:deepseek-v3-1-lkeap',
+      'cn:deepseek-v3-1',
+      'cn:deepseek-v3-0324-lkeap',
+      'cn:deepseek-r1-0528-lkeap',
+      'cn:deepseek-v3-0324',
+      'cn:deepseek-v3-2-volc',
+      'cn:hunyuan-2.0-instruct',
+      'cn:hunyuan-chat',
+    ],
     ...(config || {}),
   }
 
@@ -774,12 +796,16 @@ export function apply(ctx, config) {
       }
       case 'session.models': {
         const catalog = await controller.modelCatalog()
+        const hidden = new Set((Array.isArray(cfg.hiddenModels) ? cfg.hiddenModels : []).map(String))
+        const groups = (catalog.groups || [])
+          .map((g) => ({ ...g, models: (g.models || []).filter((m) => !hidden.has(m.id)) }))
+          .filter((g) => g.models.length > 0)
         return {
           ok: true,
           value: {
             current: catalog.default,
             routable: (catalog.routableProviders || []).length > 0,
-            groups: catalog.groups || [],
+            groups,
             failures: catalog.failures || [],
           },
         }
