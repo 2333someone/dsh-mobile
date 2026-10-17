@@ -35,6 +35,11 @@ export const inject = [
   'directoryPickerController',
   'credentials',
   'deepseekAccount',
+  // 手机工具栏「权限」按钮：读/切权限预设需要这两个服务。
+  // permissionPresets 提供 catalog()（可选预设）/ current(session) / set(session, name)；
+  // sessions 用来把 sessionId 解析成 Session 对象（上面两个方法收的是 Session，不是 id）。
+  'permissionPresets',
+  'sessions',
 ]
 
 const COOKIE_NAME = 'dsh_mobile'
@@ -47,6 +52,8 @@ const THEME_URL = '/m/theme.css'
 const ICON_192_URL = '/m/icon-192.png'
 const ICON_512_URL = '/m/icon-512.png'
 const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
+// 思考中（💭）位置显示的鲸鱼尾 APNG，与桌面 DSH 同一张图；APNG 自带循环播放。
+const WHALE_URL = '/m/whale.png'
 const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
@@ -673,6 +680,8 @@ const EMOJI_ICON_HTML = `<script>
       done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
       warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>'
     };
+    // 思考中不画 SVG，直接用桌面 DSH 的鲸鱼尾 APNG（自带循环播放）。
+    var WHALE_SRC = ${JSON.stringify(WHALE_URL)};
     // [emoji 序列, 图标 key, 作用域 class]：只精确匹配这些序列（含 FE0F 变体选择器），
     // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
     // 📨👥🧩🔔⏰⚙️🔌🎯）都不会被替换。
@@ -697,10 +706,24 @@ const EMOJI_ICON_HTML = `<script>
       ['\\u2714', 'done', 'chat-proc-lead'],
       // 报错计数「⚠ N 处报错」
       ['\\u26A0\\uFE0F', 'warning', 'chat-proc-errors'],
-      ['\\u26A0', 'warning', 'chat-proc-errors']
+      ['\\u26A0', 'warning', 'chat-proc-errors'],
+      // 思考中 / 深度思考：容器多带一个 chat-step-icon-thinking class，只有这一种
+      // 情况换成鲸鱼尾 APNG。工具步骤行的容器只有 chat-step-icon（没有 -thinking），
+      // 里面的工具 emoji 仍走上面的 SVG 映射，不受影响。
+      ['\\u{1F4AD}\\uFE0F', 'whale', 'chat-step-icon-thinking'],
+      ['\\u{1F4AD}', 'whale', 'chat-step-icon-thinking']
     ];
 
     function makeIcon(key) {
+      // 鲸鱼尾是位图（APNG），不是 SVG：单独走一条分支。
+      if (key === 'whale') {
+        var img = document.createElement('img');
+        img.setAttribute('class', 'dm-icon dm-icon-whale dm-whale');
+        img.setAttribute('src', WHALE_SRC);
+        img.setAttribute('alt', '');
+        img.setAttribute('aria-hidden', 'true');
+        return img;
+      }
       var svg = document.createElementNS(NS, 'svg');
       svg.setAttribute('class', 'dm-icon dm-icon-' + key);
       svg.setAttribute('viewBox', '0 0 24 24');
@@ -1579,6 +1602,251 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
 })();
 </script>`
 
+// 权限预设切换：工具栏「上下文用量」右边一个盾牌按钮，点开自绘面板列出宿主
+// permissionPresets.catalog() 的预设并切换。
+//
+// 为什么不复用 bundle 自带的权限面板：它靠 slash 命令 `/permission <name>` 切换，
+// 而本插件的 mobile.commandExec 一直是 not-supported，于是手机上永远切不动。
+// 这里改走专用的 mobile.permissions.get / .set 两个 RPC，与 bundle 解耦。
+const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="button" aria-label="权限" title="权限"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 2.8v5.4c0 4.2-2.9 7.6-7 8.5-4.1-.9-7-4.3-7-8.5V5.8L12 3z"/><path d="M9.2 12.1l2 2 3.6-3.8"/></svg></button><script>
+(function () {
+  var btn = document.getElementById('dm-perm-btn');
+  if (!btn) return;
+
+  var lastSessionId = '';
+  var panel = null;
+  var busy = false;
+
+  // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id。
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body);
+          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
+            lastSessionId = body.payload.sessionId;
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, arguments);
+    };
+  }
+
+  function currentSession() {
+    try {
+      var s = new URL(location.href).searchParams.get('session');
+      if (s) return s;
+    } catch (e) {}
+    return lastSessionId;
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-perm-' + Date.now(), payload: payload })
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function el(tag, cls, html) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  }
+
+  function build() {
+    var back = el('div', 'dm-perm-backdrop');
+    var sheet = el('div', 'dm-perm-sheet');
+    var head = el('div', 'dm-perm-head');
+    var title = el('div', 'dm-perm-title', '权限');
+    var close = el('button', 'dm-perm-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭');
+    head.appendChild(title);
+    head.appendChild(close);
+    var body = el('div', 'dm-perm-body');
+    var status = el('div', 'dm-perm-status');
+    sheet.appendChild(head);
+    sheet.appendChild(body);
+    sheet.appendChild(status);
+    back.appendChild(sheet);
+    document.body.appendChild(back);
+
+    back.addEventListener('click', function (e) {
+      if (e.target !== back) return;   // 点面板内部不关
+      closePanel();
+    });
+    close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
+
+    panel = { back: back, body: body, status: status };
+    return panel;
+  }
+
+  function setStatus(text, kind) {
+    if (!panel) return;
+    var cls = 'dm-perm-status';
+    if (text) cls += ' dm-perm-status-show';
+    if (kind) cls += ' dm-perm-status-' + kind;
+    panel.status.className = cls;
+    panel.status.textContent = text || '';
+  }
+
+  // 渲染选项列表。available=false（宿主没装配权限预设服务）时给空态，
+  // 不伪造任何选项 —— 宁可什么都不显示，也不能让人误以为切成功了。
+  function paint(res) {
+    if (!panel) return;
+    var body = panel.body;
+    body.innerHTML = '';
+    if (!res || !res.ok || !res.value) {
+      body.appendChild(el('p', 'dm-perm-hint', '加载失败，请重试'));
+      return;
+    }
+    var v = res.value;
+    var opts = Array.isArray(v.options) ? v.options : [];
+    if (v.available === false || opts.length === 0) {
+      body.appendChild(el('p', 'dm-perm-hint', '当前没有可用的权限预设'));
+      return;
+    }
+    for (var i = 0; i < opts.length; i++) {
+      var o = opts[i];
+      if (!o || typeof o.value !== 'string' || typeof o.name !== 'string') continue;
+      var on = o.value === v.currentValue;
+      var row = el('button', 'dm-perm-row' + (on ? ' dm-perm-row-on' : ''));
+      row.type = 'button';
+      row.setAttribute('data-value', o.value);
+      var main = el('div', 'dm-perm-main');
+      main.appendChild(el('div', 'dm-perm-name', esc(o.name)));
+      if (o.description) main.appendChild(el('div', 'dm-perm-sub', esc(o.description)));
+      row.appendChild(main);
+      if (on) row.appendChild(el('span', 'dm-perm-check', '✓'));
+      body.appendChild(row);
+    }
+  }
+
+  function open() {
+    if (!panel) build();
+    panel.back.classList.add('dm-perm-open');
+    setStatus('');
+    load();
+  }
+
+  function closePanel() {
+    if (!panel) return;
+    panel.back.classList.remove('dm-perm-open');
+    setStatus('');
+  }
+
+  function load() {
+    if (!panel) return;
+    panel.body.innerHTML = '';
+    panel.body.appendChild(el('p', 'dm-perm-hint dm-perm-loading', '加载中…'));
+    setStatus('');
+    return rpc('mobile.permissions.get', { sessionId: currentSession() }).then(function (res) {
+      if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+      paint(res);
+    }).catch(function () {
+      if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+      panel.body.innerHTML = '';
+      panel.body.appendChild(el('p', 'dm-perm-hint', '加载失败，请重试'));
+    });
+  }
+
+  // 切换：成功后用 set 返回的视图直接重绘（宿主回读的真实生效值），不用前端猜。
+  function select(value) {
+    if (busy) return;
+    busy = true;
+    setStatus('切换中…');
+    rpc('mobile.permissions.set', { sessionId: currentSession(), preset: value }).then(function (res) {
+      busy = false;
+      if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+      if (!res || !res.ok) {
+        var msg = (res && res.error && res.error.message) ? res.error.message : '切换失败';
+        setStatus(msg, 'err');
+        return;
+      }
+      paint(res);
+      setStatus('已切换：' + value, 'ok');
+    }).catch(function () {
+      busy = false;
+      if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+      setStatus('切换失败', 'err');
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var row = t.closest('.dm-perm-row');
+    if (!row) return;
+    var v = row.getAttribute('data-value');
+    if (!v) return;
+    e.preventDefault();
+    if (row.classList.contains('dm-perm-row-on')) { closePanel(); return; }
+    select(v);
+  });
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (panel && panel.back.classList.contains('dm-perm-open')) closePanel();
+    else open();
+  });
+
+  // ── 只在聊天页显示 ──
+  // 判据与子代理按钮一致（顶栏右侧有「更多」按钮），外加工具栏本身存在：
+  // #dm-tools 由 MODEL_BUTTON_HTML 创建并塞进 .chat-tools，它存在即说明在聊天页。
+  function isChatPage() {
+    var slots = document.querySelectorAll('.mobile-headerSlot-right');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].querySelector('button[aria-label="更多"]')) return true;
+    }
+    return false;
+  }
+
+  // 幂等：每次都先判断位置，只在位置不对时才搬动；否则会随 MutationObserver
+  // 反复 insertBefore，把按钮和 .chat-context 的位置来回抖。
+  function ensure() {
+    var row = document.getElementById('dm-tools');
+    var tools = document.querySelector('.chat-tools');
+    if (!row || !tools || !isChatPage()) {
+      if (btn.parentNode) btn.parentNode.removeChild(btn);
+      if (panel && panel.back.classList.contains('dm-perm-open')) closePanel();
+      return;
+    }
+    var ctxEl = row.querySelector('.chat-context');
+    if (btn.parentNode !== row) {
+      // 圆环还没被搬进来时先挂末尾，等下一轮它出现了再挪到它右边。
+      if (ctxEl) row.insertBefore(btn, ctxEl.nextSibling);
+      else row.appendChild(btn);
+      return;
+    }
+    if (ctxEl && ctxEl.nextSibling !== btn) row.insertBefore(btn, ctxEl.nextSibling);
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    window.setTimeout(function () { pending = false; ensure(); }, 60);
+  }
+  try {
+    var mo = new MutationObserver(schedule);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(ensure, 400);
+  ensure();
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -1605,6 +1873,7 @@ function mobilePageHtml() {
     EMOJI_ICON_HTML,
     TURN_PILL_HTML,
     SUBAGENT_BTN_HTML,
+    PERMISSION_BTN_HTML,
     '</body>',
     '</html>',
   ].join('')
@@ -2150,6 +2419,73 @@ export function apply(ctx, config) {
     }
   }
 
+  /** 防御式取 permissionPresets 服务：没装配该插件时返回 undefined，由调用方降级。 */
+  function permissionPresets() {
+    const pp = typeof ctx.get === 'function' ? ctx.get('permissionPresets') : undefined
+    return pp || undefined
+  }
+
+  /** sessionId → Session 对象；permissionPresets 的 current/set 收的是 Session。 */
+  function sessionById(sessionId) {
+    const id = String(sessionId || '')
+    if (id === '') return undefined
+    const store = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined
+    if (!store || typeof store.get !== 'function') return undefined
+    try {
+      return store.get(id)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 读当前权限视图，结构对齐 bundle 的解码器（{ options:[{value,name,description?}], currentValue }）。
+   *
+   * 一律返回 ok:true 的空/降级结构，绝不因为服务缺失而抛错或返回 ok:false：
+   * bundle 会把 rejection 吞掉并保持「加载中」，面板就永远打不开了。
+   */
+  function readPermissionView(payload) {
+    const empty = { options: [], currentValue: '', available: false }
+    const pp = permissionPresets()
+    if (!pp) return empty
+    let options = []
+    let defaultPreset = ''
+    try {
+      const catalog = typeof pp.catalog === 'function' ? pp.catalog() : undefined
+      // catalog() 返回 { options, defaultOptions, defaultPreset }；
+      // options 已含「当前存活的 auto」，defaultOptions 只含静态配置的预设。
+      const raw = (catalog && Array.isArray(catalog.options)) ? catalog.options : []
+      options = raw
+        .map((o) => {
+          if (!o || typeof o !== 'object') return null
+          const value = typeof o.value === 'string' ? o.value : ''
+          const name = typeof o.name === 'string' ? o.name : ''
+          if (value === '' || name === '') return null
+          return {
+            value,
+            name,
+            ...(typeof o.description === 'string' && o.description !== '' ? { description: o.description } : {}),
+          }
+        })
+        .filter(Boolean)
+      defaultPreset = (catalog && typeof catalog.defaultPreset === 'string') ? catalog.defaultPreset : ''
+    } catch {
+      return empty
+    }
+    let currentValue = ''
+    const session = sessionById(payload && payload.sessionId)
+    if (session) {
+      try {
+        if (typeof pp.current === 'function') currentValue = String(pp.current(session) || '')
+      } catch {
+        currentValue = ''
+      }
+    }
+    // 会话已结束/拿不到时，回落到默认预设，至少让面板有别的东西可显示。
+    if (currentValue === '' && defaultPreset !== '') currentValue = defaultPreset
+    return { options, currentValue, available: true, defaultPreset }
+  }
+
   async function dispatchRpc(method, payload) {
     const controller = sc()
     switch (method) {
@@ -2387,6 +2723,50 @@ export function apply(ctx, config) {
       }
       case 'mobile.commandExec': {
         return { ok: false, error: { code: 'not-supported', message: '命令执行暂未开放' } }
+      }
+      // ── 权限预设（手机工具栏「权限」按钮） ──────────────────────────────
+      // bundle 自带的权限面板走两条通道：会话投影 projections.values.permissions
+      // （读）和 slash 命令 `/permission <name>`（写）。后者在本插件里没有实现，
+      // 所以手机上一直切不动权限。这里补一对专用 RPC，由自绘面板直接调用。
+      case 'mobile.permissions.get': {
+        return { ok: true, value: readPermissionView(payload) }
+      }
+      case 'mobile.permissions.set': {
+        const name = String((payload && payload.preset) || '').trim()
+        if (name === '') {
+          return { ok: false, error: { code: 'bad-request', message: '缺少权限预设名' } }
+        }
+        const view = readPermissionView(payload)
+        // 敏感操作：只允许切到宿主 catalog 里真实存在的预设值。
+        // view.options 是从 catalog() 现读的，未知名一律拒绝，绝不静默放宽权限。
+        const known = view.options.some((o) => o.value === name)
+        if (!known) {
+          return {
+            ok: false,
+            error: {
+              code: 'unknown-preset',
+              message: `未知权限预设「${name}」（可用：${view.options.map((o) => o.value).join(', ') || '无'}）`,
+            },
+          }
+        }
+        const pp = permissionPresets()
+        if (!pp || typeof pp.set !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '权限预设服务不可用，无法切换' } }
+        }
+        const session = sessionById(payload && payload.sessionId)
+        if (!session) {
+          return { ok: false, error: { code: 'not-found', message: '会话不存在或已结束' } }
+        }
+        try {
+          pp.set(session, name)
+        } catch (error) {
+          return {
+            ok: false,
+            error: { code: 'set-failed', message: error instanceof Error ? error.message : String(error) },
+          }
+        }
+        // 切完立即回读，让面板拿到宿主真实生效的值（而不是前端猜的值）。
+        return { ok: true, value: readPermissionView(payload) }
       }
       case 'mobile.searchAll':
       case 'mobile.searchMessages': {
@@ -2756,6 +3136,7 @@ export function apply(ctx, config) {
     if (path === ICON_192_URL) return sendBuffer(res, 200, 'image/png', asset('icon-192.png'))
     if (path === ICON_512_URL) return sendBuffer(res, 200, 'image/png', asset('icon-512.png'))
     if (path === APPLE_TOUCH_URL) return sendBuffer(res, 200, 'image/png', asset('apple-touch-icon.png'))
+    if (path === WHALE_URL) return sendBuffer(res, 200, 'image/png', asset('whale.png'))
     if (path === THEME_URL) {
       // 每次请求实时读盘：改 theme.css 后刷新手机即生效，不用重启 dsh。
       let css = ''
@@ -2781,6 +3162,7 @@ export function apply(ctx, config) {
       { kind: 'exact', path: ICON_192_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: ICON_512_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: APPLE_TOUCH_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: WHALE_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: THEME_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'prefix', path: API_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
