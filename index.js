@@ -769,7 +769,19 @@ export function apply(ctx, config) {
         return { ok: false, error: { code: 'unavailable', message: '语音转写暂未开放' } }
       }
       case 'mobile.readAttachment': {
-        return { ok: false, error: { code: 'unavailable', message: '附件读取暂未开放' } }
+        // 0.1.5 起消息事件只带 attachmentId 引用；宿主按「该会话确实引用过这张图」授权。
+        const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
+        const attachmentId = typeof payload.attachmentId === 'string' ? payload.attachmentId : ''
+        if (sessionId === '' || attachmentId === '') {
+          return { ok: false, error: { code: 'invalid-request', message: '缺少会话或附件标识' } }
+        }
+        const result = await sc().attachment({ sessionId, attachmentId })
+        const mediaType = typeof result?.attachment?.mediaType === 'string' ? result.attachment.mediaType : 'image/jpeg'
+        const data = typeof result?.data === 'string' ? result.data : ''
+        if (data === '') {
+          return { ok: false, error: { code: 'internal', message: '图片读取失败' } }
+        }
+        return { ok: true, value: { mediaType, dataUrl: `data:${mediaType};base64,${data}` } }
       }
       case 'mobile.readFile': {
         return { ok: false, error: { code: 'unavailable', message: '文件预览暂未开放' } }
