@@ -160,6 +160,16 @@
   width: 20px !important;
   height: 20px !important;
 }
+/* 灰阶进度：已用=灰色，剩余=淡灰色；≥80% 仍变红 */
+.chat-context .chat-context-ring-track {
+  stroke: #e6e7ec !important;
+}
+.chat-context .chat-context-ring-fill {
+  stroke: #6b6e78 !important;
+}
+.chat-context-warn .chat-context-ring-fill {
+  stroke: #e5484d !important;
+}
 .chat-context .chat-context-text {
   display: none !important;
 }
