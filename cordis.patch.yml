@@ -8,6 +8,8 @@
 # The dedicated listener is what makes LAN and the existing reverse proxy work
 # without touching the GUI's bind address or its dynamic port.
 #
+# `pairCode` is the fixed pairing code (no expiry, no random). Set it to ''
+# to fall back to a random 6-digit code that expires after 5 minutes.
 # `publicBaseUrl` is informational: the settings panel displays it so the phone
 # knows the public address. Leave it empty if you only use LAN.
 - insert:
@@ -16,4 +18,5 @@
       config:
         enabled: true
         mobilePort: 19387
+        pairCode: '123456'
         publicBaseUrl: 'https://dshm.elysia.xin:45632'

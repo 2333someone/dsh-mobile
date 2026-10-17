@@ -38,6 +38,8 @@ const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
 const MAX_DEVICES = 16
 const DEFAULT_MOBILE_PORT = 19387
+// 固定配对码：手机端不再随机、也不会过期；留空则回退为随机 6 位码。
+const DEFAULT_PAIR_CODE = '123456'
 const SMALL_BODY = 64 * 1024
 const PROMPT_BODY = 2 * 1024 * 1024
 
@@ -150,6 +152,88 @@ function persistDevices(file, devices) {
   }
 }
 
+// ── notify config (persisted) ───────────────────────────────────────────────
+function loadNotifyConfig(file) {
+  const defaults = {
+    turnThresholdMs: 60000,
+    turnCooldownMs: 300000,
+    hideDetails: false,
+    kinds: { jobs: false, todo: true, turns: true },
+    channels: {},
+  }
+  try {
+    if (!existsSync(file)) return defaults
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    if (!saved || typeof saved !== 'object') return defaults
+    return {
+      ...defaults,
+      ...saved,
+      kinds: { ...defaults.kinds, ...(saved.kinds || {}) },
+      channels: { ...(saved.channels || {}) },
+    }
+  } catch {
+    return defaults
+  }
+}
+
+function saveNotifyConfig(file, config) {
+  try {
+    const dir = join(file, '..')
+    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify(config, null, 2))
+  } catch (err) {
+    console.error('[dsh-mobile] failed to persist notify config:', err && err.message)
+  }
+}
+
+function notifyChannelsView(channels) {
+  const ch = channels || {}
+  const has = (v) => typeof v === 'string' && v.trim() !== ''
+  return {
+    serverchan: { configured: has(ch.serverchan && ch.serverchan.sendKey) },
+    bark: { configured: has(ch.bark && ch.bark.key) },
+    telegram: { configured: has(ch.telegram && ch.telegram.botToken) && has(ch.telegram && ch.telegram.chatId) },
+    wxpusher: { configured: has(ch.wxpusher && ch.wxpusher.spt) },
+    pushplus: { configured: has(ch.pushplus && ch.pushplus.token) },
+  }
+}
+
+/** 通过已配置的第三方通道投递一条通知；无通道时返回 false。 */
+async function deliverNotify(config, event) {
+  if (typeof fetch !== 'function') return false
+  const channels = (config && config.channels) || {}
+  const title = String((event && event.title) || 'dsh')
+  const body = String((event && event.body) || '')
+  const jobs = []
+  if (channels.wxpusher && channels.wxpusher.spt) {
+    jobs.push(fetch('https://wxpusher.zjiecode.com/api/send/message/simple-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spt: channels.wxpusher.spt, summary: title, content: body }),
+    }))
+  }
+  if (channels.serverchan && channels.serverchan.sendKey) {
+    jobs.push(fetch(`https://sctapi.ftqq.com/${encodeURIComponent(channels.serverchan.sendKey)}.send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `title=${encodeURIComponent(title)}&desp=${encodeURIComponent(body)}`,
+    }))
+  }
+  if (channels.bark && channels.bark.key) {
+    jobs.push(fetch(`https://api.day.app/${encodeURIComponent(channels.bark.key)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`))
+  }
+  if (channels.telegram && channels.telegram.botToken && channels.telegram.chatId) {
+    jobs.push(fetch(`https://api.telegram.org/bot${channels.telegram.botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: channels.telegram.chatId, text: `${title}\n${body}` }),
+    }))
+  }
+  if (jobs.length === 0) return false
+  const results = await Promise.allSettled(jobs)
+  return results.some((r) => r.status === 'fulfilled')
+}
+
 // ── message text extraction (fallback simple API) ───────────────────────────
 function textOfEventData(data) {
   if (!data || typeof data !== 'object') return ''
@@ -223,13 +307,16 @@ export function apply(ctx, config) {
     mobilePort: DEFAULT_MOBILE_PORT,
     mobileHost: '0.0.0.0',
     devicesFile: defaultDevicesFile(),
+    pairCode: DEFAULT_PAIR_CODE,
+    pushConfigFile: join(homedir(), '.dsh', 'dsh-mobile-push.json'),
     ...(config || {}),
   }
 
   if (!cfg.enabled) return
 
   const devices = loadDevices(cfg.devicesFile)
-  let pairToken = null // { code, expiresAt }
+  let pairToken = null // { code, expiresAt, fixed }
+  let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
   const cookieName = COOKIE_NAME
 
   function deviceTokensOf(req) {
@@ -258,18 +345,13 @@ export function apply(ctx, config) {
     return null
   }
 
-  function issuePairToken() {
-    pairToken = { code: String(randomInt(0, 1e6)).padStart(6, '0'), expiresAt: Date.now() + TOKEN_TTL_MS }
-    return pairToken
+  function fixedPairCode() {
+    return String(cfg.pairCode == null ? '' : cfg.pairCode).trim()
   }
 
-  function acceptPairCode(code, userAgent) {
-    const now = Date.now()
-    if (!pairToken || pairToken.code !== String(code).trim() || now > pairToken.expiresAt) {
-      if (pairToken && now > pairToken.expiresAt) pairToken = null
-      return null
-    }
+  function createDevice(userAgent) {
     if (devices.size >= MAX_DEVICES) return null
+    const now = Date.now()
     const token = randomBytes(24).toString('hex')
     const deviceId = randomBytes(8).toString('hex')
     devices.set(deviceId, {
@@ -280,8 +362,35 @@ export function apply(ctx, config) {
       userAgent: String(userAgent || '').slice(0, 180),
     })
     persistDevices(cfg.devicesFile, devices)
-    pairToken = null
     return { deviceId, token }
+  }
+
+  function issuePairToken() {
+    const fixed = fixedPairCode()
+    if (fixed !== '') {
+      // 固定码：永不过期，随时可配（不再随机、不再 5 分钟失效）。
+      pairToken = { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
+      return pairToken
+    }
+    pairToken = { code: String(randomInt(0, 1e6)).padStart(6, '0'), expiresAt: Date.now() + TOKEN_TTL_MS, fixed: false }
+    return pairToken
+  }
+
+  function acceptPairCode(code, userAgent) {
+    const input = String(code == null ? '' : code).trim()
+    const fixed = fixedPairCode()
+    if (fixed !== '') {
+      if (input !== fixed) return null
+      return createDevice(userAgent)
+    }
+    const now = Date.now()
+    if (!pairToken || pairToken.code !== input || now > pairToken.expiresAt) {
+      if (pairToken && now > pairToken.expiresAt) pairToken = null
+      return null
+    }
+    const created = createDevice(userAgent)
+    if (created) pairToken = null
+    return created
   }
 
   function accessAddresses() {
@@ -344,7 +453,10 @@ export function apply(ctx, config) {
     const devicesView = [...devices.entries()].map(([deviceId, d]) => ({
       deviceId, name: d.name || '设备', createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, userAgent: d.userAgent || '',
     }))
-    const pending = pairToken && now <= pairToken.expiresAt ? { code: pairToken.code, expiresAt: pairToken.expiresAt } : null
+    const fixed = fixedPairCode()
+    const pending = fixed !== ''
+      ? { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
+      : (pairToken && now <= pairToken.expiresAt ? { code: pairToken.code, expiresAt: pairToken.expiresAt, fixed: false } : null)
     sendJson(res, 200, { ok: true, addresses: accessAddresses(), devices: devicesView, pending })
   }
 
@@ -602,7 +714,48 @@ export function apply(ctx, config) {
         return { ok: true, value: { items: [] } }
       }
       case 'push.config': {
-        return { ok: true, value: { channels: {} } }
+        const body = payload || {}
+        if (body.test === true) {
+          deliverNotify(notifyConfig, { title: 'dsh 掌上 · 测试通知', body: '收到这条说明推送通道工作正常。' }).catch(() => {})
+          return { ok: true, value: { sent: true } }
+        }
+        if (body.get === true) {
+          const c = notifyConfig
+          return {
+            ok: true,
+            value: {
+              turnThresholdMs: c.turnThresholdMs,
+              turnCooldownMs: c.turnCooldownMs,
+              hideDetails: c.hideDetails === true,
+              kinds: {
+                jobs: !!(c.kinds && c.kinds.jobs === true),
+                todo: !(c.kinds && c.kinds.todo === false),
+                turns: !!(c.kinds && c.kinds.turns === true),
+              },
+              vapidPublicKey: '',
+              channels: notifyChannelsView(c.channels),
+            },
+          }
+        }
+        const patch = body.set
+        if (!patch || typeof patch !== 'object') {
+          return { ok: false, error: { code: 'bad-request', message: '缺少配置内容' } }
+        }
+        const next = { ...notifyConfig }
+        if (typeof patch.turnThresholdMs === 'number' && Number.isFinite(patch.turnThresholdMs)) next.turnThresholdMs = Math.max(0, Math.round(patch.turnThresholdMs))
+        if (typeof patch.turnCooldownMs === 'number' && Number.isFinite(patch.turnCooldownMs)) next.turnCooldownMs = Math.max(0, Math.round(patch.turnCooldownMs))
+        if (typeof patch.hideDetails === 'boolean') next.hideDetails = patch.hideDetails
+        if (patch.kinds && typeof patch.kinds === 'object') next.kinds = { ...(notifyConfig.kinds || {}), ...patch.kinds }
+        if (patch.channels && typeof patch.channels === 'object') {
+          const merged = { ...(notifyConfig.channels || {}) }
+          for (const [k, v] of Object.entries(patch.channels)) {
+            if (v && typeof v === 'object') merged[k] = { ...(merged[k] || {}), ...v }
+          }
+          next.channels = merged
+        }
+        notifyConfig = next
+        saveNotifyConfig(cfg.pushConfigFile, notifyConfig)
+        return { ok: true, value: { stored: true } }
       }
       case 'push.subscribe':
       case 'push.unsubscribe': {
@@ -800,6 +953,11 @@ export function apply(ctx, config) {
     })
     server.listen(port, host, () => console.log(`[dsh-mobile] mobile listener on http://${host}:${port}/m/`))
     return () => {
+      // 先强拆 keep-alive 连接：否则 close() 会等手机/浏览器的长连接结束，
+      // 清理函数不返回会把 HMR 事务一直挂住（表现为 "HMR transactions cannot be nested"）。
+      try {
+        server.closeAllConnections?.()
+      } catch {}
       try {
         server.close()
       } catch {}
@@ -818,6 +976,31 @@ export function apply(ctx, config) {
     timer.unref?.()
     return () => clearInterval(timer)
   }, 'dsh-mobile: sweep')
+
+  // 完成通知：轮询 running 集合，running → idle 时经已配置通道投递一条。
+  ctx.effect(() => {
+    let primed = false
+    let lastRunning = new Set()
+    const timer = setInterval(async () => {
+      try {
+        const { items = [] } = await sc().list({}, new AbortController().signal)
+        const running = new Set(items.filter((it) => it.running).map((it) => it.sessionId))
+        if (primed && !(notifyConfig.kinds && notifyConfig.kinds.turns === false)) {
+          for (const id of lastRunning) {
+            if (running.has(id)) continue
+            const item = items.find((it) => it.sessionId === id)
+            const proj = item && item.projections && item.projections.values
+            const title = (proj && typeof proj.title === 'string' && proj.title) || (item && item.cwd ? basename(item.cwd) : '会话')
+            deliverNotify(notifyConfig, { title: `${title} · 任务完成`, body: '这一轮已经跑完了。' }).catch(() => {})
+          }
+        }
+        lastRunning = running
+        primed = true
+      } catch {}
+    }, 10000)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'dsh-mobile: completion notify')
 
   console.log(`[dsh-mobile] mounted: mobile bundle on webServer + 0.0.0.0:${cfg.mobilePort} (devices: ${devices.size})`)
 }

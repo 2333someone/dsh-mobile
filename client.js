@@ -234,7 +234,8 @@ window.__ModuleLoader__.load({
       const addrs = (status && status.addresses) || { lan: [], publicBase: null }
       const devices = (status && status.devices) || []
       const urls = [...(addrs.lan || []), ...(addrs.publicBase ? [addrs.publicBase] : [])]
-      const expired = code ? now > code.expiresAt : false
+      const isFixed = !!(code && (code.fixed === true || code.expiresAt > now + 86400000))
+      const expired = code && !isFixed ? now > code.expiresAt : false
 
       return h('div', { className: 'dm-wrap' },
         h('style', { dangerouslySetInnerHTML: { __html: CSS } }),
@@ -266,14 +267,16 @@ window.__ModuleLoader__.load({
         // ── 手机配对 ──
         h('div', { className: 'dm-card' },
           h('p', { className: 'dm-title' }, '手机配对'),
-          h('p', { className: 'dm-sub' }, '生成一个 6 位配对码，5 分钟内有效；在手机 /m/ 页输入即完成配对。'),
+          h('p', { className: 'dm-sub' }, '在手机 /m/ 页输入下方配对码即可；固定码长期有效，无需反复配对。'),
           code
             ? h('div', null,
                 h('div', { className: 'dm-code' + (expired ? ' dm-codeExpired' : '') }, code.code),
                 h('p', { className: 'dm-count' },
-                  expired
-                    ? '配对码已过期，请重新生成'
-                    : h('span', null, '剩余 ', h('b', null, remaining(code.expiresAt, now))),
+                  isFixed
+                    ? '固定配对码 · 长期有效'
+                    : expired
+                      ? '配对码已过期，请重新生成'
+                      : h('span', null, '剩余 ', h('b', null, remaining(code.expiresAt, now))),
                 ),
                 h('div', { className: 'dm-actions' },
                   h('button', { type: 'button', className: 'dm-ghost', onClick: issue, disabled: issuing },
