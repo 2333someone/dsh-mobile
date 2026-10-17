@@ -164,4 +164,17 @@
   pointer-events: none !important;
 }
 
+/* ── 底部抽屉：默认只占半屏高，内容在内部滚动（拖拽展开 .sheet-full 不受影响） */
+.sheet:not(.sheet-full) {
+  max-height: 50vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+.sheet:not(.sheet-full) .sheet-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+}
+
 
