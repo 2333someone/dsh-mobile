@@ -56,8 +56,8 @@ h1.brand-title{font-size:22px;font-weight:600;margin:16px 0 2px;letter-spacing:.
 .pair-card{width:100%;max-width:360px;background:var(--bg-1);border:1px solid var(--border);border-radius:24px;padding:28px 24px}
 .pair-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:44px;font-weight:700;letter-spacing:8px;color:var(--brand);margin:18px 0 8px}
 .pair-hint{color:var(--fg-2);font-size:13px;line-height:20px}
-.spinner{width:22px;height:22px;border:3px solid var(--brand-soft);border-top-color:var(--brand);border-radius:50%;margin:18px auto;animation:spin 1s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+.pair-input{width:100%;margin-top:18px;border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:14px;padding:14px 16px;font-size:22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:6px;text-align:center;outline:none}
+.pair-input:focus{border-color:var(--brand)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:12px;padding:12px 20px;font-size:15px;font-weight:600;cursor:pointer;background:var(--brand);color:#fff;width:100%}
 .btn:active{opacity:.85}
 .btn.ghost{background:var(--bg-2);color:var(--fg)}
@@ -106,17 +106,10 @@ h1.brand-title{font-size:22px;font-weight:600;margin:16px 0 2px;letter-spacing:.
   <h1 class="brand-title">dsh 掌上助手</h1>
   <p style="color:var(--fg-2);margin:4px 0 24px;font-size:14px">在手机上使用你的 dsh</p>
   <div class="pair-card" id="pair-card">
-    <div id="pair-idle">
-      <p class="pair-hint">首次使用需要先配对这台设备。点「开始配对」，随后在桌面浏览器打开 <b>/m/admin</b> 批准。</p>
-      <div style="margin-top:18px"><button class="btn" id="pair-start">开始配对</button></div>
-    </div>
-    <div id="pair-waiting" style="display:none">
-      <p class="pair-hint">在桌面打开 <b>/m/admin</b>，确认看到相同 6 位码后点「批准」。</p>
-      <div class="pair-code" id="pair-code">------</div>
-      <div class="spinner"></div>
-      <p class="pair-hint" id="pair-status">等待桌面批准…</p>
-      <div style="margin-top:16px"><button class="btn ghost" id="pair-cancel">取消</button></div>
-    </div>
+    <p class="pair-hint">在电脑的 dsh <b>设置 → 掌上 dsh</b> 里点「生成配对码」，把 6 位码填到下面完成配对。</p>
+    <input id="pair-input" class="pair-input" inputmode="numeric" maxlength="6" placeholder="6 位配对码" autocomplete="one-time-code">
+    <div style="margin-top:16px"><button class="btn" id="pair-submit">配对</button></div>
+    <p class="pair-hint" id="pair-error" style="color:var(--err);display:none;margin-top:12px"></p>
   </div>
 </section>
 
@@ -179,22 +172,15 @@ function show(id){
 }
 
 /* ── pairing ── */
-function startPair(){
-  api('/m/api/pair/request', { method:'POST' }).then(function(res){
-    if(!res.body.ok){ toast('配对请求失败'); return }
-    $('pair-idle').style.display = 'none'
-    $('pair-waiting').style.display = 'block'
-    $('pair-code').textContent = res.body.code
-    pollPair(res.body.requestId)
-  })
-}
-function pollPair(requestId){
-  api('/m/api/pair/status?requestId=' + encodeURIComponent(requestId)).then(function(res){
-    var b = res.body
-    if(b && b.status === 'approved'){ location.reload() }
-    else if(b && b.status === 'expired'){ $('pair-status').textContent = '已过期，请重新开始'; $('pair-cancel').textContent = '重试' }
-    else { setTimeout(function(){ pollPair(requestId) }, 2000) }
-  }).catch(function(){ setTimeout(function(){ pollPair(requestId) }, 3000) })
+function showPairError(msg){ var e=$('pair-error'); e.textContent=msg; e.style.display='block' }
+function acceptPair(){
+  var code = $('pair-input').value.trim()
+  if(code.length !== 6){ showPairError('请输入 6 位配对码'); return }
+  $('pair-submit').disabled = true
+  api('/m/api/pair/accept', { method:'POST', body:{ code: code } }).then(function(res){
+    if(res.body && res.body.ok){ location.reload() }
+    else { $('pair-submit').disabled = false; showPairError((res.body && res.body.error) || '配对失败') }
+  }).catch(function(){ $('pair-submit').disabled = false; showPairError('无法访问宿主机') })
 }
 
 /* ── main ── */
@@ -276,8 +262,8 @@ function send(){
 }
 
 /* ── bindings ── */
-$('pair-start').addEventListener('click', startPair)
-$('pair-cancel').addEventListener('click', function(){ location.reload() })
+$('pair-submit').addEventListener('click', acceptPair)
+$('pair-input').addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); acceptPair() } })
 $('unpair').addEventListener('click', function(){
   if(confirm('退出配对后需重新配对。确定？')){ document.cookie = 'dsh_mobile=; Path=/m; Max-Age=0; SameSite=Lax'; location.reload() }
 })

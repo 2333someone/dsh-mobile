@@ -1,18 +1,16 @@
 /**
- * dsh-mobile —— 独立手机端页面（host-only bundle，零运行时依赖）。
+ * dsh-mobile —— 掌上 dsh（host 半 + 客户端设置页）。
  *
- * 首版能力：
- * - /m/       手机页面：未配对进入配对屏；已配对进入工作区/会话 UI。
- * - /m/api    移动端 RPC：pair/request、pair/status、workspaces、sessions、
- *             session、session/create、session/prompt、me、pair/approve、
- *             devices、device/revoke。
- * - /m/admin  桌面审批页（仅回环可达）：列出待配对请求并批准、管理已配对设备。
+ * host 半（本文件）：
+ * - /m/       手机页面（未配对输入 6 位码；已配对进入工作区/会话/聊天 UI）
+ * - /m/api    移动端 RPC + 桌面设置页 RPC
+ * - /m/icon.svg  插件图标
  *
- * 配对：手机请求配对 → 手机显示 6 位码 → 桌面在 /m/admin 批准 → 手机轮询获得
- * HttpOnly 设备 cookie。一次性待配对 token，5 分钟过期。
+ * 配对（dsh-palm 方向）：桌面设置页「生成配对码」→ 手机在 /m/ 输入该 6 位码
+ * → 宿主机校验后下发 HttpOnly 设备 cookie。一次性 token，5 分钟过期。
  *
- * 复用 dsh 的 webServer 服务（不改变其绑定）；公网可达性由部署侧的反代 +
- * webserver 0.0.0.0 绑定决定。
+ * 客户端设置页（client.js）在 dsh 设置面板注册「掌上 dsh」段：出码、设备管理、
+ * 访问地址展示。
  */
 import { randomBytes, randomInt } from 'node:crypto'
 import { homedir, networkInterfaces } from 'node:os'
@@ -26,7 +24,6 @@ export const inject = ['webServer', 'sessionController', 'workspaceRegistry']
 const COOKIE_NAME = 'dsh_mobile'
 const MOBILE_ROOT = '/m/'
 const API_PREFIX = '/m/api'
-const ADMIN_PATH = '/m/admin'
 const ICON_PATH = '/m/icon.svg'
 const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
@@ -178,7 +175,7 @@ export function apply(ctx, config) {
   if (!cfg.enabled) return
 
   const devices = loadDevices(cfg.devicesFile)
-  let pending = null // { requestId, code, createdAt, expiresAt, approved, deviceId, token }
+  let pairToken = null // { code, expiresAt } —— 桌面出码后待手机输入
 
   const cookieName = COOKIE_NAME
 
@@ -198,24 +195,19 @@ export function apply(ctx, config) {
     return null
   }
 
-  function issuePending() {
+  function issuePairToken() {
     const now = Date.now()
-    pending = {
-      requestId: randomBytes(12).toString('hex'),
+    pairToken = {
       code: String(randomInt(0, 1e6)).padStart(6, '0'),
-      createdAt: now,
       expiresAt: now + TOKEN_TTL_MS,
-      approved: false,
-      deviceId: null,
-      token: null,
     }
-    return pending
+    return pairToken
   }
 
-  function approvePending(requestId, userAgent) {
-    if (!pending || pending.requestId !== requestId || pending.approved) return null
-    if (Date.now() > pending.expiresAt) {
-      pending = null
+  function acceptPairCode(code, userAgent) {
+    const now = Date.now()
+    if (!pairToken || pairToken.code !== String(code).trim() || now > pairToken.expiresAt) {
+      if (pairToken && now > pairToken.expiresAt) pairToken = null
       return null
     }
     if (devices.size >= MAX_DEVICES) return null
@@ -224,18 +216,15 @@ export function apply(ctx, config) {
     devices.set(deviceId, {
       token,
       name: '手机设备',
-      createdAt: Date.now(),
-      lastSeenAt: Date.now(),
+      createdAt: now,
+      lastSeenAt: now,
       userAgent: String(userAgent || '').slice(0, 180),
     })
     persistDevices(cfg.devicesFile, devices)
-    pending.approved = true
-    pending.deviceId = deviceId
-    pending.token = token
+    pairToken = null
     return { deviceId, token }
   }
 
-  // ── LAN / public addresses for the admin page ─────────────────────────────
   function accessAddresses() {
     const port = ctx.webServer && typeof ctx.webServer.port === 'number' ? ctx.webServer.port : null
     const lan = port ? lanIPv4Addresses().map((a) => `http://${a}:${port}`) : []
@@ -244,37 +233,6 @@ export function apply(ctx, config) {
   }
 
   // ── API handlers ──────────────────────────────────────────────────────────
-  async function pairRequest(_req, res) {
-    const p = issuePending()
-    sendJson(res, 200, { ok: true, code: p.code, requestId: p.requestId, expiresAt: p.expiresAt })
-  }
-
-  function pairStatus(req, res, url) {
-    const requestId = url.searchParams.get('requestId')
-    if (!pending || pending.requestId !== requestId) {
-      sendJson(res, 200, { ok: true, status: 'expired' })
-      return
-    }
-    if (Date.now() > pending.expiresAt) {
-      pending = null
-      sendJson(res, 200, { ok: true, status: 'expired' })
-      return
-    }
-    if (pending.approved) {
-      const token = pending.token
-      const maxAge = Math.round(IDLE_EXPIRE_MS / 1000)
-      sendJson(
-        res,
-        200,
-        { ok: true, status: 'approved', deviceId: pending.deviceId },
-        { 'Set-Cookie': `${cookieName}=${token}; Path=/m; HttpOnly; SameSite=Lax; Max-Age=${maxAge}` },
-      )
-      pending = null
-      return
-    }
-    sendJson(res, 200, { ok: true, status: 'pending' })
-  }
-
   function me(req, res) {
     const device = authenticatedDevice(req)
     if (!device) {
@@ -284,14 +242,73 @@ export function apply(ctx, config) {
     sendJson(res, 200, { ok: true, paired: true, deviceName: device.name })
   }
 
+  function pairIssue(_req, res) {
+    const t = issuePairToken()
+    sendJson(res, 200, { ok: true, code: t.code, expiresAt: t.expiresAt })
+  }
+
+  function pairAccept(req, res) {
+    readJsonBody(req)
+      .then((body) => {
+        const result = acceptPairCode(String(body.code || ''), req.headers['user-agent'])
+        if (!result) {
+          sendJson(res, 200, { ok: false, error: '配对码无效或已过期' })
+          return
+        }
+        const maxAge = Math.round(IDLE_EXPIRE_MS / 1000)
+        sendJson(
+          res,
+          200,
+          { ok: true, paired: true, deviceId: result.deviceId },
+          { 'Set-Cookie': `${cookieName}=${result.token}; Path=/m; HttpOnly; SameSite=Lax; Max-Age=${maxAge}` },
+        )
+      })
+      .catch((err) => sendJson(res, 400, { ok: false, error: String((err && err.message) || err) }))
+  }
+
+  function status(_req, res) {
+    const now = Date.now()
+    const devicesView = [...devices.entries()].map(([deviceId, d]) => ({
+      deviceId,
+      name: d.name || '设备',
+      createdAt: d.createdAt,
+      lastSeenAt: d.lastSeenAt,
+      userAgent: d.userAgent || '',
+    }))
+    const pending = pairToken && now <= pairToken.expiresAt
+      ? { code: pairToken.code, expiresAt: pairToken.expiresAt }
+      : null
+    sendJson(res, 200, { ok: true, addresses: accessAddresses(), devices: devicesView, pending })
+  }
+
+  function listDevices(_req, res) {
+    const items = [...devices.entries()].map(([deviceId, d]) => ({
+      deviceId,
+      name: d.name || '设备',
+      createdAt: d.createdAt,
+      lastSeenAt: d.lastSeenAt,
+      userAgent: d.userAgent || '',
+    }))
+    sendJson(res, 200, { ok: true, items })
+  }
+
+  function revokeDevice(req, res) {
+    readJsonBody(req)
+      .then((body) => {
+        const removed = devices.delete(String(body.deviceId || ''))
+        if (removed) persistDevices(cfg.devicesFile, devices)
+        sendJson(res, 200, { ok: true, removed })
+      })
+      .catch((err) => sendJson(res, 400, { ok: false, error: String((err && err.message) || err) }))
+  }
+
   function listWorkspaces(_req, res) {
     const list = (ctx.workspaceRegistry && typeof ctx.workspaceRegistry.list === 'function' ? ctx.workspaceRegistry.list() : [])
       .map((w) => ({ id: w.id, title: w.title || basename(w.path), path: w.path }))
     sendJson(res, 200, { ok: true, items: list })
   }
 
-  async function listSessions(_req, res, url) {
-    const workspaceId = url.searchParams.get('workspaceId') || null
+  async function listSessions(_req, res) {
     const sc = ctx.sessionController
     const { items = [] } = await sc.list({}, new AbortController().signal)
     const rows = items.map((it) => {
@@ -307,7 +324,7 @@ export function apply(ctx, config) {
         cwd: it.cwd || null,
       }
     })
-    sendJson(res, 200, { ok: true, items: rows, workspaceId })
+    sendJson(res, 200, { ok: true, items: rows })
   }
 
   async function getSession(_req, res, url) {
@@ -319,7 +336,6 @@ export function apply(ctx, config) {
     }
     const sc = ctx.sessionController
     const signal = new AbortController().signal
-    // 从 follow 打开帧取 throughSeq 游标（session.page 必填）。
     let cursor
     try {
       const frames = sc.follow({ address: { kind: 'session', sessionId } }, signal)
@@ -376,55 +392,12 @@ export function apply(ctx, config) {
     sendJson(res, 200, { ok: true, accepted: true })
   }
 
-  function approveHandler(req, res) {
-    readJsonBody(req)
-      .then((body) => {
-        const result = approvePending(String(body.requestId || ''), req.headers['user-agent'])
-        if (!result) {
-          sendJson(res, 200, { ok: false, error: 'no pending request matches (expired or already approved)' })
-          return
-        }
-        sendJson(res, 200, { ok: true, approved: true, deviceId: result.deviceId })
-      })
-      .catch((err) => sendJson(res, 400, { ok: false, error: String(err && err.message) }))
-  }
-
-  function listDevices(_req, res) {
-    const items = [...devices.entries()].map(([deviceId, d]) => ({
-      deviceId,
-      name: d.name || '设备',
-      createdAt: d.createdAt,
-      lastSeenAt: d.lastSeenAt,
-      userAgent: d.userAgent || '',
-    }))
-    sendJson(res, 200, { ok: true, items })
-  }
-
-  function revokeDevice(req, res) {
-    readJsonBody(req)
-      .then((body) => {
-        const deviceId = String(body.deviceId || '')
-        const removed = devices.delete(deviceId)
-        if (removed) persistDevices(cfg.devicesFile, devices)
-        sendJson(res, 200, { ok: true, removed })
-      })
-      .catch((err) => sendJson(res, 400, { ok: false, error: String(err && err.message) }))
-  }
-
   function requireLoopback(req, res, fn) {
     if (!isLoopback(req)) {
       sendJson(res, 403, { ok: false, error: 'forbidden: this endpoint is host-only' })
       return
     }
     fn(req, res)
-  }
-
-  function pendingInfo(_req, res) {
-    const p = pending && Date.now() <= pending.expiresAt ? pending : null
-    sendJson(res, 200, {
-      ok: true,
-      pending: p ? { code: p.code, requestId: p.requestId, expiresAt: p.expiresAt, approved: p.approved } : null,
-    })
   }
 
   async function handleApi(req, res) {
@@ -447,131 +420,34 @@ export function apply(ctx, config) {
 
     try {
       switch (key) {
-        case 'POST /pair/request':
-          return await pairRequest(req, res)
-        case 'GET /pair/status':
-          return pairStatus(req, res, url)
         case 'GET /me':
           return me(req, res)
+        case 'POST /pair/issue':
+          return requireLoopback(req, res, pairIssue)
+        case 'POST /pair/accept':
+          return pairAccept(req, res)
+        case 'GET /status':
+          return requireLoopback(req, res, status)
+        case 'GET /devices':
+          return requireLoopback(req, res, listDevices)
+        case 'POST /device/revoke':
+          return requireLoopback(req, res, revokeDevice)
         case 'GET /workspaces':
           return listWorkspaces(req, res)
         case 'GET /sessions':
-          return await listSessions(req, res, url)
+          return await listSessions(req, res)
         case 'GET /session':
           return await getSession(req, res, url)
         case 'POST /session/create':
           return await createSession(req, res)
         case 'POST /session/prompt':
           return await promptSession(req, res)
-        case 'POST /pair/approve':
-          return requireLoopback(req, res, approveHandler)
-        case 'GET /pending':
-          return requireLoopback(req, res, pendingInfo)
-        case 'GET /devices':
-          return requireLoopback(req, res, listDevices)
-        case 'POST /device/revoke':
-          return requireLoopback(req, res, revokeDevice)
         default:
           return sendJson(res, 404, { ok: false, error: 'not found' })
       }
     } catch (err) {
       sendJson(res, 500, { ok: false, error: String((err && err.message) || err) })
     }
-  }
-
-  // ── admin page (loopback only) ────────────────────────────────────────────
-  function serveAdmin(req, res) {
-    if (!isLoopback(req)) {
-      sendText(res, 403, 'text/plain; charset=utf-8', 'dsh-mobile: 该页面仅限宿主机访问')
-      return
-    }
-    sendHtml(res, 200, adminHtml())
-  }
-
-  function adminHtml() {
-    const { lan, publicBase } = accessAddresses()
-    const addresses = [...lan, ...(publicBase ? [publicBase] : [])]
-    const urlRows = addresses.map((a) => `<div class="url">${a}/m/</div>`).join('')
-    return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dsh mobile · 设备审批</title>
-<style>
-:root{--brand:#4D6BFE;--bg:#fff;--bg1:#f5f6f8;--fg:#1b1c20;--fg2:#6b6e78;--border:#e6e7ec;--err:#e5484d}
-@media (prefers-color-scheme:dark){:root{--bg:#151517;--bg1:#1e1f24;--fg:#f2f3f5;--fg2:#9a9ea8;--border:#2b2d33}}
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
-.wrap{max-width:640px;margin:0 auto;padding:24px 16px 80px}
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-.brand svg{width:28px;height:28px}
-.brand h1{font-size:18px;font-weight:600;margin:0}
-.sub{color:var(--fg2);font-size:13px;line-height:20px;margin:4px 0 16px}
-.card{background:var(--bg1);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:16px}
-.card h2{font-size:14px;font-weight:600;margin:0 0 10px}
-.url{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--brand);padding:4px 0;word-break:break-all}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--border)}
-.row:first-of-type{border-top:0}
-.name{font-weight:500;font-size:14px}
-.detail{color:var(--fg2);font-size:12px}
-.btn{border:0;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;background:var(--brand);color:#fff}
-.btn.ghost{background:transparent;border:1px solid var(--border);color:var(--fg)}
-.btn.danger{background:transparent;border:1px solid var(--err);color:var(--err)}
-.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:34px;font-weight:700;letter-spacing:6px;color:var(--brand);text-align:center;margin:10px 0}
-.muted{color:var(--fg2);font-size:13px;text-align:center}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="brand">${iconSvg()}<h1>dsh mobile · 设备审批</h1></div>
-  <p class="sub">手机打开下方地址 → 点「开始配对」拿到 6 位码 → 回到本页批准。本页仅宿主机（回环）可访问。</p>
-  <div class="card">
-    <h2>待配对请求</h2>
-    <div id="pending">加载中…</div>
-  </div>
-  <div class="card">
-    <h2>已配对设备</h2>
-    <div id="devices">加载中…</div>
-  </div>
-  <div class="card">
-    <h2>访问地址</h2>
-    ${urlRows || '<div class="muted">未检测到局域网地址；请配置 publicBaseUrl 或绑定 0.0.0.0。</div>'}
-  </div>
-</div>
-<script>
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
-function time(ms){ if(!ms) return '—'; const d=new Date(ms); return d.toLocaleString() }
-async function refresh(){
-  const [penBox, d] = await Promise.all([
-    fetch('/m/api/pending').then(r=>r.json()).catch(()=>({ok:false})),
-    fetch('/m/api/devices').then(r=>r.json()).catch(()=>({items:[]}))
-  ])
-  const pen = document.getElementById('pending')
-  if (penBox && penBox.ok && penBox.pending) {
-    const q = penBox.pending
-    pen.innerHTML = '<div class="code">'+esc(q.code)+'</div><div class="muted">'+esc(q.requestId.slice(0,8))+' · 过期 '+new Date(q.expiresAt).toLocaleTimeString()+'</div><div style="margin-top:12px;text-align:center"><button class="btn" onclick="approve(\''+esc(q.requestId)+'\')">批准此设备</button></div>'
-  } else {
-    pen.innerHTML = '<div class="muted">无待配对请求。请在手机上点「开始配对」。</div>'
-  }
-  const items = d.items || []
-  const dev = document.getElementById('devices')
-  if (!items.length) dev.innerHTML = '<div class="muted">尚无已配对设备</div>'
-  else dev.innerHTML = items.map(it => '<div class="row"><div><div class="name">'+esc(it.name)+'</div><div class="detail">'+esc(it.deviceId)+' · 最近 '+time(it.lastSeenAt)+'</div></div><button class="btn danger" onclick="revoke(\''+esc(it.deviceId)+'\')">撤销</button></div>').join('')
-}
-async function approve(id){
-  const r = await fetch('/m/api/pair/approve', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({requestId:id})}).then(r=>r.json())
-  alert(r && r.ok ? '已批准，手机会自动进入应用。' : '批准失败：'+(r && r.error || '未知'))
-  refresh()
-}
-async function revoke(id){
-  await fetch('/m/api/device/revoke', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceId:id})})
-  refresh()
-}
-setInterval(refresh, 2500)
-refresh()
-</script>
-</body>
-</html>`
   }
 
   // ── page / icon / redirect ────────────────────────────────────────────────
@@ -595,7 +471,6 @@ refresh()
       { kind: 'exact', path: '/m', handler: redirectToRoot },
       { kind: 'exact', path: MOBILE_ROOT, handler: servePage },
       { kind: 'exact', path: ICON_PATH, handler: serveIcon },
-      { kind: 'exact', path: ADMIN_PATH, handler: serveAdmin },
       { kind: 'prefix', path: API_PREFIX, handler: handleApi },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))
@@ -610,11 +485,11 @@ refresh()
       for (const [deviceId, d] of devices) {
         if (now - (d.lastSeenAt || d.createdAt) > IDLE_EXPIRE_MS) devices.delete(deviceId)
       }
-      if (pending && now > pending.expiresAt) pending = null
+      if (pairToken && now > pairToken.expiresAt) pairToken = null
     }, SWEEP_INTERVAL_MS)
     timer.unref?.()
     return () => clearInterval(timer)
   }, 'dsh-mobile: sweep')
 
-  console.log(`[dsh-mobile] mounted: /m/ page, /m/api RPC, /m/admin approval (devices: ${devices.size})`)
+  console.log(`[dsh-mobile] mounted: /m/ page + /m/api RPC (devices: ${devices.size})`)
 }
