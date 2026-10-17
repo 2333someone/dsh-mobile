@@ -73,3 +73,9 @@
   padding-top: 13px !important;
   padding-bottom: 5px !important;
 }
+
+/* ── 隐藏 App 内置麦克风：改用手机输入法自带的语音输入 ────────────── */
+.chat-attach-btn[aria-label="语音输入"] {
+  display: none !important;
+}
+
