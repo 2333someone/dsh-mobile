@@ -98,11 +98,11 @@
   position: fixed !important;
   left: 50% !important;
   right: auto !important;
-  top: 14% !important;
+  top: 12% !important;
   bottom: auto !important;
   transform: translateX(-50%) !important;
   width: min(84vw, 340px) !important;
-  max-height: 46vh !important;
+  max-height: 42vh !important;
   margin: 0 !important;
   z-index: 60 !important;
   border-radius: 16px !important;
@@ -111,39 +111,6 @@
 /* 去掉模型弹窗里的「全部…」入口 */
 .chat-picker-more {
   display: none !important;
-}
-/* 弹窗底部的「思考强度」区块：独立占据底部，模型列表滚动时固定 */
-#dm-effort {
-  position: sticky;
-  bottom: 0;
-  margin: 6px -8px -8px;
-  padding: 8px 12px 10px;
-  background: var(--card-bg, #fff);
-  border-top: 1px solid var(--border-default, rgba(0, 0, 0, 0.08));
-}
-#dm-effort .dm-effort-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-quaternary, #8a8f99);
-  margin-bottom: 6px;
-}
-#dm-effort .dm-effort-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-#dm-effort .dm-effort-chip {
-  border: 1px solid var(--border-default, rgba(0, 0, 0, 0.1));
-  background: transparent;
-  color: var(--text-primary, #2b2d33);
-  border-radius: 999px;
-  padding: 7px 14px;
-  font-size: 13px;
-}
-#dm-effort .dm-effort-chip-on {
-  border-color: #4d6bfe;
-  background: #4d6bfe;
-  color: #fff;
 }
 /* 给自定义模型按钮在输入栏里留出位置 */
 .chat-input {

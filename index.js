@@ -291,32 +291,11 @@ function assetText(name) {
   return asset(name).toString('utf8')
 }
 
-// 输入栏左侧的自定义「模型」按钮：打开 bundle 的小弹窗，并在其底部固定「思考强度」区块。
+// 输入栏左侧的自定义「模型」按钮：打开 bundle 自带的小弹窗（其中已含“思考强度”）。
 const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="模型"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6M9 12h6M9 15h3"/></svg></button><script>
 (function () {
   var btn = document.getElementById('dm-model-btn');
   if (!btn) return;
-  var stable = 0;
-  var lastSessionId = '';
-  var cache = {};
-  var inflight = {};
-
-  // 本页脚本先于 bundle 执行：拦截 RPC 请求，自动记住当前会话 id。
-  var origFetch = window.fetch;
-  if (typeof origFetch === 'function') {
-    window.fetch = function (input, init) {
-      try {
-        var url = typeof input === 'string' ? input : (input && input.url) || '';
-        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
-          var body = JSON.parse(init.body);
-          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
-            lastSessionId = body.payload.sessionId;
-          }
-        }
-      } catch (e) {}
-      return origFetch.apply(this, arguments);
-    };
-  }
 
   function bar() { return document.querySelector('.chat-inputbar'); }
   function plus() { var b = bar(); return b ? b.querySelector('.chat-attach-btn') : null; }
@@ -324,120 +303,30 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
   function panelEl() { return document.querySelector('.chat-picker-panel'); }
   function visible(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
 
-  function hideBtn() { btn.style.display = 'none'; btn.style.opacity = '0'; stable = 0; }
   function place() {
     var p = plus();
-    if (!p) { hideBtn(); return; }
+    if (!p) { btn.style.display = 'none'; return; }
     var r = p.getBoundingClientRect();
-    if (!r || r.width === 0 || r.top < 0) { hideBtn(); return; }
+    if (!r || r.width === 0) { btn.style.display = 'none'; return; }
     btn.style.left = Math.round(r.right + 6) + 'px';
     btn.style.top = Math.round(r.top + (r.height - 40) / 2) + 'px';
-    if (btn.style.display !== 'flex') {
-      btn.style.display = 'flex';
-      btn.style.opacity = '0';
-      stable = 0;
-    }
-    stable++;
-    if (stable >= 2) btn.style.opacity = '1';
-  }
-
-  function rpc(method, payload) {
-    return fetch('/m/api/' + method, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rpcId: 'dm-' + Date.now(), payload: payload }),
-    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
-  }
-  function currentSession() {
-    try {
-      var s = new URL(location.href).searchParams.get('session');
-      if (s) return s;
-    } catch (e) {}
-    return lastSessionId;
-  }
-  function closeAll() {
-    var scrim = document.querySelector('.chat-picker-scrim');
-    if (visible(scrim)) scrim.click();
-    var back = document.querySelector('.sheet-backdrop');
-    if (visible(back)) back.click();
-  }
-
-  function applyEffort(provider, model, effort) {
-    var sid = currentSession();
-    if (!sid) return;
-    var payload = { sessionId: sid, provider: provider, model: model };
-    if (effort) payload.reasoningEffort = effort;
-    rpc('session.selectModel', payload).then(function () { closeAll(); });
-  }
-
-  function renderEffort(panel, data) {
-    if (panel.querySelector('#dm-effort')) return;
-    var el = document.createElement('div');
-    el.id = 'dm-effort';
-    var title = document.createElement('div');
-    title.className = 'dm-effort-title';
-    title.textContent = '思考强度';
-    el.appendChild(title);
-    var row = document.createElement('div');
-    row.className = 'dm-effort-row';
-    var opts = [{ id: '', name: '默认' }].concat((data.efforts || []).map(function (e) { return { id: e.id, name: e.name || e.id }; }));
-    opts.forEach(function (o) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = o.name;
-      var on = (o.id || '') === (data.cur || '');
-      b.className = 'dm-effort-chip' + (on ? ' dm-effort-chip-on' : '');
-      b.onclick = function () { applyEffort(data.provider, data.model, o.id); };
-      row.appendChild(b);
-    });
-    el.appendChild(row);
-    panel.appendChild(el);
-  }
-
-  function ensureEffort() {
-    var panel = panelEl();
-    if (!panel) return;
-    if (panel.querySelector('#dm-effort')) return;
-    var p = pill();
-    var key = (p && p.getAttribute('title')) || '';
-    var parts = key.split('/');
-    if (parts.length !== 2) return;
-    if (cache[key]) { renderEffort(panel, cache[key]); return; }
-    if (inflight[key]) return;
-    inflight[key] = true;
-    rpc('session.models', {}).then(function (res) {
-      inflight[key] = false;
-      if (!res || !res.ok) return;
-      var value = res.value || {};
-      var provider = parts[0], model = parts[1];
-      var efforts = [];
-      (value.groups || []).forEach(function (g) {
-        if (g.id !== provider) return;
-        (g.models || []).forEach(function (m) {
-          if (m.id === model && m.reasoning && Array.isArray(m.reasoning.efforts)) efforts = m.reasoning.efforts;
-        });
-      });
-      if (efforts.length === 0) return;
-      cache[key] = { provider: provider, model: model, efforts: efforts, cur: (value.current && value.current.reasoningEffort) || '' };
-      var p2 = panelEl();
-      if (p2) renderEffort(p2, cache[key]);
-    });
+    if (btn.style.display !== 'flex') btn.style.display = 'flex';
   }
 
   btn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
-    if (visible(panelEl()) || visible(document.querySelector('.sheet-backdrop'))) { closeAll(); return; }
+    if (visible(panelEl())) {
+      var scrim = document.querySelector('.chat-picker-scrim');
+      if (visible(scrim)) scrim.click();
+      return;
+    }
     var p = pill();
-    if (!p) return;
-    p.click();
-    setTimeout(ensureEffort, 120);
+    if (p) p.click();
   });
 
-  setInterval(function () {
-    place();
-    if (visible(panelEl())) ensureEffort();
-  }, 300);
+  // 跟随页面转场/键盘/滚动实时定位，页面一出现就跟着出现。
+  setInterval(place, 80);
   window.addEventListener('resize', place);
   window.addEventListener('scroll', place, true);
   if (window.visualViewport) window.visualViewport.addEventListener('resize', place);
