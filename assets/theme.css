@@ -404,6 +404,14 @@
    手机聊天页里工具步骤、过程卡状态、报错计数原本是 emoji 文本节点，CSS 换不掉，
    由 index.js 注入的脚本在运行时换成 <svg class="dm-icon">。这里只给尺寸与对齐，
    颜色一律 currentColor 继承所在行的文字色，不再单独配色。 */
+
+/* 被替换掉的 emoji 原文收进这个容器后隐藏：必须「搬」进来、不能删掉该文本节点，
+   否则 React 以后更新状态（⏳→✅、🔧→🔍）时会写到一个已脱离文档的文本节点上，
+   图标就不再跟着变了（与上面 .dm-turn-slash 同一个道理）。 */
+.dm-emoji-src {
+  display: none !important;
+}
+
 .dm-icon {
   display: inline-block;
   width: 1em;
@@ -414,6 +422,54 @@
   /* emoji 是彩色字形，替换成单色描边后略微收一点饱和度，避免抢文字。 */
   opacity: 0.9;
   pointer-events: none;
+}
+
+/* ── 折叠箭头（▾ / ▸）放大 ───────────────────────────────────────────────
+   这些箭头是「文本字符」不是 SVG，所以只能改 font-size / line-height。bundle 里
+   它们大多只写了 flex:none（或 font-size: var(--text-xs) = 11px），在手机上偏小、
+   偏淡，手指也不容易看清。这里把字号提上一档，并顺手加一点字重让笔画更实。
+
+   三条约束：
+   ① 颜色一律不写 —— 继承所在折叠头的文字色（--text-muted / --text-quaternary
+      等都是主题变量），深浅两套主题都能自动跟上，不引入与原主题冲突的色值；
+   ② .chat-proc-caret 是 position:absolute + top:50% + translateY(-50%)，
+      垂直居中靠这个组合，所以放大时必须把 transform 原样重声明一遍，
+      并给一个定高方盒（height + line-height:1 + inline-flex 双向居中），
+      免得放大后的上下伸部（▾/▸ 的字形并不对称）把三角顶离中线；
+   ③ 它贴着 right:8px 定位，而 .chat-proc-head 右侧预留了 26px padding，
+      放大到 16px 仍落在预留区内，不会挤到左边的状态词 / 「改了 3 个文件」。
+
+   bundle 的 CSS 是运行时由 JS 注入、晚于本文件，所以每条都要 !important。 */
+
+/* 主角：过程卡 / 完成卡（子代理跑完后在聊天里呈现的那张卡）header 最右侧的
+   展开收起箭头。原本没有显式 font-size，继承 --text-xs(11px)，这里给到 16px
+   （约 +45%）；宽高锁 16px 方盒，配合 line-height:1 让字形在盒内居中。 */
+.chat-proc-caret {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 16px !important;
+  height: 16px !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  /* 沿用 bundle 的绝对定位并把居中组合写全：省略 transform 会被覆盖规则重置，
+     放大后字符基线就会把三角往上顶。 */
+  top: 50% !important;
+  right: 8px !important;
+  transform: translateY(-50%) !important;
+}
+
+/* 同族的其它聊天折叠箭头统一适度放大（11px → 13px，约 +18%），保持彼此一致。
+   这几个都在普通 flex 行内由 align-items:center 垂直居中，不用重定位，
+   因此只动 font-size / line-height，不动盒模型，避免挤压相邻文字。 */
+.chat-step-caret,
+.chat-think-caret,
+.chat-artifact-caret,
+.runov-jobs-fold-chev {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
 }
 
 
