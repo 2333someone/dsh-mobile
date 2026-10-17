@@ -22,7 +22,20 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-mobile'
-export const inject = ['webServer', 'sessionController', 'workspaceRegistry', 'credentials', 'deepseekAccount']
+// workspace.* 走 ctx.workspaceController，subagent.list 走 ctx.subagents，
+// mobile.listDirectory 走 ctx.directoryPickerController —— 三者必须显式 inject，
+// 否则 Cordis 会以「cannot get property ... without inject」拒绝读取，
+// 靠加载顺序碰运气只会拿到 undefined（新建工作区由此白屏）。
+export const inject = [
+  'webServer',
+  'sessionController',
+  'workspaceRegistry',
+  'workspaceController',
+  'subagents',
+  'directoryPickerController',
+  'credentials',
+  'deepseekAccount',
+]
 
 const COOKIE_NAME = 'dsh_mobile'
 const MOBILE_ROOT = '/m/'
@@ -1064,12 +1077,32 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
   var btn = document.getElementById('dm-subagent-btn');
   if (!btn) return;
 
-  var REFRESH_MS = 8000;
+  var REFRESH_MS = 8000;    // 面板打开时的轮询间隔
+  var BG_REFRESH_MS = 8000; // 后台预取间隔（与面板轮询一致）
   var panel = null;      // 遮罩节点（.dm-subagent-backdrop）
-  var timer = null;      // 列表自动刷新
+  var timer = null;      // 面板打开时的列表/聊天轮询
+  var bgTimer = null;    // 后台预取轮询（与面板是否打开无关）
   var view = 'list';     // 'list' | 'chat'
   var chatSid = '';
   var lastSessionId = '';
+
+  // ── 预取缓存 ────────────────────────────────────────────────────────────
+  // 之前是「点开面板 → 才发 subagent.list → 等响应才渲染」，首屏必然空一段。
+  // 现在改成进聊天页就后台预取并缓存（按会话 id 存），点开面板先用缓存立即渲染。
+  //
+  // 缓存三态必须分清，否则会把「还没拉到」误报成「确实没有」：
+  //   CACHE_SID === '' 或 cacheRows === null → 还没拉成功过（渲染「加载中…」）
+  //   cacheRows.length === 0                → 拉成功且确实为空（渲染「当前没有子代理」）
+  //   cacheRows.length > 0                  → 有数据（渲染列表）
+  var CACHE_SID = '';
+  var cacheRows = null;     // null = 未知；数组 = 已知（可能为空数组）
+  var cacheFetchedAt = 0;
+  var inflight = null;      // 正在飞的请求，调用点共享，避免重复打 RPC
+  var inflightSid = '';
+  var bgSid = '';           // 后台预取当前服务的会话 id
+  var lastFailAt = 0;       // 上次请求失败的时间（按会话区分），用于退避
+  var lastFailSid = '';
+  var RETRY_GAP_MS = 1500;
 
   // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id。
   var origFetch = window.fetch;
@@ -1133,6 +1166,122 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     return n;
   }
 
+  // ── 列表读取：统一走这里，命中缓存就同步返回 ──────────────────────────
+  // 返回 null 表示「这份缓存不属于当前会话」；返回数组表示已知结果（可能为空）。
+  function cachedRows(sid) {
+    if (!sid || CACHE_SID !== sid) return null;
+    return cacheRows;
+  }
+
+  // 会话切换：缓存作废（同一会话内不清，避免刷新时闪一下「加载中」）。
+  function invalidateCache(sid) {
+    if (CACHE_SID !== '' && CACHE_SID !== sid) {
+      CACHE_SID = '';
+      cacheRows = null;
+      cacheFetchedAt = 0;
+    }
+  }
+
+  // 与旧版 renderList 完全一致的洗数据：只留 kind==='child'。
+  function rowsOf(res) {
+    var entries = (res && res.ok && res.value && Array.isArray(res.value.entries)) ? res.value.entries : [];
+    var rows = [];
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (!e || e.kind !== 'child') continue;
+      rows.push({ id: String(e.id || ''), label: e.label, activity: e.activity });
+    }
+    return rows;
+  }
+
+  // 发一次真实请求。同一会话的并发调用共用一个 promise（去重）。
+  // 限流只在「同一个会话上一次请求刚失败」时生效，避免被 interval 密集重放；
+  // 不能对所有请求一刀切，否则切会话后的首次预取会被上一次的时间戳挡掉。
+  function fetchList(sid) {
+    if (!sid) return null;
+    if (inflight && inflightSid === sid) return inflight;
+    var now = Date.now();
+    if (lastFailSid === sid && now - lastFailAt < RETRY_GAP_MS) return null;
+    inflightSid = sid;
+    var committed = false;
+    inflight = rpc('subagent.list', { parentSessionId: sid }).then(function (res) {
+      if (inflightSid === sid) {
+        var rows = rowsOf(res);
+        CACHE_SID = sid;
+        cacheRows = rows;
+        cacheFetchedAt = Date.now();
+        committed = true;
+        return rows;
+      }
+      return null;
+    }).catch(function () {
+      if (inflightSid === sid && !committed) {
+        lastFailSid = sid;
+        lastFailAt = Date.now();
+      }
+      return null;   // 失败不许出弹窗；缓存保持原样，下次轮询自然会再试
+    }).then(function (rows) {
+      inflight = null;
+      // 后台刷新也要让面板跟着变（不只是点开那一次）：
+      // 每次「真实发生请求且写入缓存」后同步一次，内容没变 paintList 会自己不动 DOM。
+      if (committed) syncPanel(sid);
+      return rows;
+    });
+    return inflight;
+  }
+
+  // 后台预取：拿到会话就拉一次，之后由 bgTimer 低频刷新。整段 try/catch，
+  // 请求失败静默。这里必须每次都真发请求（同一会话的并发由 fetchList 去重），
+  // 否则「拉过一次就不再拉」，缓存会一直停在旧数据上。
+  // 仅当缓存刚刚写入（<1s，比如刚被点开面板那次请求刷新过）时跳过，避免连发。
+  function tickPrefetch() {
+    try {
+      var sid = currentSession();
+      invalidateCache(sid);
+      bgSid = sid;
+      if (!sid) return;
+      if (cachedRows(sid) !== null && Date.now() - cacheFetchedAt < 1000) return;
+      fetchList(sid);
+    } catch (e) {}
+  }
+
+  // 缓存更新后，若面板正停留在列表视图，就把最新内容同步上去。
+  // paintList 内部有 diff：内容没变就不动 DOM，所以不会闪。
+  function syncPanel(sid) {
+    try {
+      if (!panel || view !== 'list') return;
+      if (!panel.back.classList.contains('dm-subagent-open')) return;
+      if (currentSession() !== sid) return;
+      var rows = cachedRows(sid);
+      if (rows !== null) paintList(rows);
+    } catch (e) {}
+  }
+
+  // 幂等：ensure() 每 400ms 跑一次，若这里无条件 stop/start，8s 的后台计时器
+  // 会被反复重置、永远走不到刷新。所以只在「没起」或「会话变了」时才重启，
+  // 顺带也就完成了「切会话 → 缓存失效 → 重新预取」。
+  function startBg() {
+    var sid = currentSession();
+    try {
+      invalidateCache(sid);
+    } catch (e) {}
+    if (bgTimer !== null && bgSid === sid) return;   // 已在为这个会话预取
+    stopBg();
+    bgSid = sid;
+    tickPrefetch();
+    bgTimer = window.setInterval(function () {
+      try {
+        // 页面不可见时不必浪费请求；下一次 tick 会补上。
+        if (document.visibilityState && document.visibilityState !== 'visible') return;
+        tickPrefetch();
+      } catch (e) {}
+    }, BG_REFRESH_MS);
+  }
+  function stopBg() {
+    if (bgTimer !== null) { window.clearInterval(bgTimer); bgTimer = null; }
+    bgSid = '';
+  }
+
   // ── 面板骨架：一次性建好，之后只换 body 内容 ─────────────────────────
   function build() {
     var back = el('div', 'dm-subagent-backdrop');
@@ -1193,54 +1342,97 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
   }
 
   // ── 列表视图 ──────────────────────────────────────────────────────────
+  // 点开面板时：先用缓存同步渲染（0 延迟），再后台发一次请求按返回刷新。
+  // 缓存里没有当前会话的数据时，才显示「加载中…」。
   function renderList(showLoading) {
     if (!panel) return;
     view = 'list';
     panel.back2.classList.remove('dm-subagent-show');
-    panel.title.textContent = '子代理';
-    if (showLoading) panel.body.innerHTML = '<p class="dm-subagent-hint">加载中…</p>';
 
     var sid = currentSession();
     if (!sid) {
-      panel.body.innerHTML = '<p class="dm-subagent-hint">未识别到当前会话</p>';
+      panel.title.textContent = '子代理';
+      writeBody('<p class="dm-subagent-hint">未识别到当前会话</p>');
       return;
     }
-    rpc('subagent.list', { parentSessionId: sid }).then(function (res) {
+
+    var known = cachedRows(sid);
+    if (known !== null) {
+      // 有缓存：立刻画出来，不等网络。
+      paintList(known);
+    } else {
+      panel.title.textContent = '子代理';
+      writeBody('<p class="dm-subagent-hint dm-subagent-loading">加载中…</p>');
+    }
+
+    // 无论有没有缓存都再取一次新鲜数据：返回后 paintList 只在真的变了才动 DOM，
+    // 所以点开面板既不会空白，也不会因为刷新而闪烁。
+    var p = fetchList(sid);
+    if (!p) return;
+    p.then(function (rows) {
       if (!panel || view !== 'list') return;
-      var entries = (res && res.ok && res.value && Array.isArray(res.value.entries)) ? res.value.entries : [];
-      var rows = [];
-      for (var i = 0; i < entries.length; i++) {
-        var e = entries[i];
-        if (!e || e.kind !== 'child') continue;
-        rows.push({ id: String(e.id || ''), label: e.label, activity: e.activity });
-      }
-      panel.title.textContent = '子代理 · ' + rows.length + ' 个';
-      if (rows.length === 0) {
-        panel.body.innerHTML = '<p class="dm-subagent-hint">当前没有子代理</p>';
-        return;
-      }
-      var frag = document.createDocumentFragment();
-      for (var k = 0; k < rows.length; k++) {
-        var r = rows[k];
-        var running = r.activity === 'running';
-        var row = el('button', 'dm-subagent-row');
-        row.type = 'button';
-        row.setAttribute('data-sid', r.id);
-        row.innerHTML =
+      if (!rows) return;              // 请求失败：保留原样，下次轮询再试
+      if (currentSession() !== sid) return;  // 期间切了会话：丢弃这次结果
+      paintList(rows);
+    }).catch(function () {});
+  }
+
+  // 把一组 rows 画进面板。与上一屏内容一致就整段不动 DOM（避免闪烁／丢焦点）。
+  function paintList(rows) {
+    if (!panel) return;
+    view = 'list';
+    panel.back2.classList.remove('dm-subagent-show');
+    panel.title.textContent = '子代理 · ' + rows.length + ' 个';
+
+    if (rows.length === 0) {
+      setBody('<p class="dm-subagent-hint">当前没有子代理</p>');
+      return;
+    }
+
+    var html = '';
+    for (var k = 0; k < rows.length; k++) {
+      var r = rows[k];
+      var running = r.activity === 'running';
+      html +=
+        '<button type="button" class="dm-subagent-row" data-sid="' + esc(r.id) + '">' +
           '<span class="dm-subagent-dot' + (running ? ' dm-subagent-dot-run' : '') + '"></span>' +
           '<span class="dm-subagent-main">' +
             '<span class="dm-subagent-label">' + esc(r.label || r.id.slice(0, 8)) + '</span>' +
             '<span class="dm-subagent-sub">' + (running ? '运行中' : '空闲') + '</span>' +
           '</span>' +
-          '<span class="dm-subagent-chev">›</span>';
-        frag.appendChild(row);
-      }
-      panel.body.innerHTML = '';
-      panel.body.appendChild(frag);
-    }).catch(function () {
-      if (!panel || view !== 'list') return;
-      panel.body.innerHTML = '<p class="dm-subagent-hint">加载失败</p>';
-    });
+          '<span class="dm-subagent-chev">›</span>' +
+        '</button>';
+    }
+    setBody(html);
+  }
+
+  // 内容没变就不碰 innerHTML —— 这是「刷新不闪烁」的关键。
+  // 标记始终跟随真实内容：任何直接写入也走 writeBody，标记就不会指向旧内容，
+  // 列表 ↔ 聊天视图来回切时也才不会误判成「没变」而漏画。
+  function writeBody(html) {
+    if (!panel) return;
+    panel.body.setAttribute('data-dm-html', html);
+    panel.body.innerHTML = html;
+  }
+  function setBody(html) {
+    if (!panel) return;
+    if (panel.body.getAttribute('data-dm-html') === html) return;
+    writeBody(html);
+  }
+
+  // 聊天内容视图的行 HTML（原来用 DOM fragment 拼，改为字符串才能参与 diff）。
+  function fragHtml(items) {
+    var html = '';
+    for (var k = 0; k < items.length; k++) {
+      var it = items[k];
+      var icon = it.role === 'user' ? '我' : (it.role === 'assistant' ? 'AI' : '⚙');
+      html +=
+        '<div class="dm-subagent-msg dm-subagent-msg-' + it.role + '">' +
+          '<span class="dm-subagent-who">' + icon + '</span>' +
+          '<span class="dm-subagent-text">' + esc(it.text || '(无文本)') + '</span>' +
+        '</div>';
+    }
+    return html;
   }
 
   // ── 聊天内容视图 ──────────────────────────────────────────────────────
@@ -1249,7 +1441,7 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     view = 'chat';
     panel.back2.classList.add('dm-subagent-show');
     panel.title.textContent = '子代理 · ' + chatSid.slice(0, 8);
-    panel.body.innerHTML = '<p class="dm-subagent-hint">加载中…</p>';
+    writeBody('<p class="dm-subagent-hint dm-subagent-loading">加载中…</p>');
 
     // 带上 parentSessionId：宿主读子代理会话必须走 durable 父地址
     //（{kind:'subagent'}），父 id 由列表视图所在的当前会话直接给出。
@@ -1272,24 +1464,13 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
         }
       }
       if (items.length === 0) {
-        panel.body.innerHTML = '<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>';
+        writeBody('<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>');
         return;
       }
-      var frag = document.createDocumentFragment();
-      for (var k = 0; k < items.length; k++) {
-        var it = items[k];
-        var row = el('div', 'dm-subagent-msg dm-subagent-msg-' + it.role);
-        var icon = it.role === 'user' ? '我' : (it.role === 'assistant' ? 'AI' : '⚙');
-        row.innerHTML =
-          '<span class="dm-subagent-who">' + icon + '</span>' +
-          '<span class="dm-subagent-text">' + esc(it.text || '(无文本)') + '</span>';
-        frag.appendChild(row);
-      }
-      panel.body.innerHTML = '';
-      panel.body.appendChild(frag);
+      writeBody(fragHtml(items));
     }).catch(function () {
       if (!panel || view !== 'chat') return;
-      panel.body.innerHTML = '<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>';
+      writeBody('<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>');
     });
   }
 
@@ -1330,10 +1511,15 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     if (!found) {
       // 不在聊天页（或顶栏暂未渲染）：把按钮摘下来，避免出现在别的页面。
       if (btn.parentNode) btn.parentNode.removeChild(btn);
+      // 离开聊天页就关面板并停掉所有轮询，别在后台白打请求。
+      if (panel && panel.back.classList.contains('dm-subagent-open')) closePanel();
+      stopBg();
       return;
     }
     if (btn.parentNode !== found.slot) found.slot.insertBefore(btn, found.more);
     else if (btn.nextSibling !== found.more) found.slot.insertBefore(btn, found.more);
+    // 进聊天页：起后台预取（内部自带会话失效判断，重复调用安全）。
+    startBg();
   }
 
   var pending = false;
@@ -1592,6 +1778,10 @@ export function apply(ctx, config) {
   // ── RPC adapter (dsh-palm protocol) ───────────────────────────────────────
   const sc = () => ctx.sessionController
   const wr = () => ctx.workspaceRegistry
+  // 与上面同款：ctx.get 是「按名取服务」的宽容读法，取不到返回 undefined 而不抛。
+  // 调用处一律先判空，再决定降级（空列表 / 报错），绝不直接对 undefined 取方法。
+  const wc = () => (typeof ctx.get === 'function' ? ctx.get('workspaceController') : undefined)
+  const dp = () => (typeof ctx.get === 'function' ? ctx.get('directoryPickerController') : undefined)
 
   // ── 会话历史读取 ──────────────────────────────────────────────────────────
   //
@@ -2011,18 +2201,32 @@ export function apply(ctx, config) {
         return { ok: true, value: { items, archivedSessionIds: [] } }
       }
       case 'workspace.create': {
-        const value = await ctx.workspaceController.create({
+        const controller = wc()
+        if (!controller || typeof controller.create !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' } }
+        }
+        // bundle 的 dir-browser 只传 path（L(path)），title 是可选的。
+        const value = await controller.create({
           ...(payload.path ? { path: payload.path } : {}),
           ...(payload.title ? { title: payload.title } : {}),
         })
+        // 契约：{ workspace: {...}, created: boolean }；bundle 读的是 .workspace。
         return { ok: true, value }
       }
       case 'workspace.rename': {
-        const value = await ctx.workspaceController.rename({ workspaceId: payload.workspaceId, title: payload.title })
+        const controller = wc()
+        if (!controller || typeof controller.rename !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' } }
+        }
+        const value = await controller.rename({ workspaceId: payload.workspaceId, title: payload.title })
         return { ok: true, value }
       }
       case 'workspace.delete': {
-        await ctx.workspaceController.delete({ workspaceId: payload.workspaceId })
+        const controller = wc()
+        if (!controller || typeof controller.delete !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' } }
+        }
+        await controller.delete({ workspaceId: payload.workspaceId })
         return { ok: true, value: { deleted: true } }
       }
       case 'workspace.archiveSession': {
@@ -2240,7 +2444,48 @@ export function apply(ctx, config) {
         return { ok: false, error: { code: 'unavailable', message: '文件预览暂未开放' } }
       }
       case 'mobile.listDirectory': {
-        return { ok: true, value: { entries: [] } }
+        //
+        // 「新建工作区」→ 目录选择页（bundle 的 dir-browser / Dd）进来这里。
+        // 该组件渲染时无条件做 n.crumbs.map(...) 与 n.entries.map(...)，所以
+        // 返回体必须同时带上 crumbs 和 entries 两个数组；以前这里返回
+        // { entries: [] }（没有 crumbs），组件一渲染就抛
+        // "Cannot read properties of undefined (reading 'map')" —— 页面白屏。
+        //
+        // 目录读取一律走宿主的 directoryPickerController（受控、可取消、带
+        // home/crumbs/truncated），绝不用裸 fs.readdir 打开任意路径。
+        //
+        const picker = dp()
+        if (!picker || typeof picker.list !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '目录浏览不可用（宿主未提供 directoryPickerController）' } }
+        }
+        const requested = typeof payload?.path === 'string' && payload.path !== '' ? payload.path : undefined
+        try {
+          const listing = await picker.list(requested, new AbortController().signal)
+          // 契约（@deepseek-ai/dsh-host-directory-picker/types#DirectoryListing）：
+          //   { path, home, crumbs[], entries[], truncated }
+          // 每项 { name, path, hidden }。这里再兜一层底：即使宿主少给了字段，
+          // 也要保证两个数组存在，永不把 undefined 交给 .map()。
+          const crumbs = Array.isArray(listing?.crumbs) ? listing.crumbs : []
+          const entries = Array.isArray(listing?.entries) ? listing.entries : []
+          return {
+            ok: true,
+            value: {
+              path: typeof listing?.path === 'string' ? listing.path : (requested ?? ''),
+              home: typeof listing?.home === 'string' ? listing.home : '',
+              crumbs,
+              entries,
+              truncated: listing?.truncated === true,
+            },
+          }
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: 'list-failed',
+              message: (err && err.message) || '读取目录失败',
+            },
+          }
+        }
       }
       case 'mobile.previews': {
         return { ok: true, value: {} }
