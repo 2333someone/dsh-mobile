@@ -84,6 +84,30 @@
 .chat-pill[aria-label^="切换模型"] {
   display: none !important;
 }
+/* 隐藏 pill 后保住工具行高度，避免上下文用量整体上移 */
+.chat-tools {
+  min-height: 40px !important;
+}
+/* 模型小弹窗：独立居中对话框（脱离聊天流，不再顶动用量） */
+/* composer 的 backdrop-filter 会成为 fixed 后代的定位基准，这里解除它 */
+.chat-composer {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.chat-picker-panel {
+  position: fixed !important;
+  left: 50% !important;
+  right: auto !important;
+  top: 14% !important;
+  bottom: auto !important;
+  transform: translateX(-50%) !important;
+  width: min(92vw, 430px) !important;
+  max-height: 38vh !important;
+  margin: 0 !important;
+  z-index: 60 !important;
+  border-radius: 16px !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22) !important;
+}
 /* 给自定义模型按钮在输入栏里留出位置 */
 .chat-input {
   margin-left: 44px !important;
