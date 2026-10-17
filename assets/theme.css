@@ -150,18 +150,36 @@
   height: 32px !important;
 }
 .chat-context .chat-context-text {
-  position: absolute !important;
-  inset: 0 !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  font-size: 8px !important;
+  display: none !important;
+}
+
+/* 上下文详情：点击圆环后从底部上滑弹出（复用 bundle 的浮层，改成底部抽屉） */
+.chat-context-pop {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  top: auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  border-radius: 16px 16px 0 0 !important;
+  border-bottom: none !important;
+  padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 16px) !important;
+  z-index: 61 !important;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18) !important;
+  animation: sheet-up 0.26s ease-out both !important;
+}
+.chat-context-pop-scrim {
+  background: rgba(15, 15, 25, 0.25) !important;
+  z-index: 60 !important;
+}
+.chat-context-pop-title {
+  font-size: 12px !important;
+  color: var(--text-quaternary, #8a8f99) !important;
+}
+.chat-context-pop-figures {
+  font-size: 18px !important;
   font-weight: 600 !important;
-  letter-spacing: -0.3px !important;
-  line-height: 1 !important;
-  font-variant-numeric: tabular-nums !important;
-  color: inherit !important;
-  pointer-events: none !important;
 }
 
 /* ── 底部抽屉：默认只占半屏高，内容在内部滚动（拖拽展开 .sheet-full 不受影响） */
