@@ -1,54 +1,118 @@
 /**
  * dsh-mobile 客户端半：在 dsh 设置面板注册「掌上 dsh」设置段。
- * - 展示访问地址（局域网 + 公网）
- * - 生成 6 位配对码（桌面出码，手机在 /m/ 输入）
- * - 已配对设备管理（撤销）
+ * - 展示访问地址（局域网 + 公网，可复制）
+ * - 生成 6 位配对码（桌面出码，手机在 /m/ 输入），带倒计时
+ * - 已配对设备管理（撤销需二次确认）
  *
- * 通过浏览器 fetch 直连同源的 /m/api/*（桌面 GUI 请求来自回环，满足
- * host 端的 loopback 校验）。
+ * 通过浏览器 fetch 直连同源的 /m/api/*（桌面 GUI 请求来自回环，满足 host 端的
+ * loopback 校验）。样式走主题 token，动画遵循 prefers-reduced-motion。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-mobile',
   factory(require) {
     const React = require('react')
     const h = React.createElement
+    const { useState, useEffect, useCallback, useRef } = React
 
-    // 复用 dsh 主题 token，自动跟随亮/暗主题
-    const css = {
-      wrap: { display: 'flex', flexDirection: 'column', gap: 20, padding: '4px 2px' },
-      card: {
-        border: '1px solid var(--dsw-alias-border-l1)',
-        background: 'var(--dsw-alias-bg-layer-1)',
-        borderRadius: 16,
-        padding: 18,
-      },
-      title: { margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      sub: { margin: '6px 0 0', fontSize: 12.5, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' },
-      url: { display: 'block', marginTop: 8, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5, color: 'var(--dsw-alias-brand-primary)', wordBreak: 'break-all' },
-      code: { margin: '14px 0 4px', textAlign: 'center', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 40, fontWeight: 700, letterSpacing: 8, color: 'var(--dsw-alias-brand-primary)' },
-      btn: {
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        border: '1px solid #4D6BFE', borderRadius: 10, padding: '9px 16px', fontSize: 13, fontWeight: 600,
-        cursor: 'pointer', background: '#4D6BFE', color: '#ffffff',
-      },
-      btnGhost: {
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        border: '1px solid var(--dsw-alias-border-l2, #d0d2da)', borderRadius: 10, padding: '9px 16px',
-        fontSize: 13, fontWeight: 500, cursor: 'pointer', background: 'transparent',
-        color: 'var(--dsw-alias-label-primary, #1b1c20)',
-      },
-      btnDanger: {
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        border: '1px solid #e5484d', borderRadius: 10, padding: '7px 12px',
-        fontSize: 12.5, fontWeight: 500, cursor: 'pointer', background: 'transparent',
-        color: '#e5484d',
-      },
-      row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 0', borderTop: '1px solid var(--dsw-alias-border-l1)' },
-      name: { fontSize: 13.5, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' },
-      detail: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginTop: 2 },
-      muted: { color: 'var(--dsw-alias-label-secondary)', fontSize: 13 },
-      err: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12.5, marginTop: 8 },
-    }
+    const CSS = `
+.dm-wrap { display: flex; flex-direction: column; gap: 16px; padding: 4px 2px; }
+.dm-card {
+  border: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
+  background: var(--dsw-alias-bg-layer-1, #f5f6f8);
+  border-radius: 16px; padding: 18px;
+  animation: dm-in .34s cubic-bezier(.2,.75,.25,1) both;
+}
+.dm-card:nth-child(2) { animation-delay: .06s; }
+.dm-card:nth-child(3) { animation-delay: .12s; }
+.dm-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary, #1b1c20); }
+.dm-sub { margin: 6px 0 0; font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-urlRow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.dm-url {
+  flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; color: #4D6BFE; word-break: break-all;
+}
+.dm-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px solid #4D6BFE; border-radius: 10px; padding: 9px 16px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  background: #4D6BFE; color: #fff;
+  transition: background-color .16s ease, transform .09s ease, box-shadow .16s ease, opacity .16s ease;
+}
+.dm-btn:hover { background: #5f7bff; border-color: #5f7bff; box-shadow: 0 4px 14px rgba(77,107,254,.28); }
+.dm-btn:active { transform: scale(.97); }
+.dm-btn:focus-visible { outline: 2px solid #4D6BFE; outline-offset: 2px; }
+.dm-btn[disabled] { opacity: .6; cursor: default; transform: none; box-shadow: none; }
+.dm-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px solid var(--dsw-alias-border-l2, #d0d2da); border-radius: 10px;
+  padding: 9px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+  background: transparent; color: var(--dsw-alias-label-primary, #1b1c20);
+  transition: background-color .16s ease, border-color .16s ease, transform .09s ease;
+}
+.dm-ghost:hover { background: rgba(127,127,127,.08); }
+.dm-ghost:active { transform: scale(.97); }
+.dm-ghost:focus-visible { outline: 2px solid #4D6BFE; outline-offset: 2px; }
+.dm-danger {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #e5484d; border-radius: 10px; padding: 7px 12px;
+  font-size: 12.5px; font-weight: 500; cursor: pointer; background: transparent; color: #e5484d;
+  transition: background-color .16s ease, color .16s ease, transform .09s ease;
+}
+.dm-danger:hover { background: rgba(229,72,77,.1); }
+.dm-danger:active { transform: scale(.96); }
+.dm-danger[data-confirm="true"] { background: #e5484d; color: #fff; }
+.dm-copy {
+  flex: none; border: 1px solid var(--dsw-alias-border-l2, #d0d2da); background: transparent;
+  color: var(--dsw-alias-label-secondary, #6b6e78); border-radius: 8px; padding: 5px 10px;
+  font-size: 11.5px; cursor: pointer; transition: background-color .15s, color .15s, transform .09s;
+}
+.dm-copy:hover { background: rgba(127,127,127,.1); }
+.dm-copy:active { transform: scale(.95); }
+.dm-copy[data-copied="true"] { border-color: #18a058; color: #18a058; }
+.dm-code {
+  margin: 14px 0 2px; text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 40px; font-weight: 700; letter-spacing: 8px; color: #4D6BFE;
+  animation: dm-pop .4s cubic-bezier(.2,.8,.25,1.1) both;
+}
+.dm-codeExpired { opacity: .45; text-decoration: line-through; }
+.dm-count { text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-count b { color: #4D6BFE; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dm-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 0; border-top: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
+  animation: dm-in .28s ease both;
+}
+.dm-row:first-of-type { border-top: 0; }
+.dm-name { font-size: 13.5px; font-weight: 500; color: var(--dsw-alias-label-primary, #1b1c20); }
+.dm-detail { font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); margin-top: 2px; }
+.dm-muted { color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 13px; }
+.dm-err { color: var(--dsw-alias-state-error-primary, #e5484d); font-size: 12.5px; margin-top: 10px; }
+.dm-actions { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; }
+.dm-spin {
+  width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4);
+  border-top-color: #fff; border-radius: 50%;
+  animation: dm-rot .8s linear infinite;
+}
+.dm-spinGhost {
+  width: 14px; height: 14px; border: 2px solid rgba(77,107,254,.25);
+  border-top-color: #4D6BFE; border-radius: 50%;
+  animation: dm-rot .8s linear infinite;
+}
+.dm-live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-liveDot { width: 7px; height: 7px; border-radius: 50%; background: #18a058; box-shadow: 0 0 0 0 rgba(24,160,88,.45); animation: dm-pulse 2s infinite; }
+.dm-liveDotOff { background: #b8bcc6; animation: none; }
+@keyframes dm-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes dm-pop { 0% { opacity: 0; transform: scale(.86); } 62% { transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes dm-rot { to { transform: rotate(360deg); } }
+@keyframes dm-pulse { 0% { box-shadow: 0 0 0 0 rgba(24,160,88,.45); } 70% { box-shadow: 0 0 0 6px rgba(24,160,88,0); } 100% { box-shadow: 0 0 0 0 rgba(24,160,88,0); } }
+@media (prefers-reduced-motion: reduce) {
+  .dm-card, .dm-row, .dm-code { animation: none !important; }
+  .dm-btn, .dm-ghost, .dm-danger, .dm-copy { transition: none !important; }
+  .dm-liveDot { animation: none !important; }
+  .dm-spin, .dm-spinGhost { animation-duration: 1.6s !important; }
+}
+`
 
     function fmt(ms) {
       if (!ms) return '—'
@@ -60,26 +124,79 @@ window.__ModuleLoader__.load({
         : d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
 
-    function MobileSettings() {
-      const [status, setStatus] = React.useState(null)
-      const [code, setCode] = React.useState(null)
-      const [err, setErr] = React.useState('')
+    function remaining(expiresAt, now) {
+      const ms = Math.max(0, (expiresAt || 0) - now)
+      const s = Math.ceil(ms / 1000)
+      const m = Math.floor(s / 60)
+      return `${String(m).padStart(1, '0')}:${String(s % 60).padStart(2, '0')}`
+    }
 
-      const refresh = React.useCallback(() => {
+    async function copyText(text) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text)
+          return true
+        }
+      } catch {}
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        return ok
+      } catch {
+        return false
+      }
+    }
+
+    function MobileSettings() {
+      const [status, setStatus] = useState(null)
+      const [code, setCode] = useState(null)
+      const [issuing, setIssuing] = useState(false)
+      const [err, setErr] = useState('')
+      const [copied, setCopied] = useState('')
+      const [confirmRevoke, setConfirmRevoke] = useState('')
+      const [now, setNow] = useState(() => Date.now())
+      const confirmTimer = useRef()
+      const copyTimer = useRef()
+
+      const refresh = useCallback(() => {
         fetch('/m/api/status')
           .then((r) => r.json())
-          .then((j) => { if (j && j.ok) setStatus(j) })
+          .then((j) => {
+            if (!j || !j.ok) return
+            setStatus(j)
+            // 宿主端已有待配对码时同步显示（例如另一处生成）。
+            if (j.pending) setCode((cur) => cur ?? { code: j.pending.code, expiresAt: j.pending.expiresAt })
+          })
           .catch(() => {})
       }, [])
 
-      React.useEffect(() => {
+      useEffect(() => {
         refresh()
-        const t = setInterval(refresh, 5000)
+        const t = setInterval(refresh, 4000)
         return () => clearInterval(t)
       }, [refresh])
 
+      // 倒计时 tick
+      useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(t)
+      }, [])
+
+      useEffect(() => () => {
+        clearTimeout(confirmTimer.current)
+        clearTimeout(copyTimer.current)
+      }, [])
+
       const issue = () => {
+        if (issuing) return
         setErr('')
+        setIssuing(true)
         fetch('/m/api/pair/issue', { method: 'POST' })
           .then((r) => r.json())
           .then((j) => {
@@ -87,53 +204,108 @@ window.__ModuleLoader__.load({
             else setErr((j && j.error) || '生成失败')
           })
           .catch(() => setErr('生成失败：无法访问宿主机'))
+          .finally(() => setIssuing(false))
       }
 
       const revoke = (deviceId) => {
+        if (confirmRevoke !== deviceId) {
+          setConfirmRevoke(deviceId)
+          clearTimeout(confirmTimer.current)
+          confirmTimer.current = setTimeout(() => setConfirmRevoke(''), 3000)
+          return
+        }
+        clearTimeout(confirmTimer.current)
+        setConfirmRevoke('')
         fetch('/m/api/device/revoke', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ deviceId }),
-        }).then(() => refresh())
+        }).then(() => refresh()).catch(() => {})
+      }
+
+      const onCopy = async (url) => {
+        const ok = await copyText(url)
+        if (!ok) return
+        setCopied(url)
+        clearTimeout(copyTimer.current)
+        copyTimer.current = setTimeout(() => setCopied(''), 1800)
       }
 
       const addrs = (status && status.addresses) || { lan: [], publicBase: null }
       const devices = (status && status.devices) || []
-      const urls = [...addrs.lan, ...(addrs.publicBase ? [addrs.publicBase] : [])]
+      const urls = [...(addrs.lan || []), ...(addrs.publicBase ? [addrs.publicBase] : [])]
+      const expired = code ? now > code.expiresAt : false
 
-      return h('div', { style: css.wrap },
-        h('div', { style: css.card },
-          h('p', { style: css.title }, '访问地址'),
-          h('p', { style: css.sub }, '手机浏览器打开以下任意地址，输入配对码即可使用。'),
+      return h('div', { className: 'dm-wrap' },
+        h('style', { dangerouslySetInnerHTML: { __html: CSS } }),
+
+        // ── 访问地址 ──
+        h('div', { className: 'dm-card' },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 } },
+            h('p', { className: 'dm-title' }, '访问地址'),
+            h('span', { className: 'dm-live' },
+              h('span', { className: 'dm-liveDot' + (urls.length ? '' : ' dm-liveDotOff') }),
+              urls.length ? '就绪' : '未监听'),
+          ),
+          h('p', { className: 'dm-sub' }, '手机浏览器打开以下任意地址，输入配对码即可使用。'),
           urls.length
-            ? urls.map((u, i) => h('span', { key: i, style: css.url }, `${u}/m/`))
-            : h('p', { style: css.muted }, '未检测到局域网地址；请配置 publicBaseUrl 或让 webserver 绑定 0.0.0.0。'),
+            ? urls.map((u, i) =>
+                h('div', { key: u, className: 'dm-urlRow' },
+                  h('span', { className: 'dm-url' }, `${u}/m/`),
+                  h('button', {
+                    type: 'button',
+                    className: 'dm-copy',
+                    'data-copied': copied === u ? 'true' : 'false',
+                    onClick: () => onCopy(`${u}/m/`),
+                  }, copied === u ? '已复制' : '复制'),
+                ),
+              )
+            : h('p', { className: 'dm-muted', style: { marginTop: 10 } }, '未检测到地址：请确认插件已启用，或在配置里填写 publicBaseUrl。'),
         ),
-        h('div', { style: css.card },
-          h('p', { style: css.title }, '手机配对'),
-          h('p', { style: css.sub }, '生成一个 6 位配对码，5 分钟内有效；在手机 /m/ 页输入即完成配对。'),
+
+        // ── 手机配对 ──
+        h('div', { className: 'dm-card' },
+          h('p', { className: 'dm-title' }, '手机配对'),
+          h('p', { className: 'dm-sub' }, '生成一个 6 位配对码，5 分钟内有效；在手机 /m/ 页输入即完成配对。'),
           code
             ? h('div', null,
-                h('div', { style: css.code }, code.code),
-                h('p', { style: { ...css.sub, textAlign: 'center' } }, `有效期至 ${fmt(code.expiresAt)}`),
-                h('div', { style: { textAlign: 'center', marginTop: 10 } },
-                  h('button', { style: css.btnGhost, onClick: issue }, '重新生成')),
+                h('div', { className: 'dm-code' + (expired ? ' dm-codeExpired' : '') }, code.code),
+                h('p', { className: 'dm-count' },
+                  expired
+                    ? '配对码已过期，请重新生成'
+                    : h('span', null, '剩余 ', h('b', null, remaining(code.expiresAt, now))),
+                ),
+                h('div', { className: 'dm-actions' },
+                  h('button', { type: 'button', className: 'dm-ghost', onClick: issue, disabled: issuing },
+                    issuing ? h('span', { className: 'dm-spinGhost' }) : null,
+                    issuing ? '生成中…' : '重新生成'),
+                ),
               )
-            : h('div', { style: { marginTop: 12 } },
-                h('button', { style: css.btn, onClick: issue }, '生成配对码')),
-          err ? h('p', { style: css.err }, err) : null,
+            : h('div', { className: 'dm-actions' },
+                h('button', { type: 'button', className: 'dm-btn', onClick: issue, disabled: issuing },
+                  issuing ? h('span', { className: 'dm-spin' }) : null,
+                  issuing ? '生成中…' : '生成配对码'),
+              ),
+          err ? h('p', { className: 'dm-err' }, err) : null,
         ),
-        h('div', { style: css.card },
-          h('p', { style: css.title }, `已配对设备（${devices.length}）`),
+
+        // ── 已配对设备 ──
+        h('div', { className: 'dm-card' },
+          h('p', { className: 'dm-title' }, `已配对设备（${devices.length}）`),
           devices.length === 0
-            ? h('p', { style: { ...css.muted, marginTop: 8 } }, '还没有设备。用上面的配对码在手机上配对后，这里会显示。')
+            ? h('p', { className: 'dm-muted', style: { marginTop: 8 } }, '还没有设备。用上面的配对码在手机上配对后，这里会显示。')
             : devices.map((d, i) =>
-                h('div', { key: d.deviceId, style: { ...css.row, borderTop: i === 0 ? 0 : undefined } },
+                h('div', { key: d.deviceId, className: 'dm-row', style: { animationDelay: `${i * 40}ms` } },
                   h('div', null,
-                    h('div', { style: css.name }, d.name || '设备'),
-                    h('div', { style: css.detail }, `${d.deviceId} · 最近活跃 ${fmt(d.lastSeenAt)}`),
+                    h('div', { className: 'dm-name' }, d.name || '设备'),
+                    h('div', { className: 'dm-detail' }, `${d.deviceId} · 最近活跃 ${fmt(d.lastSeenAt)}`),
                   ),
-                  h('button', { style: css.btnDanger, onClick: () => revoke(d.deviceId) }, '撤销'),
+                  h('button', {
+                    type: 'button',
+                    className: 'dm-danger',
+                    'data-confirm': confirmRevoke === d.deviceId ? 'true' : 'false',
+                    onClick: () => revoke(d.deviceId),
+                  }, confirmRevoke === d.deviceId ? '确认撤销？' : '撤销'),
                 ),
               ),
         ),

@@ -518,6 +518,22 @@ export function apply(ctx, config) {
       case 'mobile.pending': {
         return { ok: true, value: { approvals: [], questions: [] } }
       }
+      // 手机端设置/诊断类控制项：给安全空值，避免点开就弹错。
+      case 'mobile.latestVersion': {
+        return { ok: true, value: { latest: '0.1.0', isNewer: false } }
+      }
+      case 'mobile.usage': {
+        return { ok: true, value: { providers: [] } }
+      }
+      case 'settings.describe': {
+        return { ok: true, value: { writable: false, hasDocument: false, namespaces: [] } }
+      }
+      case 'mobile.error':
+      case 'mobile.perf':
+      case 'mobile.diagnostics':
+      case 'mobile.observe': {
+        return { ok: true, value: {} }
+      }
       default:
         return { ok: false, error: { code: 'not-supported', message: `method ${method} is not implemented by dsh-mobile` } }
     }
