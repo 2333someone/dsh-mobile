@@ -3273,6 +3273,8 @@ export function apply(ctx, config) {
       set = new Set()
       observers.set(deviceId, set)
     }
+    // 重申即续命：回收器以此为计时基准。
+    lastObserved.set(sessionId, Date.now())
     if (set.size === 1 && set.has(sessionId)) return
     set.clear()
     set.add(sessionId)
