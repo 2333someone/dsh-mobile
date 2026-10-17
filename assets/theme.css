@@ -185,7 +185,9 @@
   top: auto !important;
   width: auto !important;
   min-width: 0 !important;
-  min-height: 34vh !important;
+  /* 高度由内容自适应；只有内容过长时才受 max-height 限制 */
+  min-height: auto !important;
+  height: auto !important;
   max-height: 60vh !important;
   overflow-y: auto !important;
   background: var(--bg-surface, #fff) !important;
