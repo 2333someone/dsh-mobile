@@ -232,17 +232,27 @@ export function apply(ctx, config) {
   let pairToken = null // { code, expiresAt }
   const cookieName = COOKIE_NAME
 
-  function deviceTokenOf(req) {
-    return parseCookies(req)[cookieName] || null
+  function deviceTokensOf(req) {
+    const header = req.headers.cookie
+    if (!header) return []
+    const out = []
+    for (const part of String(header).split(';')) {
+      const i = part.indexOf('=')
+      if (i < 0) continue
+      if (part.slice(0, i).trim() !== cookieName) continue
+      out.push(decodeURIComponent(part.slice(i + 1).trim()))
+    }
+    return out
   }
 
   function authenticatedDevice(req) {
-    const token = deviceTokenOf(req)
-    if (!token) return null
-    for (const [deviceId, d] of devices) {
-      if (d.token === token) {
-        d.lastSeenAt = Date.now()
-        return { deviceId, ...d }
+    // 容忍历史遗留：Path=/ 与 Path=/m 可能同时存在同名 cookie，任一有效即通过。
+    for (const token of deviceTokensOf(req)) {
+      for (const [deviceId, d] of devices) {
+        if (d.token === token) {
+          d.lastSeenAt = Date.now()
+          return { deviceId, ...d }
+        }
       }
     }
     return null
