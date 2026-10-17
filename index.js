@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-mobile'
-export const inject = ['webServer', 'sessionController', 'workspaceRegistry']
+export const inject = ['webServer', 'sessionController', 'workspaceRegistry', 'credentials', 'deepseekAccount']
 
 const COOKIE_NAME = 'dsh_mobile'
 const MOBILE_ROOT = '/m/'
@@ -37,6 +37,9 @@ const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
 const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
+// 手机待处理项寿命：桌面侧不受影响，只是手机上过久没处理就不用再等。
+const PENDING_TTL_MS = 30 * 60 * 1000
+const PENDING_SWEEP_MS = 60 * 1000
 const MAX_DEVICES = 16
 const DEFAULT_MOBILE_PORT = 19387
 // 固定配对码：手机端不再随机、也不会过期；留空则回退为随机 6 位码。
@@ -278,6 +281,92 @@ function textOfEventData(data) {
     .map((b) => String(b.text || ''))
     .join('')
 }
+
+// ── 用量页：DeepSeek 官方余额（宿主代理查询） ──────────────────────────────
+//
+// 手机设置页「用量 / 套餐与配额」的数据取值全部发生在宿主进程内：
+// bundle 只拿到拼好的展示字符串，任何 API Key / 平台 token 都不会出现在
+// 返回体里（19387 可能经公网反代，用例 BUILD-MOB-003）。
+const USAGE_CACHE_TTL_MS = 60 * 1000
+const BALANCE_FETCH_TIMEOUT_MS = 20 * 1000
+const DEEPSEEK_BALANCE_URL = 'https://api.deepseek.com/user/balance'
+const DEEPSEEK_BALANCE_NAME = 'DeepSeek'
+const DEEPSEEK_BALANCE_BASE_URL = 'https://api.deepseek.com/'
+
+/** 读取 0/1/多个钱包里的第一个可用数字；不是数字就跳过。 */
+function firstNumericWallet(list) {
+  if (!Array.isArray(list)) return undefined
+  const hit = list.find((w) => w && typeof w === 'object')
+  if (hit === undefined) return undefined
+  return hit
+}
+
+/**
+ * 把平台余额的最小保证形状压成一行 Row（本金钱包优先，其次赠送钱包）。
+ *
+ * 参数是 duck-typed 的：上游可能会在 `value` / `bonusWallets` 里给出多个钱包，
+ * 我们只读 `{ currency, balance }` 两个字段，多出来的字段一律丢弃，
+ * 也就不存在「多带一个 token 字段就顺手下发给手机」的可能。
+ * @returns `1.23 CNY` 形式的展示串；拿不到合法形状时 undefined。
+ */
+function balanceRow(list) {
+  const wallet = firstNumericWallet(list)
+  if (wallet === undefined) return undefined
+  const amount = wallet.balance
+  if (amount === undefined || amount === null || amount === '') return undefined
+  const digits = Number(amount)
+  if (!Number.isFinite(digits)) return undefined
+  const currency = typeof wallet.currency === 'string' && wallet.currency !== '' ? wallet.currency : 'CNY'
+  return `${digits.toFixed(2)} ${currency}`
+}
+
+/** 按 (ctx, ref-name) 解析命中的 API Key。CredentialRef 是 `/^[A-Za-z_][A-Za-z0-9_]*$/` 品牌的字符串。 */
+async function apiKeyValue(ctx, name) {
+  const credentials = typeof ctx.get === 'function' ? ctx.get('credentials') : undefined
+  if (credentials === undefined || typeof credentials.resolve !== 'function') return undefined
+  try {
+    const hit = credentials.resolve(name)
+    const value = (await hit)?.value
+    return typeof value === 'string' && value !== '' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 用给定 key 直查官方 /user/balance，超时软失败。成功返回金额+币种，否则抛错。 */
+async function queryOfficialBalance(apiKey) {
+  const timeoutController = new AbortController()
+  const timeoutTimer = setTimeout(() => timeoutController.abort(), BALANCE_FETCH_TIMEOUT_MS)
+  timeoutTimer.unref?.()
+  let response
+  try {
+    response = await fetch(DEEPSEEK_BALANCE_URL, {
+      method: 'GET',
+      headers: { accept: 'application/json', authorization: `Bearer ${apiKey}` },
+      signal: timeoutController.signal,
+    })
+  } catch (error) {
+    if (timeoutController.signal.aborted) throw new Error('DeepSeek balance query timed out')
+    throw error
+  } finally {
+    clearTimeout(timeoutTimer)
+  }
+  if (!response.ok) {
+    throw new Error(`DeepSeek balance endpoint returned ${response.status}`)
+  }
+  const payload = await response.json()
+  const infos = Array.isArray(payload?.balance_infos) ? payload.balance_infos[0] : undefined
+  if (!infos || typeof infos !== 'object') throw new Error('DeepSeek balance response has no balance_infos')
+  const currency = typeof infos.currency === 'string' && infos.currency !== '' ? infos.currency : 'CNY'
+  if (infos.total_balance === undefined || infos.total_balance === null || infos.total_balance === '') {
+    throw new Error('DeepSeek balance response has no total_balance')
+  }
+  const digits = Number(infos.total_balance)
+  if (!Number.isFinite(digits)) throw new Error('DeepSeek balance response total_balance is not numeric')
+  return `${digits.toFixed(2)} ${currency}`
+}
+
+// 从宿主 `deepseekAccount` 服务读取平台登录态下的余额，返回 Row（展示串）或 undefined。
 
 // ── assets ──────────────────────────────────────────────────────────────────
 const assetCache = new Map()
@@ -536,6 +625,144 @@ const SHEET_CLOSE_HTML = `<script>
 })();
 </script>`
 
+// emoji 图标替换：bundle 里这些图标是纯文本节点，CSS 换不掉，只能运行时把命中的
+// emoji 换成同尺寸的行内描边 SVG。只精确匹配下表里的序列（含 FE0F 变体选择器），
+// ▾/▸ 折叠箭头和正文里的 emoji 都不会被碰到。用 splitText + replaceChild 做替换，
+// 绝不 innerHTML 重写整个节点（会毁掉 React 状态与事件）。
+const EMOJI_ICON_HTML = `<script>
+(function () {
+  try {
+    if (!document.body) return;
+    var NS = 'http://www.w3.org/2000/svg';
+    // 统一 24×24 viewBox / fill=none / stroke=currentColor / stroke-width 1.8 / 圆头圆角。
+    var ICONS = {
+      search: '<circle cx="11" cy="11" r="6.4"/><path d="M15.8 15.8 20 20"/>',
+      read: '<path d="M3 7.2A2.2 2.2 0 0 1 5.2 5h3.3l2 2.4H18.8A2.2 2.2 0 0 1 21 9.6v6.2A2.2 2.2 0 0 1 18.8 18H5.2A2.2 2.2 0 0 1 3 15.8z"/>',
+      gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3.6v2.3M12 18.1v2.3M4.7 7.9l2 1.1M17.3 15l2 1.1M4.7 16.1l2-1.1M17.3 8.9l2-1.1"/>',
+      pencil: '<path d="M4.6 19.4l1-4L16.7 4.3a2.1 2.1 0 0 1 3 3L8.6 18.4z"/><path d="M14.7 6.3l3 3"/>',
+      code: '<path d="M9 7.4 4.7 12 9 16.6"/><path d="M15 7.4 19.3 12 15 16.6"/><path d="M13.6 5.6 10 18.4"/>',
+      tool: '<path d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.8 7.8l-7 7a2.1 2.1 0 1 1-3-3l7-7a6 6 0 0 1 7.8-7.8l-3.8 3.8z"/>',
+      running: '<path d="M7.5 4h9"/><path d="M7.5 20h9"/><path d="M8.7 4 12 12l-3.3 8"/><path d="M15.3 4 12 12l3.3 8"/>',
+      failed: '<path d="M6.6 6.6 17.4 17.4"/><path d="M17.4 6.6 6.6 17.4"/>',
+      stopped: '<rect x="5.6" y="5.6" width="12.8" height="12.8" rx="2.4"/>',
+      done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
+      warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>'
+    };
+    // [emoji 序列, 图标 key]：只精确匹配这些序列，做模糊匹配会误伤正文。
+    var MAP = [
+      ['\\u{1F50D}', 'search'],
+      ['\\u{1F4C2}', 'read'],
+      ['\\u2699\\uFE0F', 'gear'],
+      ['\\u2699', 'gear'],
+      ['\\u270F\\uFE0F', 'pencil'],
+      ['\\u270F', 'pencil'],
+      ['\\u{1F4BB}', 'code'],
+      ['\\u{1F527}', 'tool'],
+      ['\\u23F3', 'running'],
+      ['\\u274C', 'failed'],
+      ['\\u23F9\\uFE0F', 'stopped'],
+      ['\\u23F9', 'stopped'],
+      ['\\u2705', 'done'],
+      ['\\u2714\\uFE0F', 'done'],
+      ['\\u2714', 'done'],
+      ['\\u26A0\\uFE0F', 'warning'],
+      ['\\u26A0', 'warning']
+    ];
+
+    function makeIcon(key) {
+      var svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('class', 'dm-icon dm-icon-' + key);
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '1.8');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.innerHTML = ICONS[key];
+      return svg;
+    }
+
+    // 单个文本节点：命中就切出该 emoji 换成 <svg>，剩余文本继续扫，直到没有命中。
+    function scanNode(node) {
+      var guard = 0;
+      while (node && node.parentNode && guard++ < 60) {
+        var text = node.nodeValue || '';
+        var seq = null;
+        var key = null;
+        var at = -1;
+        for (var i = 0; i < MAP.length; i++) {
+          var idx = text.indexOf(MAP[i][0]);
+          if (idx < 0) continue;
+          // 取最靠前的；同一位置取更长的序列（优先带 FE0F 的变体）。
+          if (at < 0 || idx < at || (idx === at && MAP[i][0].length > (seq ? seq.length : 0))) {
+            at = idx;
+            seq = MAP[i][0];
+            key = MAP[i][1];
+          }
+        }
+        if (!seq) {
+          node.dmIconDone = 1;
+          return;
+        }
+        var target = node;
+        if (at > 0) target = target.splitText(at);
+        var rest = target.splitText(seq.length);
+        target.parentNode.replaceChild(makeIcon(key), target);
+        node = rest;
+      }
+    }
+
+    function skip(node) {
+      var p = node.parentNode;
+      if (!p || !p.nodeName) return true;
+      var n = p.nodeName;
+      return n === 'SCRIPT' || n === 'STYLE' || n === 'NOSCRIPT' || n === 'TEXTAREA';
+    }
+
+    function walk(root) {
+      if (!root) return;
+      if (root.nodeType === 3) {
+        if (!root.dmIconDone && !skip(root)) scanNode(root);
+        return;
+      }
+      if (root.nodeType !== 1) return;
+      var tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      var n = tw.nextNode();
+      while (n) {
+        var next = tw.nextNode();
+        if (!n.dmIconDone && !skip(n)) scanNode(n);
+        n = next;
+      }
+    }
+
+    var queued = false;
+    function flush() {
+      queued = false;
+      try {
+        walk(document.body);
+      } catch (e) {}
+    }
+    function schedule() {
+      if (queued) return;
+      queued = true;
+      if (window.requestAnimationFrame) window.requestAnimationFrame(flush);
+      else window.setTimeout(flush, 0);
+    }
+
+    var mo = new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        // React 改写了文本：清掉标记，下次 flush 重新扫这个节点。
+        if (records[i].type === 'characterData' && records[i].target) records[i].target.dmIconDone = 0;
+      }
+      schedule();
+    });
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    schedule();
+  } catch (e) {}
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -559,6 +786,7 @@ function mobilePageHtml() {
     '<script type="module" src="/m/mobile.js"></script>',
     MODEL_BUTTON_HTML,
     SHEET_CLOSE_HTML,
+    EMOJI_ICON_HTML,
     '</body>',
     '</html>',
   ].join('')
@@ -819,6 +1047,207 @@ export function apply(ctx, config) {
     }
   }
 
+  // ── 待处理注册表：让手机接管 approval / ask_user_question 轮次 ──────────────
+  //
+  // 两个宿主应答点都是 Agent-scoped 的 waterfall：
+  //   'approval/request'        (ApprovalService.decide → ctx.waterfall)
+  //   'user-questions/request'  (UserQuestionService.ask → ctx.waterfall)
+  // 桌面 GUI 的应答者会 await 用户点击，只有在用户点了之后才 settle；我们用
+  // prepend:true 插到它前面，于是 waterfall 形状是
+  //   us(outer) → desktop(next) → inner fallback('unavailable' / NO_PROVIDER)
+  // 我们把 desktop 的 next() 与「手机应答」race：谁先到用谁，都没到就原样等桌面。
+  // 因此：手机不答 ⇒ 行为与未装本插件逐字相同，绝不自动批准、绝不挂死会话。
+  //
+  // rpcId 只存在内存里；进程重启会丢，届时条目自然过期。
+  const pending = {
+    approvals: new Map(), // rpcId -> entry（含 resolve）
+    questions: new Map(), // rpcId -> entry（含 resolve）
+    byApprovalId: new Map(), // approvalId -> rpcId（bundle 按 approvalId 应答）
+  }
+
+  function approvalView(entry) {
+    return {
+      rpcId: entry.rpcId,
+      approvalId: entry.approvalId,
+      toolName: entry.toolName,
+      ...(entry.callId === undefined ? {} : { callId: entry.callId }),
+      // 手机优先展示中文；没有中文就退回宿主的原始 reason。
+      ...(entry.reason === undefined ? {} : { reason: mobileReason(entry) }),
+    }
+  }
+
+  function mobileReason(entry) {
+    const candidates = [entry.displayReason?.zh, entry.displayReason?.en, entry.reason]
+    const picked = candidates.filter((v) => typeof v === 'string' && v.trim() !== '')
+    return picked[0] ?? entry.reason
+  }
+
+  // bundle 的提问 UI（yl）消费「拍平」数组：SSE 帧做的是
+  // `questions.map(item => ({ rpcId, ...item }))`，yl 内部再按最后一项的 rpcId 归组
+  //（同一个 rpcId = 同一批问题）。所以轮询必须返回同形状的拍平项：
+  // 同一批的每一项都要带上相同的 rpcId，不能返回 { rpcId, questions: [...] } 嵌套体。
+  function questionView(entry) {
+    const items = Array.isArray(entry.questions) ? entry.questions : []
+    return items.map((item) => ({
+      rpcId: entry.rpcId,
+      callId: entry.callId,
+      ...(item && typeof item === 'object' ? item : {}),
+    }))
+  }
+
+  /**
+   * 把一次审批登记进手机待处理表。
+   * @returns entry，或在拿不到 sessionId 时 undefined（此时宿主行为须完全不变）。
+   */
+  function registerApproval(req) {
+    const agent = req && req.agent
+    const sessionId = agent && agent.id
+    if (!sessionId) return undefined
+    const approvalId = randomBytes(12).toString('hex')
+    const rpcId = `${sessionId}${'\u0000'}ap${'\u0000'}${approvalId}`
+    const entry = {
+      rpcId,
+      sessionId,
+      approvalId,
+      toolName: req && typeof req.toolName === 'string' ? req.toolName : 'unknown',
+      ...(req && req.callId !== undefined ? { callId: req.callId } : {}),
+      ...(req && req.reason !== undefined ? { reason: req.reason } : {}),
+      ...(req && req.displayReason !== undefined ? { displayReason: req.displayReason } : {}),
+      expiresAt: Date.now() + PENDING_TTL_MS,
+      resolve: undefined,
+      wait: undefined,
+    }
+    entry.wait = new Promise((resolve) => {
+      entry.resolve = (value) => {
+        entry.resolve = () => {}
+        resolve(value)
+      }
+    })
+    // 抛错前的兜底：没人应答也不能让 unhandled rejection 炸掉进程。
+    entry.wait.catch(() => {})
+    pending.approvals.set(rpcId, entry)
+    pending.byApprovalId.set(approvalId, rpcId)
+    return entry
+  }
+
+  /** 同上，登记一次 ask_user_question 轮次。 */
+  function registerQuestion(req) {
+    const agent = req && req.agent
+    const sessionId = agent && agent.id
+    if (!sessionId) return undefined
+    const callId = req && req.wait && req.wait.callId !== undefined ? String(req.wait.callId) : ''
+    const rpcId = `${sessionId}${'\u0000'}q${'\u0000'}${callId}`
+    const existing = pending.questions.get(rpcId)
+    // 同一个 callId 重复提问（重连、重试）沿用已有条目，避免多条待处理卡互相挤掉。
+    if (existing !== undefined) return existing
+    const entry = {
+      rpcId,
+      sessionId,
+      callId,
+      questions: Array.isArray(req && req.questions) ? req.questions : [],
+      expiresAt: Date.now() + PENDING_TTL_MS,
+      resolve: undefined,
+      wait: undefined,
+    }
+    entry.wait = new Promise((resolve) => {
+      entry.resolve = (value) => {
+        entry.resolve = () => {}
+        resolve(value)
+      }
+    })
+    entry.wait.catch(() => {})
+    pending.questions.set(rpcId, entry)
+    return entry
+  }
+
+  function dropPending(map, key, indexKey, entry) {
+    map.delete(key)
+    if (indexKey !== undefined && pending.byApprovalId.get(indexKey) === key) pending.byApprovalId.delete(indexKey)
+    // 标记成永不超时：下一次 sweep 不会再重复处理同一条目。
+    entry.expiresAt = Number.POSITIVE_INFINITY
+  }
+
+  /**
+   * 桌面先答就用桌面的，手机先答就用手机的；谁都没答就交给 next() 一直等下去
+   * （桌面 UI 会等到用户点按钮为止，与没有本插件时完全一致）。
+   */
+  async function settleApproval(entry, next) {
+    const desktop = Promise.resolve()
+      .then(() => next())
+      .catch(() => undefined)
+    try {
+      const first = await Promise.race([desktop, entry.wait])
+      dropPending(pending.approvals, entry.rpcId, entry.approvalId, entry)
+      if (first !== undefined) {
+        // 手机抢到了：桌面 card 仍在等用户点按钮（或 delegate 后被丢弃），兜底防 unhandled。
+        desktop.catch(() => {})
+        return first
+      }
+      // 手机这条超时/过期：桌面那条还活着，原样等它。
+      return await desktop
+    } catch (error) {
+      dropPending(pending.approvals, entry.rpcId, entry.approvalId, entry)
+      throw error
+    }
+  }
+
+  /** 提问同上。 */
+  async function settleQuestionRace(entry, next) {
+    const desktop = Promise.resolve()
+      .then(() => next())
+      .catch(() => undefined)
+    try {
+      const first = await Promise.race([desktop, entry.wait])
+      dropPending(pending.questions, entry.rpcId, undefined, entry)
+      if (first !== undefined) {
+        // 手机抢到了：桌面 card 会随 claim 释放或用户离开回收，这里兜底防 unhandled。
+        desktop.catch(() => {})
+        return first
+      }
+      return await desktop
+    } catch (error) {
+      dropPending(pending.questions, entry.rpcId, undefined, entry)
+      throw error
+    }
+  }
+
+  /** waterfall 监听器：登记手机待处理项，并把 next() 与手机应答 race。 */
+  function claimApproval(req, next) {
+    try {
+      const entry = registerApproval(req)
+      if (entry === undefined) return next()
+      return settleApproval(entry, next)
+    } catch {
+      // 登记失败绝不能影响宿主审批链：原样交还桌面。
+      return next()
+    }
+  }
+
+  /** waterfall 监听器：提问同上。 */
+  function claimQuestion(req, next) {
+    try {
+      const entry = registerQuestion(req)
+      if (entry === undefined) return next()
+      return settleQuestionRace(entry, next)
+    } catch {
+      return next()
+    }
+  }
+
+  function purgePending(now = Date.now()) {
+    for (const [rpcId, entry] of [...pending.approvals]) {
+      if (entry.expiresAt > now) continue
+      // 放开手机那条等待链：desktop 分支依然活着，会话不会挂死。
+      dropPending(pending.approvals, rpcId, entry.approvalId, entry)
+      entry.resolve(undefined)
+    }
+    for (const [rpcId, entry] of [...pending.questions]) {
+      if (entry.expiresAt > now) continue
+      dropPending(pending.questions, rpcId, undefined, entry)
+      entry.resolve(undefined)
+    }
+  }
+
   async function dispatchRpc(method, payload) {
     const controller = sc()
     switch (method) {
@@ -935,7 +1364,20 @@ export function apply(ctx, config) {
         return { ok: true, value: { sessionIds: items.filter((it) => it.running).map((it) => it.sessionId) } }
       }
       case 'mobile.pending': {
-        return { ok: true, value: { approvals: [], questions: [] } }
+        purgePending()
+        const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
+        const approvals = []
+        const questions = []
+        for (const entry of pending.approvals.values()) {
+          if (sessionId !== '' && entry.sessionId !== sessionId) continue
+          approvals.push(approvalView(entry))
+        }
+        for (const entry of pending.questions.values()) {
+          if (sessionId !== '' && entry.sessionId !== sessionId) continue
+          // questionView 返回拍平后的数组（每项自带 rpcId），直接展开进 questions。
+          questions.push(...questionView(entry))
+        }
+        return { ok: true, value: { approvals, questions } }
       }
       // ── 设置页 ──
       case 'settings.read':
@@ -1119,7 +1561,50 @@ export function apply(ctx, config) {
         return { ok: false, error: { code: 'unavailable', message: '折叠会话读取不可用' } }
       }
       case 'mobile.respond': {
-        return { ok: true, value: { accepted: false, reason: 'not-pending' } }
+        // bundle 发的是 { rpcId, response: {...} }，dispatchRpc 拿到的是 envelope.payload，
+        // 所以 payload.response 就是那个 response；为稳妥起见两种形态都兼容。
+        const response = payload && typeof payload.response === 'object' && payload.response !== null ? payload.response : payload
+        const sessionId = typeof response.sessionId === 'string' ? response.sessionId : ''
+        // ── 形态 A：审批应答 ──
+        if (typeof response.approvalId === 'string' && response.approvalId !== '') {
+          const rpcId = pending.byApprovalId.get(response.approvalId)
+          const entry = rpcId === undefined ? undefined : pending.approvals.get(rpcId)
+          if (entry === undefined) {
+            return { ok: false, error: { code: 'not-pending', message: '该审批已不存在或已处理' } }
+          }
+          if (sessionId !== '' && entry.sessionId !== sessionId) {
+            return { ok: false, error: { code: 'session-mismatch', message: '会话不匹配' } }
+          }
+          const allowed = new Set(['allowed-once', 'rejected', 'cancelled'])
+          const outcome = response.outcome
+          if (typeof outcome !== 'string' || !allowed.has(outcome)) {
+            // 红线：不认识的结果一律拒绝，绝不隐式批准。
+            return { ok: false, error: { code: 'bad-request', message: `outcome 必须是 ${[...allowed].join(' / ')}` } }
+          }
+          dropPending(pending.approvals, rpcId, response.approvalId, entry)
+          entry.resolve(outcome)
+          return { ok: true, value: { accepted: true } }
+        }
+        // ── 形态 B：提问应答 ──
+        if (response.answer !== undefined && response.answer !== null) {
+          const answer = response.answer
+          if (!answer || typeof answer !== 'object' || !Array.isArray(answer.answers)) {
+            return { ok: false, error: { code: 'bad-request', message: 'answer 必须是 { answers: [...] }' } }
+          }
+          // bundle 用 rpcId 定位提问条目（relayQ 发送 { rpcId, response:{ sessionId, answer } }）。
+          const rpcId = typeof payload.rpcId === 'string' ? payload.rpcId : ''
+          const entry = rpcId === '' ? undefined : pending.questions.get(rpcId)
+          if (entry === undefined) {
+            return { ok: false, error: { code: 'not-pending', message: '该提问已不存在或已回答' } }
+          }
+          if (sessionId !== '' && entry.sessionId !== sessionId) {
+            return { ok: false, error: { code: 'session-mismatch', message: '会话不匹配' } }
+          }
+          dropPending(pending.questions, rpcId, undefined, entry)
+          entry.resolve(answer)
+          return { ok: true, value: { accepted: true } }
+        }
+        return { ok: false, error: { code: 'bad-request', message: '缺少 approvalId 或 answer' } }
       }
       // ── 诊断 ──
       case 'mobile.latestVersion': {
@@ -1311,6 +1796,44 @@ export function apply(ctx, config) {
       } catch {}
     }
   }, 'dsh-mobile: mobile listener')
+
+  // ── 手机待处理：审批 ────────────────────────────────────────────────────────
+  // prepend:true 把我们插到现有（桌面 GUI）应答者之前，于是 next 就是桌面应答者。
+  // claimApproval 把桌面 next() 与「手机应答」race 起来：谁先到用谁；两边都不动时
+  // 完全等同于没装本插件（桌面 card 一直等到用户点按钮）。
+  ctx.effect(() => {
+    const dispose = ctx.on('approval/request', claimApproval, { prepend: true })
+    return () => {
+      dispose?.()
+      for (const [, entry] of pending.approvals) {
+        entry.expiresAt = Number.POSITIVE_INFINITY
+        entry.resolve(undefined)
+      }
+      pending.approvals.clear()
+      pending.byApprovalId.clear()
+    }
+  }, 'dsh-mobile: approval pending registry')
+
+  // ── 手机待处理：提问 ────────────────────────────────────────────────────────
+  // 与审批同理：桌面 UI 的 card 会 await 用户点选项后才 next()，我们不抢占。
+  ctx.effect(() => {
+    const dispose = ctx.on('user-questions/request', claimQuestion, { prepend: true })
+    return () => {
+      dispose?.()
+      for (const [, entry] of pending.questions) {
+        entry.expiresAt = Number.POSITIVE_INFINITY
+        entry.resolve(undefined)
+      }
+      pending.questions.clear()
+    }
+  }, 'dsh-mobile: user-questions pending registry')
+
+  // ── 待处理项过期回收 ────────────────────────────────────────────────────────
+  ctx.effect(() => {
+    const timer = setInterval(purgePending, PENDING_SWEEP_MS)
+    timer.unref?.()
+    return () => clearInterval(timer)
+  }, 'dsh-mobile: pending sweep')
 
   // ── presence sweep ────────────────────────────────────────────────────────
   ctx.effect(() => {
