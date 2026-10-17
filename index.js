@@ -292,16 +292,50 @@ function assetText(name) {
 }
 
 // 输入框上方工具行：+ / 模型 / 上下文用量 图标；模型打开底部上滑抽屉。
+// 另：运行中且输入框有文字时，把「停止」按钮改成「发送」（排队发送）。
 const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="模型"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6M9 12h6M9 15h3"/></svg></button><script>
 (function () {
   var btn = document.getElementById('dm-model-btn');
   if (!btn) return;
+  var lastSessionId = '';
+
+  // 本页脚本先于 bundle 执行：拦截 RPC 请求，自动记住当前会话 id。
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body);
+          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
+            lastSessionId = body.payload.sessionId;
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, arguments);
+    };
+  }
 
   function toolsRow() { return document.querySelector('.chat-tools'); }
   function pill() { return document.querySelector('.chat-pill[aria-label^="切换模型"]'); }
   function sheetOpen() {
     var b = document.querySelector('.sheet-backdrop');
     return !!(b && b.getBoundingClientRect().width > 0);
+  }
+  function inputEl() { return document.querySelector('.chat-input'); }
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-' + Date.now(), payload: payload }),
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+  function currentSession() {
+    try {
+      var s = new URL(location.href).searchParams.get('session');
+      if (s) return s;
+    } catch (e) {}
+    return lastSessionId;
   }
 
   // 把「+」和模型按钮放进输入框上方的工具行（同一层，随页面出现）。
@@ -326,6 +360,9 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
       row.appendChild(btn);
     }
     if (row.parentNode !== t) t.insertBefore(row, t.firstChild);
+    // 上下文圆环也并入同一组图标，保持完全一致的外观与排列。
+    var ctx = document.querySelector('.chat-context');
+    if (ctx && ctx.parentNode !== row) row.appendChild(ctx);
   }
 
   btn.addEventListener('click', function (e) {
@@ -348,6 +385,41 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
       }
     }, 60);
   });
+
+  // 运行中：输入框有文字时，点「停止」按钮改为排队发送。
+  function queueSend(text) {
+    var sid = currentSession();
+    if (!sid) return;
+    rpc('session.prompt', {
+      sessionId: sid,
+      mode: 'queue',
+      content: [{ type: 'text', text: text }],
+    }).then(function (res) {
+      if (!res || !res.ok) return;
+      var ta = inputEl();
+      if (!ta) return;
+      try {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, '');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (e) {
+        ta.value = '';
+      }
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var stopBtn = t && t.closest ? t.closest('.chat-send-stop') : null;
+    if (!stopBtn) return;
+    var ta = inputEl();
+    if (!ta) return;
+    var text = (ta.value || '').trim();
+    if (text === '') return; // 空输入：保持停止
+    e.preventDefault();
+    e.stopPropagation();
+    queueSend(text);
+  }, true);
 
   setInterval(ensureTools, 120);
   ensureTools();

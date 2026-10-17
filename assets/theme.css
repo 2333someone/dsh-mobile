@@ -133,31 +133,38 @@
 #dm-model-btn:active {
   background: var(--bg-hover, rgba(127, 127, 127, 0.12));
 }
-/* 上下文用量：图标化 = 环形进度 + 环心百分比（颜色随占用：正常蓝 / ≥80% 红） */
+/* 上下文用量：与 + / 模型 完全同款的图标按钮（环心无数字） */
 .chat-context {
-  position: relative !important;
+  position: static !important;
   flex: none !important;
   width: 32px !important;
   height: 32px !important;
-  display: flex !important;
+  display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
+  border: none !important;
   border-left: none !important;
-  padding-left: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
   gap: 0 !important;
-  overflow: hidden !important;
-  /* 未加载时 bundle 会渲染裸文本「上下文 --」，用 0 字号藏掉；环与数字各自有字号 */
+  border-radius: 10px !important;
+  background: transparent !important;
+  overflow: visible !important;
+  /* 未加载时 bundle 会渲染裸文本「上下文 --」，用 0 字号藏掉 */
   font-size: 0 !important;
 }
+.chat-context:active {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12)) !important;
+}
 .chat-context .chat-context-ring {
-  width: 32px !important;
-  height: 32px !important;
+  width: 20px !important;
+  height: 20px !important;
 }
 .chat-context .chat-context-text {
   display: none !important;
 }
 
-/* 上下文详情：点击圆环后从底部上滑弹出（复用 bundle 的浮层，改成底部抽屉） */
+/* 上下文详情：与「+」的底部抽屉同款（背景/圆角/动画/位置/层级） */
 .chat-context-pop {
   position: fixed !important;
   left: 0 !important;
@@ -166,16 +173,21 @@
   top: auto !important;
   width: auto !important;
   min-width: 0 !important;
-  border-radius: 16px 16px 0 0 !important;
+  max-height: 50vh !important;
+  overflow-y: auto !important;
+  background: var(--bg-surface, #fff) !important;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06)) !important;
   border-bottom: none !important;
+  border-radius: var(--radius-sheet, 18px) var(--radius-sheet, 18px) 0 0 !important;
+  box-shadow: var(--shadow-lg, 0 -8px 30px rgba(0, 0, 0, 0.18)) !important;
   padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 16px) !important;
-  z-index: 61 !important;
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18) !important;
-  animation: sheet-up 0.26s ease-out both !important;
+  z-index: 75 !important;
+  animation: sheet-up 0.3s ease-out both !important;
 }
 .chat-context-pop-scrim {
-  background: rgba(15, 15, 25, 0.25) !important;
-  z-index: 60 !important;
+  background: var(--backdrop, rgba(15, 15, 25, 0.35)) !important;
+  z-index: 74 !important;
+  animation: sheet-fade 0.18s ease !important;
 }
 .chat-context-pop-title {
   font-size: 12px !important;
@@ -197,6 +209,24 @@
   min-height: 0 !important;
   max-height: none !important;
   overflow-y: auto !important;
+}
+
+/* ── 运行中且输入框有文字：停止按钮显示为「发送」外观 ─────────────── */
+.chat-inputbar:has(.chat-input:not(:placeholder-shown)) .chat-send-stop {
+  background: var(--accent, #4d6bfe) !important;
+  color: var(--accent-contrast, #fff) !important;
+  box-shadow: none !important;
+}
+.chat-inputbar:has(.chat-input:not(:placeholder-shown)) .chat-send-stop > svg {
+  display: none !important;
+}
+.chat-inputbar:has(.chat-input:not(:placeholder-shown)) .chat-send-stop::after {
+  content: "";
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3 4 11h5v10h6V11h5z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3 4 11h5v10h6V11h5z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 
