@@ -67,6 +67,101 @@ const DEFAULT_PAIR_CODE = '123456'
 const SMALL_BODY = 64 * 1024
 const PROMPT_BODY = 2 * 1024 * 1024
 
+// ── 权限预设中文化 ────────────────────────────────────────────────────────
+// 宿主 permissionPresets.catalog() 返回的 options 是原始英文。实测返回：
+//   { value: 'read-only',          name: 'read-only'          }
+//   { value: 'workspace-write',    name: 'workspace-write'    }
+//   { value: 'danger-full-access', name: 'danger-full-access' }
+//   { value: 'auto',               name: 'auto'               }
+// name 与 value 是同一个串，且不带 description。直接透传给手机端就全是英文，
+// 所以在这里统一换成中文。
+//
+// 两条硬规则：
+//  ① 只翻译展示用的 name / description，绝不碰 value —— value 是回传宿主
+//     pp.set(session, name) 的标识，改成中文会切不动甚至报错。
+//  ② 未命中的一律保留原文，绝不丢选项、绝不返回空白。
+//
+// 措辞对齐宿主自带 Web UI 的中文标签（仅可查看 / 工作区内修改 / 完全权限 /
+// 自动审查），手机端和桌面端看起来一致。
+const PERMISSION_LABELS = {
+  'read-only': '仅可查看',
+  'workspace-write': '工作区内修改',
+  'danger-full-access': '完全权限',
+  auto: '自动审查',
+  custom: '自定义',
+  // 宿主 UI 的英文标题式写法，某些版本会直接拿它当 name。
+  'Read Only': '仅可查看',
+  'Workspace Write': '工作区内修改',
+  'Full access': '完全权限',
+  'Auto review': '自动审查',
+  Custom: '自定义',
+}
+
+// 选项副标题。实测 catalog 目前不返回 description，这里按预设值补一句说明，
+// 让手机面板上有解释，而不是孤零零四个词。
+const PERMISSION_DESCS = {
+  'read-only': '只读，不会改动任何文件',
+  'workspace-write': '可在当前工作区内读写文件',
+  'danger-full-access': '放开全部权限，风险自负',
+  auto: '自动审查，按需授予',
+  custom: '自定义权限配置',
+}
+
+/** 取选项中文名：命中映射则用中文，否则原样返回，绝不返回空串。 */
+function permissionLabel(text) {
+  const key = typeof text === 'string' ? text.trim() : ''
+  if (key === '') return ''
+  const hit = PERMISSION_LABELS[key] || PERMISSION_LABELS[key.toLowerCase()]
+  return hit || key
+}
+
+/** 取选项中文说明：命中映射则用中文，取不到就返回空串（面板会跳过副标题）。 */
+function permissionDesc(value, description) {
+  const raw = typeof description === 'string' ? description.trim() : ''
+  if (raw !== '') return permissionLabel(raw)
+  const key = typeof value === 'string' ? value.trim() : ''
+  return (key && PERMISSION_DESCS[key]) || ''
+}
+
+// ── SSE events.mux 常量 ────────────────────────────────────────────────────
+// 手机 bundle 的 MuxClient 用 EventSource('/m/api/events.mux') 收帧，失败退化为轮询
+//（聊天 1.5s / 子代理 8s）。这里把它接成真正的 SSE，让消息与事件即时到达。
+// SSE 保活间隔：必须短于 bundle 的 stall 阈值（12s；活着时放宽到 36s），否则手机会
+// 判定 SSE 停滞并重启轮询。
+const SSE_HEARTBEAT_MS = 10000
+// 并发 SSE 订阅上限：一台设备重连风暴不能无限持有宿主流与心跳定时器。
+const MAX_SSE_SUBSCRIBERS = 8
+// 每台设备的 SSE mux 同时跟随的会话数上限（手机同时只看很少几个会话）。
+const MAX_FOLLOWED_PER_DEVICE = 4
+// follow 流异常后的重试退避。
+const FOLLOW_RETRY_MS = 3000
+// 每个被观察会话最多重服务商 N 次，之后放弃该会话（手机重开会重新登记）。
+const MAX_FOLLOW_RESTARTS = 5
+// 每个 SSE 连接的最大寿命上限：宿主不支持 reopen 时靠它回收资源。
+const SSE_MAX_LIFETIME_MS = 30 * 60 * 1000
+/**
+ * 每台设备都收的 mux 帧类型（不管它打开了哪个会话）：控制镜像、会话列表状态、
+ * 审批/提问面板 —— 都是不跟着当前聊天走的全局面。其余帧是会话作用域的，按设备路由
+ *（见 openMux 的 muxVisibleTo），手机不必为没打开的会话付隧道流量。
+ * 与 dsh-palm 的 MUX_ALWAYS_FORWARDED 同义。
+ */
+const MUX_ALWAYS_FORWARDED = new Set([
+  'session/subscribed',
+  'session/queue',
+  'session/jobs',
+  'session/projection',
+  'session/added',
+  'session/removed',
+  'session/status',
+  'session/activity',
+  'session/error',
+  'approval/requested',
+  'approval/resolved',
+  'question/requested',
+  'question/resolved',
+  'stream/error',
+])
+
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 function defaultDevicesFile() {
@@ -1723,6 +1818,8 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
       var row = el('button', 'dm-perm-row' + (on ? ' dm-perm-row-on' : ''));
       row.type = 'button';
       row.setAttribute('data-value', o.value);
+      // 记住中文名，切换成功后的提示要用它，而不是回显英文的 value。
+      row.setAttribute('data-label', o.name);
       var main = el('div', 'dm-perm-main');
       main.appendChild(el('div', 'dm-perm-name', esc(o.name)));
       if (o.description) main.appendChild(el('div', 'dm-perm-sub', esc(o.description)));
@@ -1760,8 +1857,17 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
     });
   }
 
+  // 按 value 找中文名，用于切换成功后的提示（不回显英文 value）。
+  function labelOf(opts, value) {
+    opts = Array.isArray(opts) ? opts : [];
+    for (var i = 0; i < opts.length; i++) {
+      if (opts[i] && opts[i].value === value && typeof opts[i].name === 'string') return opts[i].name;
+    }
+    return value;
+  }
+
   // 切换：成功后用 set 返回的视图直接重绘（宿主回读的真实生效值），不用前端猜。
-  function select(value) {
+  function select(value, fallbackLabel) {
     if (busy) return;
     busy = true;
     setStatus('切换中…');
@@ -1774,7 +1880,11 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
         return;
       }
       paint(res);
-      setStatus('已切换：' + value, 'ok');
+      // 提示用中文名：优先取服务端回读的视图，其次取点中那行的中文名。
+      var shown = (res.value && Array.isArray(res.value.options))
+        ? labelOf(res.value.options, (res.value.currentValue || value))
+        : '';
+      setStatus('已切换：' + (shown || fallbackLabel || value), 'ok');
     }).catch(function () {
       busy = false;
       if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
@@ -1791,7 +1901,7 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
     if (!v) return;
     e.preventDefault();
     if (row.classList.contains('dm-perm-row-on')) { closePanel(); return; }
-    select(v);
+    select(v, row.getAttribute('data-label') || '');
   });
 
   btn.addEventListener('click', function (e) {
@@ -2298,6 +2408,15 @@ export function apply(ctx, config) {
     entry.wait.catch(() => {})
     pending.approvals.set(rpcId, entry)
     pending.byApprovalId.set(approvalId, rpcId)
+    // 实时面：有 SSE 连着就立刻把卡片推下去，不等手机下一次轮询。
+    emitMux({
+      type: 'approval/requested',
+      sessionId,
+      approvalId,
+      toolName: typeof entry.toolName === 'string' ? entry.toolName : 'unknown',
+      ...(entry.callId === undefined ? {} : { callId: entry.callId }),
+      ...(entry.reason === undefined ? {} : { reason: mobileReason(entry) }),
+    }, rpcId)
     return entry
   }
 
@@ -2328,14 +2447,42 @@ export function apply(ctx, config) {
     })
     entry.wait.catch(() => {})
     pending.questions.set(rpcId, entry)
+    // 实时面：同上，提问卡片立即推送，不等轮询。
+    emitMux({
+      type: 'question/requested',
+      sessionId,
+      questions: entry.questions,
+    }, rpcId)
     return entry
   }
 
-  function dropPending(map, key, indexKey, entry) {
+  /**
+   * 把待处理项移出登记表。这是唯一的统一出口（race 抢答、超时回收、手机应答、
+   * 桌面抢答都会走到这里），所以「这轮结束了」的实时帧也在这里推：
+   * 有 SSE 连着就立刻把卡片收回，不等手机下次轮询发现它没了。
+   */
+  function dropPending(map, key, indexKey, entry, outcome) {
+    const wasPending = map.has(key)
     map.delete(key)
     if (indexKey !== undefined && pending.byApprovalId.get(indexKey) === key) pending.byApprovalId.delete(indexKey)
     // 标记成永不超时：下一次 sweep 不会再重复处理同一条目。
     entry.expiresAt = Number.POSITIVE_INFINITY
+    if (!wasPending || typeof entry.sessionId !== 'string') return
+    if (map === pending.approvals) {
+      emitMux({
+        type: 'approval/resolved',
+        sessionId: entry.sessionId,
+        approvalId: entry.approvalId,
+        outcome: typeof outcome === 'string' ? outcome : 'cancelled',
+      }, entry.rpcId)
+    } else {
+      emitMux({
+        type: 'question/resolved',
+        sessionId: entry.sessionId,
+        questionRpcId: entry.rpcId,
+        outcome: outcome === 'answered' ? 'answered' : 'cancelled',
+      }, entry.rpcId)
+    }
   }
 
   /**
@@ -2348,7 +2495,7 @@ export function apply(ctx, config) {
       .catch(() => undefined)
     try {
       const first = await Promise.race([desktop, entry.wait])
-      dropPending(pending.approvals, entry.rpcId, entry.approvalId, entry)
+      dropPending(pending.approvals, entry.rpcId, entry.approvalId, entry, typeof first === 'string' ? first : undefined)
       if (first !== undefined) {
         // 手机抢到了：桌面 card 仍在等用户点按钮（或 delegate 后被丢弃），兜底防 unhandled。
         desktop.catch(() => {})
@@ -2369,7 +2516,7 @@ export function apply(ctx, config) {
       .catch(() => undefined)
     try {
       const first = await Promise.race([desktop, entry.wait])
-      dropPending(pending.questions, entry.rpcId, undefined, entry)
+      dropPending(pending.questions, entry.rpcId, undefined, entry, first === undefined ? undefined : 'answered')
       if (first !== undefined) {
         // 手机抢到了：桌面 card 会随 claim 释放或用户离开回收，这里兜底防 unhandled。
         desktop.catch(() => {})
@@ -2461,10 +2608,13 @@ export function apply(ctx, config) {
           const value = typeof o.value === 'string' ? o.value : ''
           const name = typeof o.name === 'string' ? o.name : ''
           if (value === '' || name === '') return null
+          // 只翻译展示文案：value 原样保留（切权限时回传给宿主 pp.set 的标识），
+          // name 走中文映射，未命中则保留原文，绝不丢弃选项。
+          const desc = permissionDesc(value, typeof o.description === 'string' ? o.description : '')
           return {
             value,
-            name,
-            ...(typeof o.description === 'string' && o.description !== '' ? { description: o.description } : {}),
+            name: permissionLabel(name),
+            ...(desc !== '' ? { description: desc } : {}),
           }
         })
         .filter(Boolean)
@@ -2486,7 +2636,7 @@ export function apply(ctx, config) {
     return { options, currentValue, available: true, defaultPreset }
   }
 
-  async function dispatchRpc(method, payload) {
+  async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     switch (method) {
       case 'session.list': {
@@ -2744,8 +2894,9 @@ export function apply(ctx, config) {
           return {
             ok: false,
             error: {
+              // 提示里列出的是「中文名（英文值）」：既看得懂，又能照着确认真实标识。
               code: 'unknown-preset',
-              message: `未知权限预设「${name}」（可用：${view.options.map((o) => o.value).join(', ') || '无'}）`,
+              message: `未知权限预设「${name}」（可用：${view.options.map((o) => `${o.name}（${o.value}）`).join('、') || '无'}）`,
             },
           }
         }
@@ -2936,7 +3087,7 @@ export function apply(ctx, config) {
             // 红线：不认识的结果一律拒绝，绝不隐式批准。
             return { ok: false, error: { code: 'bad-request', message: `outcome 必须是 ${[...allowed].join(' / ')}` } }
           }
-          dropPending(pending.approvals, rpcId, response.approvalId, entry)
+          dropPending(pending.approvals, rpcId, response.approvalId, entry, outcome)
           entry.resolve(outcome)
           return { ok: true, value: { accepted: true } }
         }
@@ -2955,7 +3106,7 @@ export function apply(ctx, config) {
           if (sessionId !== '' && entry.sessionId !== sessionId) {
             return { ok: false, error: { code: 'session-mismatch', message: '会话不匹配' } }
           }
-          dropPending(pending.questions, rpcId, undefined, entry)
+          dropPending(pending.questions, rpcId, undefined, entry, 'answered')
           entry.resolve(answer)
           return { ok: true, value: { accepted: true } }
         }
@@ -3019,8 +3170,20 @@ export function apply(ctx, config) {
       }
       case 'mobile.error':
       case 'mobile.perf':
-      case 'mobile.diagnostics':
+      case 'mobile.diagnostics': {
+        return { ok: true, value: {} }
+      }
       case 'mobile.observe': {
+        // 手机不开 SSE 帧告诉我们它在看哪个会话（没有 handshake 帧），而是通过这条 RPC
+        // 每 30s 重申一次。它是 mux 订阅语义的全部来源：登记这条 exclusive recurring，
+        // openMux 的 syncTimer 就会为它起/停对应的 follow 流。
+        const deviceId = rpcContext && rpcContext.deviceId
+        if (typeof deviceId !== 'string') return { ok: true, value: {} }
+        const sessionId = payload && typeof payload.sessionId === 'string' && payload.sessionId !== ''
+          ? payload.sessionId
+          : undefined
+        if (sessionId === undefined) releaseDevice(deviceId)
+        else addObservation(deviceId, sessionId)
         return { ok: true, value: {} }
       }
       default:
@@ -3052,7 +3215,7 @@ export function apply(ctx, config) {
     }
     let result
     try {
-      result = await dispatchRpc(method, envelope.payload || {})
+      result = await dispatchRpc(method, envelope.payload || {}, { deviceId: device.deviceId })
     } catch (err) {
       const record = err && typeof err === 'object' ? err : {}
       result = {
@@ -3067,6 +3230,319 @@ export function apply(ctx, config) {
     sendJson(res, 200, { type: 'server-response', rpcId, result })
   }
 
+  // ── SSE: /m/api/events.mux ─────────────────────────────────────────────────
+  //
+  // 帧信封契约来自手机 bundle 的 Pn() 解析器：
+  //   { type:'server-request', rpcId:<string>, method:'events.mux', payload:<frame> }
+  // payload.type 必须落在 bundle 的 15 项集合里（否则整帧静默丢弃），且 session/event
+  // 的 payload.event 必须是对象。漏了外信封 = 手机静默丢弃 = 退回轮询，务必带上。
+  //
+  // 订阅语义（与 dsh-palm 一致）：**没有 handshake 帧**。手机从不用 mux 帧告诉我们它在
+  // 看哪个会话 —— dsh-palm 里也没有 session/subscribed 的生产者。它改用一条独立的
+  // `mobile.observe` RPC 每 30s 重申一次（bundle: `oe(e); setInterval(n, 3e4)`）。
+  // 所以宿主必须自己立一张「设备 → 会话」路由表，由它决定要 follow 哪些会话，
+  // 也决定 session/event 这类会话帧推给谁（省手机的移动流量）。
+  //
+  // 数据源，全部用宿主 0.2.1 的真实能力：
+  //   ① session/event   ← sessionController.follow({address}, signal)（按会话）
+  //   ② 会话列表五事件  ← ctx.on('api-session/*', …, {global:true})
+  //   ③ approval/提问   ← 复用现有 pending 注册表（登记推 requested，落定推 resolved）
+  // 后台任务 session/jobs：宿主没有非 RPC 的公开能力 → 不伪造，保持不推（bundle 会降级）。
+
+  /** deviceId → 该设备正在看的会话集合（生命周期 = SSE 连接）。 */
+  const observers = new Map()
+
+  function addObservation(deviceId, sessionId) {
+    let set = observers.get(deviceId)
+    if (set === undefined) {
+      set = new Set()
+      observers.set(deviceId, set)
+    }
+    if (set.has(sessionId)) return
+    // 手机上滑换会话：跟进数量必须有界，超了丢最老的一个。
+    if (set.size >= MAX_FOLLOWED_PER_DEVICE) {
+      const oldest = set.values().next().value
+      if (oldest !== undefined) set.delete(oldest)
+    }
+    set.add(sessionId)
+  }
+
+  function removeObservation(deviceId, sessionId) {
+    const set = observers.get(deviceId)
+    if (set === undefined) return
+    set.delete(sessionId)
+    if (set.size === 0) observers.delete(deviceId)
+  }
+
+  function observedSessions(deviceId) {
+    const set = observers.get(deviceId)
+    return set === undefined ? [] : [...set]
+  }
+
+  /** 设备断开（SSE 流结束）时释放它的登记。 */
+  function releaseDevice(deviceId) {
+    for (const sessionId of observedSessions(deviceId)) removeObservation(deviceId, sessionId)
+    observers.delete(deviceId)
+  }
+
+  /** SSE 是否推某帧给某设备：全局面总推，会话帧只推手机正在看的那个。 */
+  function muxVisibleTo(deviceId, frame) {
+    // 控制镜像 / 会话列表状态 / 审批 / 提问 / 错误 —— 手机上的全局面
+    //（任务条、名单、待处理面板），与 dsh-palm 的 MUX_ALWAYS_FORWARDED 同义。
+    if (MUX_ALWAYS_FORWARDED.has(frame.type)) return true
+    const sessionId = frame.sessionId
+    if (typeof sessionId !== 'string') return true
+    const set = observers.get(deviceId)
+    return set !== undefined && set.has(sessionId)
+  }
+
+  /** 所有存活的 SSE 连接（扇出目标）。 */
+  const muxStreams = new Set()
+
+  /** 向所有 SSE 连接推一帧。frame 必须是 bundle 认识的 mux 帧形。 */
+  function emitMux(frame, rpcId) {
+    let line
+    try {
+      const wire = {
+        type: 'server-request',
+        rpcId: rpcId || `mux-${randomBytes(8).toString('hex')}`,
+        method: 'events.mux',
+        payload: frame,
+      }
+      line = `data: ${JSON.stringify(wire)}\n\n`
+    } catch {
+      return // 不可序列化的帧宁可不推，也不能拖垮整条流
+    }
+    for (const stream of [...muxStreams]) stream.write(line, frame)
+  }
+
+  /**
+   * 子代理会话必须走 durable 父地址，否则宿主 validateAddress 会抛 session/agent-busy
+   *（本插件已有此经验）。认过父的直接用，没认过父先按普通地址走，撞错再认父重试。
+   */
+  function addressForSession(sessionId) {
+    const parent = subagentParent.get(sessionId)
+    if (parent !== undefined && parent !== sessionId) {
+      return { kind: 'subagent', parentSessionId: parent, childSessionId: sessionId, mode: 'unknown' }
+    }
+    return { kind: 'session', sessionId }
+  }
+
+  /** 开一个 SSE 连接。每次 GET /m/api/events.mux 一个。 */
+  function openMux(req, res) {
+    if ((req.method || 'GET').toUpperCase() !== 'GET') {
+      res.statusCode = 405
+      res.end()
+      return
+    }
+    // 鉴权：未配对设备拒绝（沿用 authenticatedDevice）。bundle 的 Fn() 把 403/401 判成
+    // unpaired 并走降级路径 —— 与今天 404 的降级结果一致，行为不改变。
+    const device = authenticatedDevice(req)
+    if (!device) {
+      req.resume()
+      sendJson(res, 403, { ok: false, error: { code: 'unpaired', message: 'mobile session is not paired' } })
+      return
+    }
+    // 并发上限：一次重连风暴不能无限持有宿主流与心跳定时器。EventSource 会自动重连。
+    if (muxStreams.size >= MAX_SSE_SUBSCRIBERS) {
+      sendJson(res, 429, { ok: false, error: { code: 'too-many-events', message: 'too many live streams' } })
+      return
+    }
+    const deviceId = device.deviceId
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      // Nginx 一类反代会缓冲 SSE：显式关掉。
+      'X-Accel-Buffering': 'no',
+    })
+    try {
+      if (res.socket && typeof res.socket.setNoDelay === 'function') res.socket.setNoDelay(true)
+    } catch {}
+    try {
+      if (typeof res.flushHeaders === 'function') res.flushHeaders()
+    } catch {}
+
+    const controller = new AbortController()
+    let heartbeat
+    let syncTimer
+    let lifetimeTimer
+
+    const stream = {
+      deviceId,
+      closed: false,
+      // 每会话已推过的最大 seq：follow 重启/重试会重放同一批事件，靠它去重。
+      seqWatermark: new Map(),
+      write(line, frame) {
+        if (this.closed) return
+        // 路由过滤：手机不看的会话，其事件不过隧道（省移动流量）。
+        if (!muxVisibleTo(this.deviceId, frame)) return
+        // 去重：session/event 按 (sessionId → maxSeq) 水位，只推严格递增的 seq。
+        if (frame.type === 'session/event' && frame.event && typeof frame.event.seq === 'number') {
+          const last = this.seqWatermark.get(frame.sessionId)
+          if (last !== undefined && frame.event.seq <= last) return
+          this.seqWatermark.set(frame.sessionId, frame.event.seq)
+        }
+        try {
+          res.write(line)
+        } catch {
+          closeStream()
+        }
+      },
+      close() {
+        closeStream()
+      },
+    }
+    muxStreams.add(stream)
+
+    function closeStream() {
+      if (stream.closed) return
+      stream.closed = true
+      muxStreams.delete(stream)
+      controller.abort()
+      if (heartbeat !== undefined) clearInterval(heartbeat)
+      if (syncTimer !== undefined) clearInterval(syncTimer)
+      if (lifetimeTimer !== undefined) clearTimeout(lifetimeTimer)
+      // SSE 流就是观察登记的生命周期：设备走了就不能还占着 follow。
+      releaseDevice(deviceId)
+      try {
+        res.end()
+      } catch {}
+    }
+    const onClose = () => closeStream()
+    // 关闭必须是幂等的：不论是从 socket 关闭、器纤卸载还是显式调用过来，都只走一次。
+    res.on('close', onClose)
+    req.on('close', onClose)
+    req.on('error', onClose)
+
+    /** 设备被桌面撤销/停用后立即断流，不等下次重连（与 dsh-palm 同）。 */
+    function deviceStillPaired() {
+      const found = devices.get(deviceId)
+      if (found === undefined) return false
+      for (const token of deviceTokensOf(req)) {
+        if (found.token === token) {
+          found.lastSeenAt = Date.now()
+          return true
+        }
+      }
+      return false
+    }
+
+    heartbeat = setInterval(() => {
+      if (stream.closed) return
+      if (!deviceStillPaired()) {
+        closeStream()
+        return
+      }
+      // 注释心跳：代理/浏览器不会因为空闲超时掐断长连接。必须短于 bundle 的 stall 阈值
+      //（活着 36s / 未活 12s，见 MuxClient.isSseStalled）。
+      try {
+        res.write(': ping\n\n')
+      } catch {
+        closeStream()
+      }
+    }, SSE_HEARTBEAT_MS)
+
+    // 开场快照：手机可能在待处理项出现的那一刻没有活着的流（后台/锁屏/隧道抖动/正在重连），
+    // 于是它从没收到过那条 approval/requested。这里在新流建立后立刻补发一份，
+    // 手机一连上就能看到仍在等它的卡片（客户端按 approvalId / rpcId 幂等）。
+    purgePending()
+    for (const entry of [...pending.approvals.values()]) {
+      if (typeof entry.sessionId !== 'string' || typeof entry.approvalId !== 'string') continue
+      emitMux({
+        type: 'approval/requested',
+        sessionId: entry.sessionId,
+        approvalId: entry.approvalId,
+        toolName: typeof entry.toolName === 'string' ? entry.toolName : 'unknown',
+        ...(entry.callId === undefined ? {} : { callId: entry.callId }),
+        ...(entry.reason === undefined ? {} : { reason: mobileReason(entry) }),
+      }, entry.rpcId)
+    }
+    for (const entry of [...pending.questions.values()]) {
+      if (typeof entry.sessionId !== 'string') continue
+      emitMux({
+        type: 'question/requested',
+        sessionId: entry.sessionId,
+        questions: Array.isArray(entry.questions) ? entry.questions : [],
+      }, entry.rpcId)
+    }
+
+    /** 这台设备正在 follow 的会话 → 它的循环任务。 */
+    const followTasks = new Map()
+
+    function startFollow(sessionId) {
+      if (stream.closed || followTasks.has(sessionId)) return
+      const task = (async () => {
+        let restarts = 0
+        let triedParentLookup = false
+        while (!stream.closed && !controller.signal.aborted && restarts <= MAX_FOLLOW_RESTARTS) {
+          try {
+            const frames = sc().follow({ address: addressForSession(sessionId) }, controller.signal)
+            for await (const f of frames) {
+              if (stream.closed || controller.signal.aborted) return
+              // 手机切走了这个会话：让这个任务自然退出。
+              if (observers.get(deviceId)?.has(sessionId) !== true) return
+              if (!f) continue
+              if (f.type === 'snapshot') {
+                // 快照里的 records 是已经存在的历史，不重推（聊天窗自己读过历史）。
+                // 只告诉手机「从 lastSeq 起之后的事件会实时到达」，bundle 据此刷新缓存。
+                if (typeof f.cursor === 'number') {
+                  emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
+                }
+                continue
+              }
+              if (f.type === 'event' && f.event) {
+                emitMux({ type: 'session/event', sessionId, event: f.event })
+              }
+            }
+            if (stream.closed || controller.signal.aborted) return
+            // 流自然结束（宿主重载 / 会话消失）：退避重试。
+            restarts += 1
+            await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
+          } catch {
+            if (stream.closed || controller.signal.aborted) return
+            // 没认过父的子代理会在这里撞上 session/agent-busy：认父后重试一次。
+            if (!triedParentLookup && !subagentParent.has(sessionId)) {
+              triedParentLookup = true
+              try {
+                const parent = await parentOfSubagent(sessionId, undefined)
+                if (parent !== undefined && parent !== sessionId) {
+                  subagentParent.set(sessionId, parent)
+                  continue
+                }
+              } catch {}
+            }
+            restarts += 1
+            await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
+          }
+        }
+      })()
+      task.catch(() => {})
+      followTasks.set(sessionId, task)
+      void task.finally(() => {
+        if (followTasks.get(sessionId) === task) followTasks.delete(sessionId)
+      })
+    }
+
+    // 把设备的观察集合同步到 follow 任务集合：设备切会话时自动起新任务。
+    // 停任务不需要打断宿主流 —— while 每轮自己会检查还在不在观察集里并退出。
+    syncTimer = setInterval(() => {
+      if (stream.closed) return
+      if (!deviceStillPaired()) {
+        closeStream()
+        return
+      }
+      const wanted = new Set(observedSessions(deviceId))
+      for (const sessionId of wanted) startFollow(sessionId)
+      for (const sessionId of [...followTasks.keys()]) {
+        if (!wanted.has(sessionId)) followTasks.delete(sessionId)
+      }
+    }, 2000)
+
+    // 连接寿命上限：超长挂机也回收一次（手机的 EventSource 会自动重连并重新 observe）。
+    lifetimeTimer = setTimeout(closeStream, SSE_MAX_LIFETIME_MS)
+  }
   // ── API dispatch ──────────────────────────────────────────────────────────
   async function handleApi(req, res, url) {
     const sub = url.pathname.slice(API_PREFIX.length)
@@ -3094,8 +3570,10 @@ export function apply(ctx, config) {
       return handleRpc(req, res, sub.slice(1))
     }
 
-    // SSE endpoints not implemented: answer 404 so the phone falls back to polling.
-    if (sub === '/events.mux' || sub === '/events.notify') {
+    // SSE：实时 mux 流。手机用它取代轮询；拿不到就退化为轮询（与 404 时同一结果）。
+    if (sub === '/events.mux') return openMux(req, res)
+    // events.notify 未实现：保持 404，bundle 会降级（通知走轮询/Web Push）。
+    if (sub === '/events.notify') {
       res.statusCode = 404
       res.end()
       return
@@ -3233,6 +3711,112 @@ export function apply(ctx, config) {
       pending.questions.clear()
     }
   }, 'dsh-mobile: user-questions pending registry')
+
+  // ── SSE 实时面：会话投影（session/projection）← sessionController.control() ───
+  //
+  // 宿主的 control 流就是 sessionProjections 的变更总线：一条 baseline + 之后的
+  // 变更帧（本版只产生 projection 一种，见 SessionControlController.broadcast）。
+  // 手机用它更新聊天页的权限开关（permissions）与上下文压力条（contextPressure）——
+  // 这两块原先只在拉取 session.history 时才会动。
+  // 只在有 SSE 连接时才 opened 流：没手机在线就不占这条宿主流。
+  ctx.effect(() => {
+    const controllerRef = new AbortController()
+    let disposed = false
+    const task = (async () => {
+      try {
+        // 等第一个手机连上再开，避免空闲时白挂一条宿主流。
+        while (!disposed && muxStreams.size === 0) {
+          await new Promise((r) => setTimeout(r, 1000))
+          if (controllerRef.signal.aborted) return
+        }
+        if (disposed || controllerRef.signal.aborted) return
+        const frames = sc().control(controllerRef.signal)
+        for await (const frame of frames) {
+          if (disposed || controllerRef.signal.aborted) return
+          if (!frame) continue
+          if (frame.type === 'baseline') {
+            // 开场基线：把所有会话的投影当前值一次性给出去。
+            const value = frame.value || {}
+            const projections = value.projections || {}
+            for (const [sessionId, block] of Object.entries(projections)) {
+              const values = (block && block.values) || {}
+              const asOfSeq = block && typeof block.asOfSeq === 'number' ? block.asOfSeq : 0
+              for (const [key, v] of Object.entries(values)) {
+                emitMux({ type: 'session/projection', sessionId, key, value: v, seq: asOfSeq })
+              }
+            }
+            continue
+          }
+          if (frame.type === 'projection') {
+            emitMux({
+              type: 'session/projection',
+              sessionId: frame.sessionId,
+              key: frame.key,
+              value: frame.value,
+              seq: typeof frame.seq === 'number' ? frame.seq : 0,
+            })
+          }
+        }
+      } catch {
+        // 流结束/中止：best-effort，下一次会把新值推下去。
+      }
+    })()
+    task.catch(() => {})
+    return () => {
+      disposed = true
+      controllerRef.abort()
+    }
+  }, 'dsh-mobile: sse control stream')
+
+  // ── SSE 实时面：会话列表的五个宿主事件 → 同名 mux 帧 ────────────────────────
+  //
+  // 桌面端 SessionController 自己消费的就是这五条总线事件
+  //（session-created / disposed / agent-status / api-session/activity / agent-error），
+  // 手机端的列表原先只能靠 session.list 拉取，于是桌面端新建/关闭会话、running 点、
+  // 活动时间排序都要等下次拉取才更新。这里一次性注册（不像 follow 那样按会话注册），
+  // 因为「会话变有趣」到「手机开始订阅」之间的空窗没有任何补偿路径。
+  //
+  // global:true —— Cordis 的 dispatch 默认只挑当前 Context 子树里的钩子，而宿主的
+  // SessionController 挂在根 Context 上；不设 global 就收不到任何一条。
+  // 注册失败（宿主版本变了/名字改了）只是「列表退回拉取驱动」，不影响其余功能。
+  ctx.effect(() => {
+    const disposers = []
+    try {
+      disposers.push(
+        ctx.on('api-session/added', (summary) => {
+          if (!summary || typeof summary !== 'object') return
+          emitMux({ type: 'session/added', summary })
+        }, { global: true }),
+        ctx.on('api-session/removed', (sessionId) => {
+          if (typeof sessionId !== 'string' || sessionId === '') return
+          emitMux({ type: 'session/removed', sessionId })
+          // 会话没了：所有设备都不该再观察它。
+          for (const deviceId of [...observers.keys()]) removeObservation(deviceId, sessionId)
+          for (const stream of muxStreams) stream.seqWatermark.delete(sessionId)
+        }, { global: true }),
+        ctx.on('api-session/status', (sessionId, running) => {
+          if (typeof sessionId !== 'string' || sessionId === '') return
+          if (typeof running !== 'boolean') return
+          emitMux({ type: 'session/status', sessionId, running })
+        }, { global: true }),
+        ctx.on('api-session/activity', (sessionId, updatedAt) => {
+          if (typeof sessionId !== 'string' || sessionId === '') return
+          if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return
+          emitMux({ type: 'session/activity', sessionId, updatedAt })
+        }, { global: true }),
+        ctx.on('api-session/error', (sessionId, message) => {
+          if (typeof sessionId !== 'string' || sessionId === '') return
+          if (typeof message !== 'string') return
+          emitMux({ type: 'session/error', sessionId, message })
+        }, { global: true }),
+      )
+    } catch {
+      // 总线不可用：列表退回拉取驱动，功能不坏。
+    }
+    return () => {
+      for (const dispose of disposers) dispose?.()
+    }
+  }, 'dsh-mobile: sse session list')
 
   // ── 待处理项过期回收 ────────────────────────────────────────────────────────
   ctx.effect(() => {
