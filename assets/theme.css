@@ -27,8 +27,8 @@
     竖排不再用 writing-mode（它会把数字整体旋转 90°，且改不了 "/" 的字形），
     改用 flex 纵向堆叠：bundle 渲染为 [当前轮 bn, "/", 总轮 hn] 三个文本节点，
     连续文本在 flex 容器里各自成为匿名 item，于是「当前」在上、「总数」在下，
-    数字保持正立；中间的 "/" 由注入脚本（index.js：TURN_PILL_HTML）清空文本
-    并换成 <span class="dm-turn-sep"> 画出的短横线。
+    数字保持正立；中间的 "/" 被注入脚本（index.js：TURN_PILL_HTML）搬进一个
+    隐藏的 span，换成 <span class="dm-turn-sep"> 画出的短横线。
 
     刮擦手势已被注入脚本关掉，touch-action:none 不再必要（它还会吞掉页面滚动）。 */
 .chat-jump-turns {
@@ -63,10 +63,15 @@
   opacity: 0.55;
 }
 /* 两个数字由注入脚本分别包起来，便于以后单独微调字号／颜色。 */
+/* 注入脚本把 "/" 文本节点搬进这个 span 后隐藏它：不能删掉该节点，否则 React
+   以后更新数字时会写到一个已脱离文档的文本节点上，数字就再也不变了。 */
 .dm-turn-cur,
 .dm-turn-total {
   display: block;
   font-variant-numeric: tabular-nums;
+}
+.dm-turn-slash {
+  display: none !important;
 }
 /* 刮擦高亮（.chat-jump-turns-live）：注入脚本已拦掉 pointer 手势，bundle 不会
    再加这个类；规则保留只是以防万一，语义沿用 accent 描边与字色。 */
