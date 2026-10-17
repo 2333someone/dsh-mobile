@@ -799,18 +799,6 @@ const EMOJI_ICON_HTML = `<script>
 </script>`
 
 // 轮次药丸（.chat-jump-turns）改造：
-//  1) 把 label 里的 "/" 文本节点换成一条短横线（.dm-turn-sep），两个数字分别
-//     包进 .dm-turn-cur / .dm-turn-total —— 配合 theme.css 的 flex 纵向堆叠，
-//     读起来就是「当前在上、横线、总数在下」。
-//  2) 关掉长按刮擦：在捕获阶段吞掉该按钮的 pointerdown/move/up/cancel/
-//     lostpointercapture，bundle 的 wr/Tr/Er/Dr 完全收不到事件。
-//     但打开清单的 setState（dn）在模块闭包里，脚本调不到；而 bundle 的
-//     onClick 只在 e.detail===0（键盘）时才 dn(!0)。于是「点击」改为：
-//     给按钮打上 data-dm-bypass 让拦截器放行一轮，再派发一对合成的
-//     pointerdown/pointerup（同一坐标 = 未移动），Er 就会走 !t.moved 分支
-//     调 dn(!0) 打开轮次清单。全程 try/catch，失败只退化为「点不开」，
-//     不会报错、也不会恢复刮擦。
-// 轮次药丸（.chat-jump-turns）改造：
 //  1) 中间分隔线：把 label 里的 "/" 文本换成一条短横线（.dm-turn-sep），
 //     两个数字分别包进 .dm-turn-cur / .dm-turn-total —— 配合 theme.css 的
 //     flex 纵向堆叠，读起来就是「当前在上、横线、总数在下」。
@@ -844,12 +832,14 @@ const TURN_PILL_HTML = `<script>
   // 节点，数字就再也不变了。
   function decorate(label) {
     if (!label) return false;
-    if (label.querySelector('.' + SEP)) return true; // 幂等
     var texts = [];
     for (var i = 0; i < label.childNodes.length; i++) {
       if (label.childNodes[i].nodeType === 3) texts.push(label.childNodes[i]);
     }
-    if (texts.length < 3) return false; // 结构不是 [cur, "/", total]：不动
+    // 已处理过，且 React 没有往 label 下再挂新的裸文本节点：保持原样（幂等）。
+    // 若 React 重建了子节点（换会话等），下面会重新包裹一次。
+    if (label.querySelector('.' + SEP) && texts.length === 0) return true;
+    if (texts.length < 3 && !label.querySelector('.' + SEP)) return false;
 
     var curSpan = document.createElement('span');
     curSpan.className = 'dm-turn-cur';
