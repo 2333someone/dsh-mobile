@@ -573,10 +573,22 @@ const VIEWPORT_VH_HTML = `<script>
 
   function measure() {
     var vv = window.visualViewport;
-    // visualViewport.height 是**当前可见**高度（已扣掉地址栏/键盘）；
-    // 老 WebView 没有 visualViewport 时退回 innerHeight —— 后者在老 WebView
-    // 里也等于可见高度（100vh 之所以偏大，是因为它取的是大视口）。
-    var h = vv && typeof vv.height === 'number' && vv.height > 0 ? vv.height : window.innerHeight;
+    var h;
+    if (vv && typeof vv.height === 'number' && vv.height > 0) {
+      // visualViewport.height = **当前可见**高度（已扣掉地址栏/键盘），单位是
+      // CSS px。双指放大时它会变小（scale=2 → 只看得到一半的 CSS px），
+      // 乘回 scale 还原成「布局视口坐标系」下的可见高度，避免缩放把应用缩小。
+      var s = typeof vv.scale === 'number' && vv.scale > 0 ? vv.scale : 1;
+      h = vv.height * s;
+    } else {
+      // 老 WebView 没有 visualViewport：innerHeight 就是可见高度
+      // （100vh 之所以偏大，是因为它取的是大视口）。
+      h = window.innerHeight;
+    }
+    // 上限兜底：永远不超过布局视口高度。万一上面算出偏大的值，也不会把文档
+    // 撑出滚动条 —— 这是「兜底的兜底」，正常情况下不生效。
+    var cap = document.documentElement.clientHeight;
+    if (typeof cap === 'number' && cap > 0 && h > cap) h = cap;
     return Math.round(h);
   }
 
