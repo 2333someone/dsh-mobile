@@ -196,7 +196,8 @@
 }
 .chat-context-pop-scrim {
   background: var(--backdrop, rgba(15, 15, 25, 0.35)) !important;
-  z-index: 74 !important;
+  /* 低于工具行(.chat-tools z=50)，否则遮罩会盖住抽屉本身 */
+  z-index: 45 !important;
   animation: sheet-fade 0.18s ease !important;
 }
 .chat-context-pop-title {
