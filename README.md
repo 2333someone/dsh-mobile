@@ -11,6 +11,7 @@
 - **RPC 协议**：`POST /m/api/<method>`（`{rpcId, payload}` → `{type:'server-response', rpcId, result}`），已实现 `session.list/history/prompt/create/models/selectModel/rename/cancel/updateQueue/search` 与 `workspace.list/create/rename/delete/archiveSession`。
 - **双 HTTP 面**：GUI 的 webServer（回环，供设置面板）+ 独立监听 `0.0.0.0:19387`（手机/局域网/公网反代）。
 - **设置页面板**：dsh 设置 →「掌上 dsh」：访问地址、生成配对码、设备撤销。
+- **弹窗关闭过渡**：输入框上方「+ / 模型 / 上下文」三个按钮打开的底部抽屉，点空白处收起时自上而下缩回（280ms，遵循 `prefers-reduced-motion`），不再瞬间消失。
 
 ## 安装
 
@@ -42,6 +43,11 @@
 - **实时推送未接**：`/m/api/events.mux` / `events.notify` 返回 404，手机端退回轮询（原版 README 所述 fallback）；消息不丢，但不如原版即时。
 - **审批/提问应答未接**：`respond` 方法未实现，手机端无法替 agent 确认工具调用/回答 ask_user_question；这类轮次需在桌面处理。
 - 手机端设备管理页（`pair.devices` 等本地方法）未接，设备管理请在桌面设置页操作。
+
+## 开发提示
+
+- `assets/theme.css` 每次请求实时读盘：改完刷新手机页面即生效，无需重启 dsh。
+- 宿主端 `index.js` 由 dsh 进程加载，保存后不会自动重载。未开 HMR 目录监听时，可临时在 `~/.dsh/profiles/desktop/cordis.patch.yml` 末尾加一行注释，触发 profile reconcile 自动重载插件（随后还原注释即可），或重启一次 dsh。
 
 ## License
 

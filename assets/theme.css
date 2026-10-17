@@ -248,8 +248,8 @@
 
 /* ── 关闭过渡：点空白处收起时，抽屉从上往下缩回（而不是瞬间消失） ──
    打开是 sheet-up（自下而上滑入），关闭走对称的反向：顶边向下收，
-   整体滑回底部并淡出。JS（index.js 注入）先拦截遮罩点击、加上
-   .dm-closing 播放动画，动画结束后再真正触发关闭。 */
+   整体滑回底部；遮罩稍后再淡出。JS（index.js 注入）先拦截遮罩点击、
+   加上 .dm-closing 播放动画，动画结束后再真正触发关闭。 */
 @keyframes dm-sheet-down {
   to {
     transform: translateY(110%);
@@ -268,7 +268,7 @@
   pointer-events: none !important;
 }
 .sheet-backdrop.dm-closing {
-  animation: dm-backdrop-out 0.28s ease both !important;
+  animation: dm-backdrop-out 0.18s ease 0.1s both !important;
 }
 /* 上下文用量在 theme.css 里被改造成同款底部抽屉，关闭走同一套动画 */
 .chat-context-pop.dm-closing {
@@ -279,13 +279,15 @@
 .chat-context-pop-scrim.dm-closing {
   /* 原背景是 !important，动画改不动它；收起时把底色交给伪元素淡出。 */
   background: transparent !important;
+  /* 收起动画期间盖住工具行，吞掉误触（视觉上仍是透明的） */
+  z-index: 90 !important;
 }
 .chat-context-pop-scrim.dm-closing::after {
   content: "";
   position: absolute;
   inset: 0;
   background: var(--backdrop, rgba(15, 15, 25, 0.35));
-  animation: dm-backdrop-out-fade 0.28s ease both;
+  animation: dm-backdrop-out-fade 0.18s ease 0.1s both;
 }
 @keyframes dm-backdrop-out-fade {
   to {

@@ -519,10 +519,12 @@ const SHEET_CLOSE_HTML = `<script>
         ring.removeAttribute('data-dm-bypass');
         return;
       }
-      if (!document.querySelector('.chat-context-pop')) return;
+      var pop = document.querySelector('.chat-context-pop');
+      if (!pop) return;
       event.preventDefault();
       event.stopPropagation();
-      if (playing(ring)) return;
+      // 已经有一段收起动画在跑：这次点击直接吞掉，避免重复计时器。
+      if (playing(ring) || playing(pop)) return;
       ring.setAttribute('data-dm-closing', '1');
       animateContext(function () {
         ring.removeAttribute('data-dm-closing');
@@ -854,8 +856,17 @@ export function apply(ctx, config) {
       case 'session.models': {
         const catalog = await controller.modelCatalog()
         const hidden = new Set((Array.isArray(cfg.hiddenModels) ? cfg.hiddenModels : []).map(String))
+        // 手机端不展示模型英文简介：bundle 会在模型名下方渲染 description。
         const groups = (catalog.groups || [])
-          .map((g) => ({ ...g, models: (g.models || []).filter((m) => !hidden.has(m.id)) }))
+          .map((g) => ({
+            ...g,
+            models: (g.models || [])
+              .filter((m) => !hidden.has(m.id))
+              .map((m) => {
+                const { description, ...model } = m
+                return model
+              }),
+          }))
           .filter((g) => g.models.length > 0)
         return {
           ok: true,
