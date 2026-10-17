@@ -54,6 +54,8 @@ const ICON_512_URL = '/m/icon-512.png'
 const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
 // 思考中（💭）位置显示的鲸鱼尾 APNG，与桌面 DSH 同一张图；APNG 自带循环播放。
 const WHALE_URL = '/m/whale.png'
+// 浏览器推送能力自检页（只读诊断，不配对/不写设备/不订阅）。
+const PUSH_CHECK_URL = '/m/push-check'
 const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
@@ -1995,6 +1997,296 @@ function mobilePageHtml() {
   ].join('')
 }
 
+/**
+ * 浏览器推送能力自检页（只读）。
+ *
+ * 用途：确认用户的手机浏览器（这里是鸿蒙上的夸克浏览器）到底支不支持 Web Push。
+ * Web Push 的硬性前置条件有三条，缺一不可：
+ *   ① 安全上下文（HTTPS，或 localhost）——http 下 isSecureContext 为 false；
+ *   ② Service Worker 可用且能注册成功；
+ *   ③ PushManager 存在。
+ * 只要有一条不满足，浏览器通知就做不成。页面把所有条件逐项摊开显示，
+ * 并如实暴露「/m/service-worker.js 目前 404」这类事实。
+ *
+ * 本页严格只读：不配对、不写设备表、不调用 pushManager.subscribe()。
+ */
+function pushCheckPageHtml() {
+  const pageJs = `
+(function () {
+  var $ = function (id) { return document.getElementById(id) }
+
+  function mark(el, state) {
+    // state: 'ok' | 'no' | 'warn'
+    el.classList.remove('pc-ok', 'pc-no', 'pc-warn')
+    el.classList.add('pc-' + state)
+  }
+
+  function icon(state) {
+    return state === 'ok' ? '✅' : state === 'no' ? '❌' : '⚠️'
+  }
+
+  function setRow(id, state, valueText) {
+    var row = $(id)
+    if (!row) return
+    var cell = row.querySelector('.pc-icon')
+    var val = row.querySelector('.pc-value')
+    if (cell) { cell.textContent = icon(state); mark(cell, state) }
+    if (val) {
+      val.textContent = valueText
+      val.classList.remove('pc-ok', 'pc-no', 'pc-warn')
+      val.classList.add('pc-' + state)
+    }
+  }
+
+  function addNote(id, text) {
+    var row = $(id)
+    if (!row) return
+    var p = document.createElement('p')
+    p.className = 'pc-note'
+    p.textContent = text
+    row.appendChild(p)
+  }
+
+  var results = {}
+
+  // ── 1. 安全上下文 ────────────────────────────────────────────────────
+  var secure = window.isSecureContext === true
+  results.secure = secure
+  setRow('row-secure', secure ? 'ok' : 'no', secure ? 'true（安全上下文）' : 'false（非安全上下文）')
+  if (!secure) {
+    addNote('row-secure', '这是协议硬性要求：非 HTTPS（且非 localhost）时浏览器根本不暴露 Push API，Web Push 必定不可用。请改用 https 地址打开本页。')
+  }
+
+  // ── 2. 访问协议 / 地址 ───────────────────────────────────────────────
+  setRow('row-proto',
+    location.protocol === 'https:' ? 'ok' : 'no',
+    location.protocol.replace(':', '').toUpperCase())
+  $('pc-origin').textContent = location.origin || location.href
+
+  // ── 3. Service Worker ────────────────────────────────────────────────
+  var hasSw = 'serviceWorker' in navigator
+  results.sw = hasSw
+  setRow('row-sw', hasSw ? 'ok' : 'no', hasSw ? '存在（navigator.serviceWorker）' : '不存在')
+
+  // ── 4. PushManager ───────────────────────────────────────────────────
+  var hasPush = 'PushManager' in window
+  results.push = hasPush
+  setRow('row-push', hasPush ? 'ok' : 'no', hasPush ? '存在（window.PushManager）' : '不存在')
+
+  // ── 5. Notification API ──────────────────────────────────────────────
+  var hasNotif = 'Notification' in window
+  results.notif = hasNotif
+  setRow('row-notif', hasNotif ? 'ok' : 'no', hasNotif ? '存在（window.Notification）' : '不存在')
+
+  // ── 6. 通知权限 ──────────────────────────────────────────────────────
+  var perm = hasNotif ? Notification.permission : 'unsupported'
+  results.perm = perm
+  var permState = perm === 'granted' ? 'ok' : perm === 'denied' ? 'no' : 'warn'
+  var permText = { granted: 'granted（已授权）', denied: 'denied（已被拒绝）', default: 'default（尚未询问）', unsupported: '不支持（无 Notification API）' }[perm] || String(perm)
+  setRow('row-perm', permState, permText)
+  if (perm === 'denied') {
+    addNote('row-perm', '权限已被拒绝：浏览器不会再弹窗，需要到浏览器「网站设置 → 通知」里手动改回允许。')
+  }
+
+  // ── 9. User-Agent ────────────────────────────────────────────────────
+  var ua = navigator.userAgent || '（无法读取）'
+  $('pc-ua').textContent = ua
+  var isQuark = /Quark/i.test(ua)
+  var chromeVer = /Chrome\\/([0-9]+)/.exec(ua)
+  setRow('row-ua', 'warn', ua)
+  addNote('row-ua',
+    (isQuark ? '识别为夸克浏览器（Quark）。' : '未识别到 Quark 字样——请确认是不是在用夸克打开。') +
+    (chromeVer ? '内核 Chrome ' + chromeVer[1] + '。' : '未识别到 Chrome 版本号。'))
+
+  // ── 7. 请求权限（按钮，用户主动触发） ────────────────────────────────
+  var permBtn = $('pc-perm-btn')
+  permBtn.addEventListener('click', function () {
+    if (!hasNotif) {
+      $('pc-perm-result').textContent = '❌ 浏览器没有 Notification API，无法请求权限。'
+      return
+    }
+    $('pc-perm-result').textContent = '⏳ 正在请求…'
+    var done = function (p) {
+      var st = p === 'granted' ? 'ok' : p === 'denied' ? 'no' : 'warn'
+      setRow('row-perm', st, '请求后：' + p)
+      $('pc-perm-result').textContent = p === 'granted'
+        ? '✅ 授权成功（' + p + '）'
+        : p === 'denied'
+          ? '❌ 被拒绝（' + p + '）：需到浏览器网站设置里手动允许。'
+          : '⚠️ 未作出选择（' + p + '）'
+      render()
+    }
+    try {
+      // 兼容两种签名：新浏览器返回 Promise，老的用回调。
+      var r = Notification.requestPermission(function (p) { done(p) })
+      if (r && typeof r.then === 'function') r.then(done, function () { done(Notification.permission) })
+    } catch (e) {
+      $('pc-perm-result').textContent = '❌ 请求权限抛出异常：' + ((e && e.message) || e)
+    }
+  })
+
+  // ── 8. SW 注册 + 订阅可用性 ──────────────────────────────────────────
+  var swDone = false
+  var subDone = false
+
+  function runSw() {
+    if (!hasSw) {
+      setRow('row-swreg', 'no', '跳过：无 Service Worker API')
+      setRow('row-sub', 'no', '跳过：Service Worker 不可注册')
+      return Promise.resolve()
+    }
+    setRow('row-swreg', 'warn', '正在注册 /m/service-worker.js …')
+    // scope '/m/' 与 bundle 注册时用的完全一致。
+    return navigator.serviceWorker.register('/m/service-worker.js', { scope: '/m/' })
+      .then(function (reg) {
+        swDone = true
+        setRow('row-swreg', 'ok', '注册成功（scope ' + reg.scope + '）')
+        addNote('row-swreg', '注册成功说明浏览器支持 Service Worker。')
+        return checkSub(reg)
+      })
+      .catch(function (err) {
+        var msg = (err && err.message) || String(err)
+        setRow('row-swreg', 'no', '注册失败：' + msg)
+        addNote('row-swreg', '注册失败最常见的两个原因：① 非安全上下文（http 打开）；② /m/service-worker.js 这个地址返回了非 200/非 JS（当前插件还没给它配路由，所以会 404）。')
+        setRow('row-sub', 'no', '跳过：Service Worker 注册失败')
+        subDone = true
+      })
+  }
+
+  function checkSub(reg) {
+    if (!hasPush) {
+      setRow('row-sub', 'no', '不可用：无 PushManager')
+      subDone = true
+      return Promise.resolve()
+    }
+    setRow('row-sub', 'warn', '正在读取已有订阅…')
+    // 只读：getSubscription() 不会创建新订阅、不会触发任何推送。
+    return reg.pushManager.getSubscription().then(function (sub) {
+      if (sub) {
+        setRow('row-sub', 'ok', '存在已有订阅（endpoint 可解析）')
+        addNote('row-sub', '浏览器允许读取订阅对象，说明 PushManager 基本可用。真正的可用性还要看能否成功 subscribe()，本页不会去订阅。')
+      } else {
+        setRow('row-sub', 'warn', '暂无订阅，但 pushManager 可访问（未实际订阅）')
+        addNote('row-sub', '能读到 pushManager 说明 API 存在。是否真能订阅成功、以及鸿蒙无 GMS 时能否收到 FCM 推送，仍需实测。')
+      }
+      subDone = true
+    }).catch(function (err) {
+      setRow('row-sub', 'no', '读取订阅失败：' + ((err && err.message) || err))
+      subDone = true
+    })
+  }
+
+  // ── 总结论 ───────────────────────────────────────────────────────────
+  function render() {
+    var box = $('pc-verdict')
+    var title = $('pc-verdict-title')
+    var desc = $('pc-verdict-desc')
+    var ok = results.secure && results.sw && results.push && results.notif
+    var missing = []
+    if (!results.secure) missing.push('安全上下文（HTTPS）')
+    if (!results.sw) missing.push('Service Worker')
+    if (!results.push) missing.push('PushManager')
+    if (!results.notif) missing.push('Notification API')
+
+    box.classList.remove('pc-v-ok', 'pc-v-no', 'pc-v-warn')
+    if (missing.length > 0) {
+      box.classList.add('pc-v-no')
+      title.textContent = '❌ 结论：Web Push 不可用'
+      desc.textContent = '缺失：' + missing.join('、') + '。浏览器通知这条路走不通，需要改用第三方渠道（如 Bark / WxPusher）。'
+      return
+    }
+    if (swDone && subDone) {
+      box.classList.add('pc-v-ok')
+      title.textContent = '✅ 结论：前置条件都满足'
+      desc.textContent = 'HTTPS + Service Worker + PushManager 三者齐备。请注意：这只能说明浏览器「可能」支持，鸿蒙无 GMS 时真正的 FCM 推送仍可能收不到，需要一次真实订阅+发送测试才能确认。'
+      return
+    }
+    box.classList.add('pc-v-warn')
+    title.textContent = '⚠️ 结论：API 存在，但 Service Worker 尚未验证成功'
+    desc.textContent = '浏览器有 PushManager，但 SW 注册/订阅读取还没成功完成（见上面两项）。在 SW 真正注册成功之前，Web Push 无法工作。'
+  }
+
+  render()
+  runSw().then(function () { render() })
+
+  // 重新检测：整页刷新最干净（SW 注册状态不会被残留状态干扰）。
+  $('pc-reload').addEventListener('click', function () { location.reload() })
+})();
+`
+
+  return [
+    '<!doctype html>',
+    '<html lang="zh-CN">',
+    '<head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">',
+    '<meta name="referrer" content="no-referrer">',
+    '<meta name="theme-color" content="#f5f5f7">',
+    '<title>浏览器推送能力自检</title>',
+    '<link rel="stylesheet" href="/m/theme.css">',
+    '</head>',
+    '<body class="pc-body">',
+    '<main class="pc-page">',
+    '<h1 class="pc-title">浏览器推送能力自检</h1>',
+
+    '<div class="pc-banner">',
+    '<p class="pc-banner-title">⚠️ Web Push 需要三样东西，缺一不可</p>',
+    '<p class="pc-banner-body"><b>HTTPS</b>（安全上下文） + <b>Service Worker</b> + <b>PushManager</b>。<br>',
+    '通过 <b>http</b> 访问时必定不可用——这是浏览器协议的硬性要求，不是配置问题。</p>',
+    '</div>',
+
+    '<section class="pc-card">',
+    '<h2 class="pc-h2">访问地址</h2>',
+    '<p class="pc-kv">当前地址：<code id="pc-origin"></code></p>',
+    '<p class="pc-hint">若上面是 <code>http://</code> 开头，请改用 https 的公网地址重新打开本页：</p>',
+    '<ul class="pc-urls">',
+    '<li><span class="pc-tag pc-tag-no">http</span> <code>http://192.168.3.45:19387/m/push-check</code> — 局域网，必定不可用（仅用于对照）</li>',
+    '<li><span class="pc-tag pc-tag-ok">https</span> <code>https://dshm.elysia.xin:45632/m/push-check</code> — 公网反代，<b>用这个测</b></li>',
+    '</ul>',
+    '</section>',
+
+    '<section class="pc-card">',
+    '<h2 class="pc-h2">逐项检测</h2>',
+    '<ul class="pc-list">',
+    '<li class="pc-row" id="row-secure"><span class="pc-icon"></span><span class="pc-label">安全上下文 <i>window.isSecureContext</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-proto"><span class="pc-icon"></span><span class="pc-label">访问协议 <i>location.protocol</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-sw"><span class="pc-icon"></span><span class="pc-label">Service Worker <i>navigator.serviceWorker</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-push"><span class="pc-icon"></span><span class="pc-label">PushManager <i>window.PushManager</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-notif"><span class="pc-icon"></span><span class="pc-label">Notification API <i>window.Notification</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-perm"><span class="pc-icon"></span><span class="pc-label">通知权限 <i>Notification.permission</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-swreg"><span class="pc-icon"></span><span class="pc-label">SW 注册 <i>register(\'/m/service-worker.js\')</i></span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-sub"><span class="pc-icon"></span><span class="pc-label">订阅可用性 <i>getSubscription()</i>（只读）</span><span class="pc-value"></span></li>',
+    '<li class="pc-row" id="row-ua"><span class="pc-icon"></span><span class="pc-label">User-Agent</span><span class="pc-value"></span></li>',
+    '</ul>',
+    '</section>',
+
+    '<section class="pc-card">',
+    '<h2 class="pc-h2">请求通知权限</h2>',
+    '<p class="pc-hint">点下面的按钮会调用 <code>Notification.requestPermission()</code>，由浏览器弹窗询问。本页不会真的订阅、不会配对设备。</p>',
+    '<button type="button" class="pc-btn" id="pc-perm-btn">请求通知权限</button>',
+    '<p class="pc-result" id="pc-perm-result"></p>',
+    '</section>',
+
+    '<section class="pc-card pc-verdict" id="pc-verdict">',
+    '<p class="pc-verdict-title" id="pc-verdict-title">检测中…</p>',
+    '<p class="pc-verdict-desc" id="pc-verdict-desc"></p>',
+    '</section>',
+
+    '<section class="pc-card">',
+    '<h2 class="pc-h2">User-Agent 全文</h2>',
+    '<p class="pc-ua" id="pc-ua"></p>',
+    '<p class="pc-hint">用来确认是不是夸克浏览器，以及它的 Chromium 内核版本。</p>',
+    '</section>',
+
+    '<button type="button" class="pc-btn pc-btn-ghost" id="pc-reload">重新检测</button>',
+    '<p class="pc-foot">本页只读：不配对、不写设备、不创建订阅。</p>',
+    '</main>',
+    '<script>' + pageJs + '</script>',
+    '</body>',
+    '</html>',
+  ].join('')
+}
+
 function manifestJson() {
   return JSON.stringify({
     id: MOBILE_ROOT,
@@ -3265,7 +3557,7 @@ export function apply(ctx, config) {
    * `D.current?.observe(i.kind==='chat' ? i.session.sessionId : undefined)`
    * 永远只可能是「某一条路由」，所以 observe 到新会话 = 离开旧会话
    *（与 dsh-palm 的 SessionObserverRegistry.observe 同语义：覆盖登记）。
-   * 旧会话的 follow 任务由 openMux 的 syncTimer 负责摘掉。
+   * 旧会话的 follow 由「僵尸 follow 回收」effect 在 OBSERVE_TTL_MS 宽限期后摘掉。
    */
   function addObservation(deviceId, sessionId) {
     let set = observers.get(deviceId)
@@ -3403,6 +3695,7 @@ export function apply(ctx, config) {
     const state = follows.get(sessionId)
     if (state === undefined) return
     follows.delete(sessionId)
+    if (!anyoneObserving(sessionId)) lastObserved.delete(sessionId)
     try {
       state.ref.abort()
     } catch {}
@@ -3661,6 +3954,8 @@ export function apply(ctx, config) {
       return pairAcceptCompat(req, res)
     }
     if (path === MOBILE_ROOT) return sendHtml(res, 200, mobilePageHtml())
+    // 只读自检：不需要登录/配对，任何能访问到本插件的人都能打开。
+    if (path === PUSH_CHECK_URL) return sendHtml(res, 200, pushCheckPageHtml())
     if (path === BUNDLE_URL) return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'))
     if (path === MANIFEST_URL) return sendText(res, 200, 'application/manifest+json', manifestJson())
     if (path === ICON_SVG_URL) return sendBuffer(res, 200, 'image/svg+xml', asset('icon.svg'))
@@ -3687,6 +3982,7 @@ export function apply(ctx, config) {
       { kind: 'exact', path: '/m', handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: '/api/pair/accept', handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: MOBILE_ROOT, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: PUSH_CHECK_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: BUNDLE_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: MANIFEST_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: ICON_SVG_URL, handler: (req, res) => routeRequest(req, res) },
