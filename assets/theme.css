@@ -65,12 +65,21 @@
 }
 .mobile-row:has(.sess-check) .card-icon,
 .mobile-row:has(.sess-dot-running) .card-icon { display: none !important; }
+/* 左缘状态色条：与工作区卡片 .mobile-row-active::before 同款笔法——上下各
+   内缩 14px、3px 宽、两端圆头（--radius-full 9999px），读起来是「一枚竖着的
+   胶囊」而不是「一条通顶的直边」。颜色沿用会话自己的语义色：普通=灰，
+   进行中=绿（不跟工作区那样用 accent 紫）。
+   内缩之后色条不再接触卡片圆角，也就不会被 .mobile-row 的 overflow:hidden
+   把两端削成楔形；left:0 = 内边距盒左缘，即紧贴 1px 描边的内侧。 */
 .mobile-row:has(.sess-check)::before,
 .mobile-row:has(.sess-dot-running)::before {
   content: "";
   position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 4px;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: var(--radius-full, 9999px);
   background: #c9ccd4;
 }
 .mobile-row:has(.sess-dot-running)::before { background: #18a058; }
