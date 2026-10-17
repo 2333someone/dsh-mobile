@@ -308,6 +308,27 @@ export function apply(ctx, config) {
       .catch((err) => sendJson(res, 400, { ok: false, error: String((err && err.message) || err) }))
   }
 
+  function pairAcceptCompat(req, res) {
+    readJsonBody(req, SMALL_BODY)
+      .then((body) => {
+        const code = typeof body.code === 'string' ? body.code : ''
+        const token = typeof body.token === 'string' ? body.token : ''
+        const secret = code !== '' ? code : token
+        const result = acceptPairCode(secret, req.headers['user-agent'])
+        if (!result) {
+          // dsh-palm 契约：无效 → 404 {ok:false,code:'invalid'}
+          sendJson(res, 404, { ok: false, code: 'invalid' })
+          return
+        }
+        const maxAge = Math.round(IDLE_EXPIRE_MS / 1000)
+        // dsh-palm 用 Path=/；手机 bundle 的探测请求会带上它。
+        sendJson(res, 200, { ok: true, deviceId: result.deviceId }, {
+          'Set-Cookie': `${cookieName}=${result.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+        })
+      })
+      .catch(() => sendJson(res, 400, { ok: false, code: 'bad-payload' }))
+  }
+
   function status(req, res) {
     const now = Date.now()
     const devicesView = [...devices.entries()].map(([deviceId, d]) => ({
@@ -570,6 +591,15 @@ export function apply(ctx, config) {
       res.end()
       return
     }
+    // dsh-palm 手机 bundle 的配对端点（它写死调用 /api/pair/accept）。
+    if (path === '/api/pair/accept') {
+      if ((req.method || 'GET').toUpperCase() !== 'POST') {
+        res.statusCode = 405
+        res.end()
+        return
+      }
+      return pairAcceptCompat(req, res)
+    }
     if (path === MOBILE_ROOT) return sendHtml(res, 200, mobilePageHtml())
     if (path === BUNDLE_URL) return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'))
     if (path === MANIFEST_URL) return sendText(res, 200, 'application/manifest+json', manifestJson())
@@ -585,6 +615,7 @@ export function apply(ctx, config) {
   ctx.effect(() => {
     const routes = [
       { kind: 'exact', path: '/m', handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: '/api/pair/accept', handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: MOBILE_ROOT, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: BUNDLE_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: MANIFEST_URL, handler: (req, res) => routeRequest(req, res) },
