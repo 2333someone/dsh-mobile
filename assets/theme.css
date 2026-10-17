@@ -459,6 +459,18 @@ body:has(> #dm-model-btn) #dm-model-btn {
   pointer-events: none;
 }
 
+/* 思考中 / 深度思考位置的鲸鱼尾：与桌面 DSH 同一张 APNG，自带循环播放，不需要
+   CSS 动画。它是彩色位图、细节比单色描边图标密，所以比 .dm-icon 略大一点
+   （1.1em）才不糊；vertical-align 再往下压一点与同行文字重心齐平；不跟随
+   .dm-icon 的 opacity 0.9（那是给单色描边降饱和用的，位图不需要）。 */
+.dm-whale {
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+  flex: none;
+  opacity: 1;
+}
+
 /* ── 折叠箭头（▾ / ▸）放大 ───────────────────────────────────────────────
    这些箭头是「文本字符」不是 SVG，所以只能改 font-size / line-height。bundle 里
    它们大多只写了 flex:none（或 font-size: var(--text-xs) = 11px），在手机上偏小、
