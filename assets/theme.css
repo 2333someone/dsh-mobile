@@ -18,6 +18,44 @@
 .chat-jump-lastread { color: #4D6BFE !important; border-color: #4D6BFE !important; }
 .chat-jump-badge { background: #e5484d !important; color: #fff !important; }
 
+/* ── 轮次药丸竖排：「当前/总」改成竖着读，宽度与回底圆钮直径一致 ────────
+    bundle 里 .chat-jump-latest 是 40×40 的圆钮（border-radius:50%），
+    .chat-jump-turns 原本是 48×32 的横排药丸，两者宽度对不齐。
+    这里把药丸「立起来」：宽度取与圆钮直径相同的 40px（全局 box-sizing:
+    border-box，padding 含在这 40px 内），高度交给内容自适应。
+
+    竖排只加在 .chat-jump-turns-label 上：bundle 的渲染顺序是
+    [当前轮 bn, "/", 总轮 hn]，vertical-rl 下首字符在顶端，
+    于是「当前」在上、「总数」在下，正合要求。
+    sticky 定位、轻点开清单、按住拖动刮擦（touch-action:none）一律不动。 */
+.chat-jump-turns {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: auto !important;
+  padding: 8px 4px !important;
+  border-radius: 20px !important;
+}
+.chat-jump-turns-label {
+  writing-mode: vertical-rl;
+  -webkit-writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 13px !important;
+  line-height: 1.15 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+}
+/* 按住刮擦（.chat-jump-turns-live）的高亮语义沿用 bundle 的 accent 描边与
+   字色，不被上面的覆盖规则压掉；写在后面，同为单类选择器所以后来者胜。 */
+.chat-jump-turns-live {
+  color: var(--accent, #4D6BFE) !important;
+  border-color: var(--accent, #4D6BFE) !important;
+}
+
+/* ── 「回到上次 · 第 N 轮」胶囊：用不到，隐藏（不显示、不占位、不可点）── */
+.chat-jump-lastread {
+  display: none !important;
+}
+
 /* ── 会话行：去对号、左缘状态色条、标题占满一行、时间落到副标题行 ───── */
 .mobile-row:has(.sess-check),
 .mobile-row:has(.sess-dot-running) {
