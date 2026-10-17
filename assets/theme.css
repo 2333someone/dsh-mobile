@@ -760,6 +760,40 @@ body:has(> #dm-subagent-btn) #dm-subagent-btn {
 .dm-subagent-sub {
   font-size: var(--text-sm, 12px);
   color: var(--text-tertiary, #6a6a7a);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* 层级缩进：每深一层 12px，最多 3 级（更深不再加，避免窄屏把字挤没）。 */
+.dm-subagent-indent {
+  flex: none;
+  width: 0;
+}
+.dm-subagent-indent-1 { width: 12px; }
+.dm-subagent-indent-2 { width: 24px; }
+.dm-subagent-indent-3 { width: 36px; }
+/* 状态文案：运行中高亮，空闲保持次级色。 */
+.dm-subagent-state {
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-subagent-state-run {
+  color: var(--positive, #22c55e);
+}
+/* 类型 / 层级 / 有下级：小徽标，避免和主状态文案抢视觉。 */
+.dm-subagent-mode,
+.dm-subagent-depth,
+.dm-subagent-kids {
+  padding: 0 5px;
+  border-radius: var(--radius-chip, 10px);
+  background: var(--bg-elevated, #f1f1f4);
+  color: var(--text-tertiary, #6a6a7a);
+  font-size: var(--text-xs, 11px);
+  line-height: 16px;
+}
+.dm-subagent-kids {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.1));
+  color: var(--accent, #6366f1);
 }
 .dm-subagent-chev {
   flex: none;
@@ -994,6 +1028,387 @@ body:has(> #dm-subagent-btn) #dm-subagent-btn {
 }
 .dm-perm-status-err {
   color: var(--danger, #e5484d);
+}
+
+/* ── 工具行最右侧两个新图标：审批提醒 + 子代理状态 ──────────────────────────
+   两者与 #dm-perm-btn 同模式：先以裸站位写进 <body>，再由各自注入脚本搬进
+   #dm-tools（也就是输入框上方那一行 .chat-tools）。没搬走之前它们留在文档流
+   末尾，会以自身高度把 <html> 撑高 → 页面右侧冒出竖向滚动条。所以同样必须加
+   :has(>) 守护：命中「还在 body 流里的那个实例」时 display:none，被搬进
+   #dm-tools 后选择器自动失效，聊天页上的显示与点击不受任何影响。
+   （这是 33d41ce / 7729f83 已经踩过并修好的坑，新增按钮一律照抄。）
+
+   顺序（在 .chat-tools 行内从左到右）：
+     + → 模型 → 上下文用量 → 权限 → 【审批提醒】→【子代理状态（最右）】
+   由注入脚本用 insertBefore 保证，CSS 不参与排位。 */
+body:has(> #dm-approval-btn) #dm-approval-btn {
+  display: none !important;
+}
+body:has(> #dm-subagent-status-btn) #dm-subagent-status-btn {
+  display: none !important;
+}
+
+/* 图标本体沿用 #dm-tools .dm-tool-btn（32px、描边 SVG 继承 currentColor）。
+   这里只补：定位上下文（角标要绝对定位）、显示/隐藏、空闲灰化、角标。 */
+#dm-approval-btn,
+#dm-subagent-status-btn {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary, #6b6e78);
+  cursor: pointer;
+}
+#dm-approval-btn:active,
+#dm-subagent-status-btn:active {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+/* 显隐（JS 加/去 .dm-icon-hidden）：
+   审批提醒 —— 有待处理审批/提问才亮；子代理状态 —— 当前会话有子代理才亮。
+   用 display:none 而不是 opacity，隐藏时彻底退出布局，不占工具行的一格、
+   不吃触摸事件，也不会撑高文档流。绝不使用全局 overflow:hidden（会破坏
+   消息区与列表滚动），这里只针对这两个按钮自身。 */
+#dm-approval-btn.dm-icon-hidden,
+#dm-subagent-status-btn.dm-icon-hidden {
+  display: none !important;
+}
+
+/* 子代理全部空闲：图标转灰；有运行中时保持正常文字色（角标本身是绿的）。
+   审批提醒只在有事时才显示，不需要灰态。 */
+#dm-subagent-status-btn.dm-icon-idle {
+  color: var(--text-tertiary, #9a9aa6);
+}
+
+/* ── 数字角标：右上角小圆点 ──────────────────────────────────────────────
+   定位在 32px 图标的右上，尺寸与配色跟着主题变量走，深浅主题自动跟随。
+   pointer-events:none：角标绝不能挡住按钮本体的点击区域。 */
+.dm-icon-badge {
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  display: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--success, #16a34a);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
+.dm-icon-badge.dm-icon-badge-show {
+  display: inline-flex;
+}
+
+/* ── 审批提醒：自绘浮层（与 .dm-perm-* / .dm-subagent-* 同一套风格） ──────
+   存在意义：bundle 自带的审批卡片被「不小心关掉」后没法再打开，这里可以
+   反复开关，把仍在等待的审批 / 提问重新列出来并直接处理。
+   默认 display:none，打开时加 .dm-approval-open。 */
+.dm-approval-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 60;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: var(--backdrop, rgba(15, 18, 34, 0.45));
+  animation: dm-approval-fade 0.18s ease;
+}
+.dm-approval-backdrop.dm-approval-open {
+  display: flex;
+}
+@keyframes dm-approval-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dm-approval-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 72vh;
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-bottom: none;
+  border-radius: var(--radius-sheet, 20px) var(--radius-sheet, 20px) 0 0;
+  box-shadow: var(--shadow-lg, 0 8px 28px rgba(16, 24, 40, 0.16));
+  overflow: hidden;
+  animation: dm-approval-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes dm-approval-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dm-approval-backdrop,
+  .dm-approval-sheet {
+    animation: none !important;
+  }
+}
+
+.dm-approval-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-approval-title {
+  flex: 1;
+  text-align: center;
+  font-size: var(--text-md, 15px);
+  font-weight: 600;
+  color: var(--text-primary, #1c1c22);
+}
+.dm-approval-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary, #6a6a7a);
+  font-size: 15px;
+  cursor: pointer;
+}
+.dm-approval-close:active {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+/* 卡片区自己滚动（max-height 由 sheet 限制），不碰全局 overflow。 */
+.dm-approval-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 12px 12px;
+}
+.dm-approval-hint {
+  margin: 0;
+  padding: 18px 6px;
+  text-align: center;
+  font-size: var(--text-sm, 12px);
+  color: var(--text-tertiary, #6a6a7a);
+}
+
+.dm-approval-card {
+  margin-bottom: 10px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-elevated, rgba(127, 127, 127, 0.04));
+}
+.dm-approval-card-title {
+  font-size: var(--text-md, 14px);
+  font-weight: 600;
+  color: var(--text-primary, #1c1c22);
+  overflow-wrap: anywhere;
+}
+.dm-approval-card-sub {
+  margin-top: 4px;
+  font-size: var(--text-sm, 12px);
+  line-height: 1.55;
+  color: var(--text-secondary, #5b5e68);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.dm-approval-acts {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.dm-approval-act {
+  flex: 1;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle, #e3e3e8);
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-surface, #ffffff);
+  color: var(--text-primary, #1c1c22);
+  font-size: var(--text-sm, 13px);
+  cursor: pointer;
+}
+.dm-approval-act:active {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+.dm-approval-allow {
+  border-color: var(--success, #16a34a);
+  color: var(--success, #16a34a);
+}
+.dm-approval-deny {
+  border-color: var(--danger, #e5484d);
+  color: var(--danger, #e5484d);
+}
+
+/* 提问：一组一个问题，选项可点；提交按钮撑满。 */
+.dm-approval-q {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-approval-q-header {
+  font-size: var(--text-sm, 12px);
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-approval-q-text {
+  margin-top: 2px;
+  font-size: var(--text-md, 14px);
+  color: var(--text-primary, #1c1c22);
+  overflow-wrap: anywhere;
+}
+.dm-approval-q-detail {
+  margin-top: 2px;
+  font-size: var(--text-sm, 12px);
+  color: var(--text-secondary, #5b5e68);
+  overflow-wrap: anywhere;
+}
+.dm-approval-q-opts {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dm-approval-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-surface, #ffffff);
+  font-size: var(--text-sm, 13px);
+  color: var(--text-primary, #1c1c22);
+  cursor: pointer;
+}
+.dm-approval-opt-label {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.dm-approval-opt-desc {
+  display: block;
+  font-size: var(--text-xs, 11px);
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-approval-submit {
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--accent, #6366f1);
+  border-radius: var(--radius-sm, 10px);
+  background: var(--accent, #6366f1);
+  color: #ffffff;
+  font-size: var(--text-sm, 13px);
+  cursor: pointer;
+}
+.dm-approval-submit:active {
+  opacity: 0.85;
+}
+
+/* 底部状态条：提交中 / 已允许 / 失败。空文本时收起（JS 去掉 -show）。 */
+.dm-approval-status {
+  display: none;
+  flex: none;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-subtle, #f0f0f2);
+  font-size: var(--text-sm, 12px);
+  line-height: 1.5;
+  color: var(--text-tertiary, #6a6a7a);
+  overflow-wrap: anywhere;
+}
+.dm-approval-status-show {
+  display: block;
+}
+.dm-approval-status-ok {
+  color: var(--accent, #6366f1);
+}
+.dm-approval-status-err {
+  color: var(--danger, #e5484d);
+}
+
+/* ══ 右侧竖向滚动条 · 第二层根因：100vh 兜底 ═══════════════════════════════
+   bundle 的根容器这样写（assets/mobile.bundle.js，禁止修改）：
+
+     #root { height: 100vh; height: 100dvh; }
+     (bundle 注释原文：dynamic-viewport units are not supported by older
+      WebViews (WeChat etc.), where the vh fallback keeps the layout intact.)
+
+   100dvh 是对的，但**老 WebView（夸克 Quark / 鸿蒙 ArkWeb）不认 dvh**
+   → 整条声明作废 → 落到上一行的 100vh 兜底。
+   而 100vh = **大视口高度**（地址栏收起时的高度），比当前**可见区**高 K px：
+     #root 被撑成「可见高 + K」→ 文档溢出 K → 视口右侧出现一条竖向滚动条。
+   （这也是 headless 测不出来的原因：headless 里 dvh === vh === innerHeight，
+     差值恒为 0；测出 0 不代表真机没问题。）
+
+   修法：由注入脚本（index.js 的 VIEWPORT_VH_HTML）用
+   visualViewport.height ?? innerHeight 算出**实际可见高度**，写进
+   documentElement 的自定义属性 --dm-vh，这里再用它覆盖 100vh 兜底。
+
+   为什么写在 theme.css 而不是改 bundle：theme.css 是请求时实时读盘的，
+   改动刷新手机即生效，不受 HMR 事务锁影响；bundle 禁止修改。
+
+   加载顺序：theme.css 是 <head> 里的 <link>，而 bundle 是运行时
+   document.createElement('style') 追加到 head 的 —— 后者在 DOM 顺序上更靠后，
+   同等特异性下反而赢。所以 #root / .mobile-pair / .sheet 这几条必须带
+   !important 才能压住 bundle 的 100vh。
+
+   红线遵守：
+     ✗ 没有全局 overflow:hidden —— 只是把根链的高度钉成「可见高度」，
+       滚动容器的 overflow-y:auto 一律没动，消息区照常能滚到底。
+     ✗ 没有裁内容 —— 根链只设 height/max-height，overflow 保持 visible，
+       万一内容真比视口高，文档照旧可以滚（正常情况下内容不会超高）。
+     ✓ 键盘不抖 —— JS 侧 rAF 合并 + 1px 阈值，见 VIEWPORT_VH_HTML。 */
+
+/* 根链：html / body / #root 统一钉到「实际可见高度」。
+   JS 没跑起来时 var(--dm-vh) 无值 → 退回 100%，与现状一致（不更差）。 */
+html {
+  height: var(--dm-vh, 100%);
+  max-height: var(--dm-vh, 100%);
+}
+body {
+  height: var(--dm-vh, 100%);
+  max-height: var(--dm-vh, 100%);
+}
+#root {
+  height: var(--dm-vh, 100vh) !important;
+  max-height: var(--dm-vh, 100vh) !important;
+  min-height: 0 !important;
+}
+
+/* 配对页：min-height 同样用的是 100vh/100dvh，不换掉会二次撑高。 */
+.mobile-pair {
+  min-height: var(--dm-vh, 100vh) !important;
+}
+
+/* 底部抽屉：max-height: 100vh —— 老 WebView 上抽屉会比可见区高，
+   展开态（.sheet-full）尤其明显，一并换成可见高度。 */
+.sheet,
+.sheet-full {
+  max-height: var(--dm-vh, 100vh) !important;
 }
 
 

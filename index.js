@@ -558,12 +558,16 @@ function assetText(name) {
 //
 // 防键盘抖动（红线）：visualViewport 在地址栏收展、软键盘弹出时高频变化。
 //   ① rAF 合并：一帧内的多次事件只写一次属性；
-//   ② 1px 阈值：变化不足 1px 直接忽略（键盘动画的亚像素抖动全部滤掉）。
+//   ② 2px 阈值：变化不足 2px 直接忽略。取 2 而不是 1，是因为高度要先
+//      Math.round 成整像素，而键盘动画期间的亚像素噪声经取整后**恰好会
+//      产生 1px 的假变化**；阈值取 2 才能把这批噪声全部滤掉（仿真实测：
+//      阈值 1 时 844±0.5 的噪声仍会写 2 次，阈值 2 时为 0 次）。
+//      真实视口变化（地址栏收展几十 px、软键盘几百 px）远大于它，不受影响。
 // 只有超阈值才真正触发一次 style 写入 + 重排。
 const VIEWPORT_VH_HTML = `<script>
 (function () {
   var KEY = '--dm-vh';
-  var THRESHOLD = 1; // px：小于这个变化量就不写，专治键盘/地址栏动画的抖动
+  var THRESHOLD = 2; // px：小于这个变化量就不写，专治键盘/地址栏动画的抖动
   var last = -1;
   var frame = 0;
 
@@ -1402,16 +1406,42 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     }
   }
 
-  // 与旧版 renderList 完全一致的洗数据：只留 kind==='child'。
+  // 与旧版 renderList 的过滤口径一致：只留 kind==='child'。
+  //
+  // 但**字段要收全**：宿主 listDescendants 每行实际返回
+  //   { id, label, mode:'one-shot'|'continuable'|'external', activity:'running'|'inactive',
+  //     kind:'child'|'diagnostic', parentId, depth, hasChildren }
+  //（已核宿主源码：spread identity, kind:"child", parentId, depth, activity, hasChildren:children.length>0）。
+  // 旧版只取 id/label/activity 三个，mode/depth/hasChildren/parentId 全丢 —— 数据本来就有，
+  // 是这里没往外面带。面板据此渲染类型、层级、是否有子级。
+  //
+  // 各字段都做了类型收敛（缺字段、类型不对一律落默认值），
+  // 保证「宿主少给字段」时面板照常画，不会因为 undefined 拼出 "undefined" 字样。
   function rowsOf(res) {
     var entries = (res && res.ok && res.value && Array.isArray(res.value.entries)) ? res.value.entries : [];
     var rows = [];
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
       if (!e || e.kind !== 'child') continue;
-      rows.push({ id: String(e.id || ''), label: e.label, activity: e.activity });
+      rows.push({
+        id: String(e.id || ''),
+        label: typeof e.label === 'string' ? e.label : '',
+        activity: typeof e.activity === 'string' ? e.activity : '',
+        // mode 决定「一次性 / 可继续 / 外部」，未知就存 'unknown'（下面渲染成「—」）。
+        mode: (e.mode === 'one-shot' || e.mode === 'continuable' || e.mode === 'external') ? e.mode : 'unknown',
+        // depth：宿主给的是数字层级（根的直接子级为 0）。非法值一律当第 1 层。
+        depth: (typeof e.depth === 'number' && isFinite(e.depth) && e.depth >= 0) ? Math.floor(e.depth) : 0,
+        hasChildren: e.hasChildren === true,
+        parentId: typeof e.parentId === 'string' ? e.parentId : '',
+      });
     }
     return rows;
+  }
+
+  // 类型 → 中文标签（手机屏幕窄，用短词）。
+  var MODE_LABEL = { 'one-shot': '一次性', 'continuable': '可继续', 'external': '外部', 'unknown': '未知' };
+  function modeLabel(m) {
+    return MODE_LABEL[m] || '未知';
   }
 
   // 发一次真实请求。同一会话的并发调用共用一个 promise（去重）。
@@ -1655,12 +1685,27 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     for (var k = 0; k < rows.length; k++) {
       var r = rows[k];
       var running = r.activity === 'running';
+      // 层级：缩进 + 「第 N 层」文字。缩进按 depth 递增（最多 3 级，避免窄屏挤没字），
+      // 文字版给读屏与看不清缩进的场景兜底。
+      var dep = (typeof r.depth === 'number' && r.depth > 0) ? r.depth : 0;
+      var indent = dep > 3 ? 3 : dep;
+      // 有子级：一个「有下级」标记（不展开，只是提示这行下面还有挂载的子代理）。
+      var kids = r.hasChildren ? '<span class="dm-subagent-kids" title="有下级">有下级</span>' : '';
       html +=
-        '<button type="button" class="dm-subagent-row" data-sid="' + esc(r.id) + '">' +
+        '<button type="button" class="dm-subagent-row" data-sid="' + esc(r.id) + '"' +
+          ' data-depth="' + dep + '" data-mode="' + esc(r.mode || 'unknown') + '">' +
+          '<span class="dm-subagent-indent' + (indent > 0 ? ' dm-subagent-indent-' + indent : '') + '"></span>' +
           '<span class="dm-subagent-dot' + (running ? ' dm-subagent-dot-run' : '') + '"></span>' +
           '<span class="dm-subagent-main">' +
             '<span class="dm-subagent-label">' + esc(r.label || r.id.slice(0, 8)) + '</span>' +
-            '<span class="dm-subagent-sub">' + (running ? '运行中' : '空闲') + '</span>' +
+            '<span class="dm-subagent-sub">' +
+              // 状态文案（运行中 / 空闲）—— 面板的主信息，必须一直显示。
+              '<span class="dm-subagent-state' + (running ? ' dm-subagent-state-run' : '') + '">' +
+                (running ? '运行中' : '空闲') + '</span>' +
+              '<span class="dm-subagent-mode">' + esc(modeLabel(r.mode)) + '</span>' +
+              '<span class="dm-subagent-depth">第 ' + (dep + 1) + ' 层</span>' +
+              kids +
+            '</span>' +
           '</span>' +
           '<span class="dm-subagent-chev">›</span>' +
         '</button>';
@@ -1707,7 +1752,17 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
 
     // 带上 parentSessionId：宿主读子代理会话必须走 durable 父地址
     //（{kind:'subagent'}），父 id 由列表视图所在的当前会话直接给出。
-    rpc('session.history', { sessionId: chatSid, maxMessages: 50, parentSessionId: currentSession() }).then(function (res) {
+    //
+    // subscribe=true：告诉服务端「这台设备开始看这个子代理会话」，由它 ensureFollow()
+    // 起宿主流 → 之后子代理的增量随 SSE 到达（边跑边显示）。
+    // 这里必须**先登记订阅再拉历史**，否则订阅晚于历史请求时，
+    // 落在两者之间的增量就没有人推，会永久丢字。
+    rpc('session.history', {
+      sessionId: chatSid,
+      maxMessages: 50,
+      parentSessionId: currentSession(),
+      subscribe: true,
+    }).then(function (res) {
       if (!panel || view !== 'chat') return;
       var ok = !!(res && res.ok && res.value);
       var events = ok && Array.isArray(res.value.events) ? res.value.events : [];
@@ -3560,6 +3615,24 @@ export function apply(ctx, config) {
       case 'session.history': {
         if (!payload.sessionId) return { ok: false, error: { code: 'bad-request', message: 'sessionId required' } }
         const parentHint = typeof payload.parentSessionId === 'string' ? payload.parentSessionId : undefined
+        // 子代理面板点开某行看聊天时带 subscribe:true —— 表示「这台设备开始看这个会话」。
+        // 登记后 openMux 的 syncTimer 会为它起宿主流，子代理的增量就随 SSE 边跑边到，
+        // 而不是等下次轮询才整段出现。
+        //
+        // 必须在 readHistory 之前登记：历史是既成事实，增量是未来；登记晚于读历史的话，
+        // 落在两者之间的增量无人推送，会永久丢字。
+        //
+        // 用 addObservationExtra（并集）而不是 addObservation（赋值）——
+        // 面板浮在当前聊天页之上，看子代理不等于离开主会话，两条流都要留着。
+        if (payload.subscribe === true && rpcContext && typeof rpcContext.deviceId === 'string') {
+          const sid = String(payload.sessionId)
+          // 子代理会话必须走 durable 父地址，先把父子关系记住（每行自带 parentId）。
+          if (typeof parentHint === 'string' && parentHint !== '' && parentHint !== sid) {
+            subagentParent.set(sid, parentHint)
+          }
+          addObservationExtra(rpcContext.deviceId, sid)
+          ensureFollow(sid)
+        }
         return {
           ok: true,
           value: await readHistory(payload.sessionId, payload.beforeSeq, payload.maxMessages, parentHint),
@@ -4185,6 +4258,24 @@ export function apply(ctx, config) {
     lastObserved.set(sessionId, Date.now())
     if (set.size === 1 && set.has(sessionId)) return
     set.clear()
+    set.add(sessionId)
+  }
+
+  /**
+   * 追加登记一个「额外在看」的会话（子代理聊天视图用）。
+   *
+   * 与 addObservation 的区别：addObservation 是**赋值**（覆盖登记，手机换会话即离开旧的），
+   * 这里是**并集**——子代理面板浮在当前聊天页之上，点开子代理不等于离开主会话，
+   * 两条流都要继续收。主会话仍由 bundle 自己的 mobile.observe 独占维护。
+   */
+  function addObservationExtra(deviceId, sessionId) {
+    let set = observers.get(deviceId)
+    if (set === undefined) {
+      set = new Set()
+      observers.set(deviceId, set)
+    }
+    // 重申即续命：回收器以此为计时基准（面板打开期间每次渲染都会重申）。
+    lastObserved.set(sessionId, Date.now())
     set.add(sessionId)
   }
 
