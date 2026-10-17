@@ -459,16 +459,32 @@ body:has(> #dm-model-btn) #dm-model-btn {
   pointer-events: none;
 }
 
-/* 思考中 / 深度思考位置的鲸鱼尾：与桌面 DSH 同一张 APNG，自带循环播放，不需要
-   CSS 动画。它是彩色位图、细节比单色描边图标密，所以比 .dm-icon 略大一点
-   （1.1em）才不糊；vertical-align 再往下压一点与同行文字重心齐平；不跟随
-   .dm-icon 的 opacity 0.9（那是给单色描边降饱和用的，位图不需要）。 */
+/* 思考中 / 深度思考位置的鲸鱼尾：与桌面 DSH 同一张 APNG（28×28），但不再用 <img>
+   直显 —— 那张图的 RGB 像素是全黑的，深色主题（黑底）下几乎看不见。改成与桌面
+   RunningWhaleTail 完全一致的画法：空 span + background: currentColor + mask，
+   只取 APNG 的 alpha 通道当遮罩，颜色永远继承所在行的文字色，深浅两套主题都可见。
+
+   两个必须写对的地方：
+   ① alpha —— 源图像素是纯黑（gray 直方图只有 0），走 luminance 遮罩的话黑 = 亮度 0
+      = 完全透明，图标会直接消失；只有 alpha 通道才带形状，所以显式写 alpha。
+      （标准 mask 简写认这个关键字；-webkit- 前缀简写不认，故前缀版省略它，
+        靠默认值 match-source —— 对位图同样解析为 alpha —— 结果一致。）
+   ② 两条必须分开写：前缀版给旧的手机 WebView / 老 Safari，标准版给现代浏览器，
+      合并成一条会因简写不认识而整条丢弃。
+   mask-size 用 100% 100%：源图是正方形、盒子也是正方形，等比铺满不会变形，
+   且 1.1em 通常小于 28px，属于缩小采样而不是放大发虚。 */
 .dm-whale {
+  display: inline-block;
   width: 1.1em;
   height: 1.1em;
   vertical-align: -0.2em;
   flex: none;
+  background: currentColor;
+  -webkit-mask: url(/m/whale.png) 50% / 100% 100% no-repeat;
+  mask: url(/m/whale.png) 50% / 100% 100% no-repeat alpha;
+  /* 位图不需要 .dm-icon 的降饱和 opacity:0.9（那是给单色描边用的）。 */
   opacity: 1;
+  pointer-events: none;
 }
 
 /* ── 折叠箭头（▾ / ▸）放大 ───────────────────────────────────────────────

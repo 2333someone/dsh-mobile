@@ -680,8 +680,9 @@ const EMOJI_ICON_HTML = `<script>
       done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
       warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>'
     };
-    // 思考中不画 SVG，直接用桌面 DSH 的鲸鱼尾 APNG（自带循环播放）。
-    var WHALE_SRC = ${JSON.stringify(WHALE_URL)};
+    // 思考中不画 SVG，也不用 <img> 直显：鲸鱼尾 APNG 的像素是全黑的，深色主题（黑底）
+    // 下几乎看不见。改成空 span + theme.css 的 mask + currentColor，形状仍由这张 APNG
+    // 的 alpha 通道给、颜色继承所在行的文字色 —— 与桌面 DSH 的 RunningWhaleTail 一致。
     // [emoji 序列, 图标 key, 作用域 class]：只精确匹配这些序列（含 FE0F 变体选择器），
     // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
     // 📨👥🧩🔔⏰⚙️🔌🎯）都不会被替换。
@@ -717,12 +718,11 @@ const EMOJI_ICON_HTML = `<script>
     function makeIcon(key) {
       // 鲸鱼尾是位图（APNG），不是 SVG：单独走一条分支。
       if (key === 'whale') {
-        var img = document.createElement('img');
-        img.setAttribute('class', 'dm-icon dm-icon-whale dm-whale');
-        img.setAttribute('src', WHALE_SRC);
-        img.setAttribute('alt', '');
-        img.setAttribute('aria-hidden', 'true');
-        return img;
+        // 空元素：形状由 theme.css 的 mask 画、颜色由 currentColor 给。
+        var tail = document.createElement('span');
+        tail.setAttribute('class', 'dm-icon dm-icon-whale dm-whale');
+        tail.setAttribute('aria-hidden', 'true');
+        return tail;
       }
       var svg = document.createElementNS(NS, 'svg');
       svg.setAttribute('class', 'dm-icon dm-icon-' + key);
