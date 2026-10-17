@@ -287,6 +287,9 @@ function mobilePageHtml() {
     '.chat-jump-latest-hot{color:#4D6BFE !important;border-color:#4D6BFE !important;}',
     '.chat-jump-lastread{color:#4D6BFE !important;border-color:#4D6BFE !important;}',
     '.chat-jump-badge{background:#e5484d !important;color:#fff !important;}',
+    /* 会话行右侧时间：收紧字号与间距，给标题让位 */
+    '.sess-time{font-size:10px !important;letter-spacing:-.2px;opacity:.72;}',
+    '.sess-titleline{gap:4px !important;}',
     '</style>',
     '</head>',
     '<body>',
