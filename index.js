@@ -291,6 +291,138 @@ function assetText(name) {
   return asset(name).toString('utf8')
 }
 
+// 输入栏左侧的自定义「模型」按钮：打开 bundle 的小弹窗，并在其下方叠加「思考强度」小窗。
+const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="模型"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6M9 12h6M9 15h3"/></svg></button><script>
+(function () {
+  var btn = document.getElementById('dm-model-btn');
+  if (!btn) return;
+  var effortEl = null;
+  var stable = 0;
+
+  function bar() { return document.querySelector('.chat-inputbar'); }
+  function plus() { var b = bar(); return b ? b.querySelector('.chat-attach-btn') : null; }
+  function pill() { return document.querySelector('.chat-pill[aria-label^="切换模型"]'); }
+  function panel() { return document.querySelector('.chat-picker-panel'); }
+  function visible(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+
+  function hideBtn() { btn.style.display = 'none'; btn.style.opacity = '0'; stable = 0; }
+  function place() {
+    var p = plus();
+    if (!p) { hideBtn(); return; }
+    var r = p.getBoundingClientRect();
+    if (!r || r.width === 0 || r.top < 0) { hideBtn(); return; }
+    btn.style.left = Math.round(r.right + 6) + 'px';
+    btn.style.top = Math.round(r.top + (r.height - 40) / 2) + 'px';
+    if (btn.style.display !== 'flex') {
+      btn.style.display = 'flex';
+      btn.style.opacity = '0';
+      stable = 0;
+    }
+    stable++;
+    if (stable >= 2) btn.style.opacity = '1';
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-' + Date.now(), payload: payload }),
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+  function currentSession() {
+    try { return new URL(location.href).searchParams.get('session') || ''; } catch (e) { return ''; }
+  }
+  function removeEffort() { if (effortEl) { effortEl.remove(); effortEl = null; } }
+  function closeAll() {
+    var scrim = document.querySelector('.chat-picker-scrim');
+    if (visible(scrim)) scrim.click();
+    var back = document.querySelector('.sheet-backdrop');
+    if (visible(back)) back.click();
+    removeEffort();
+  }
+
+  function applyEffort(provider, model, effort) {
+    var sid = currentSession();
+    if (!sid) return;
+    var payload = { sessionId: sid, provider: provider, model: model };
+    if (effort) payload.reasoningEffort = effort;
+    rpc('session.selectModel', payload).then(function () { closeAll(); });
+  }
+
+  function buildEffort(panelEl) {
+    var p = pill();
+    var title = (p && p.getAttribute('title')) || '';
+    var parts = title.split('/');
+    if (parts.length !== 2) { removeEffort(); return; }
+    var provider = parts[0], model = parts[1];
+    if (!currentSession()) { removeEffort(); return; }
+    rpc('session.models', {}).then(function (res) {
+      if (!res || !res.ok) { removeEffort(); return; }
+      var value = res.value || {};
+      var efforts = [];
+      var groups = value.groups || [];
+      for (var i = 0; i < groups.length; i++) {
+        if (groups[i].id !== provider) continue;
+        var ms = groups[i].models || [];
+        for (var j = 0; j < ms.length; j++) {
+          if (ms[j].id === model && ms[j].reasoning && Array.isArray(ms[j].reasoning.efforts)) {
+            efforts = ms[j].reasoning.efforts;
+          }
+        }
+      }
+      if (efforts.length === 0) { removeEffort(); return; }
+      var rect = panelEl.getBoundingClientRect();
+      removeEffort();
+      var el = document.createElement('div');
+      el.id = 'dm-effort';
+      el.style.cssText = 'position:fixed;z-index:81;left:' + Math.round(rect.left) + 'px;width:' + Math.round(rect.width) + 'px;top:' + Math.round(rect.bottom + 8) + 'px;background:var(--card-bg,#fff);border:1px solid var(--border-default,rgba(0,0,0,.08));border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px 0 8px;';
+      var head = document.createElement('div');
+      head.textContent = '思考强度';
+      head.style.cssText = 'font-size:12px;font-weight:600;color:var(--text-quaternary,#8a8f99);padding:8px 12px 4px;';
+      el.appendChild(head);
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:4px 12px;';
+      var cur = (value.current && value.current.reasoningEffort) || '';
+      var opts = [{ id: '', name: '默认' }].concat(efforts.map(function (e) { return { id: e.id, name: e.name || e.id }; }));
+      opts.forEach(function (o) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = o.name;
+        var on = (o.id || '') === (cur || '');
+        b.style.cssText = 'border:1px solid ' + (on ? '#4D6BFE' : 'var(--border-default,rgba(0,0,0,.1))') + ';background:' + (on ? '#4D6BFE' : 'transparent') + ';color:' + (on ? '#fff' : 'var(--text-primary,#2b2d33)') + ';border-radius:999px;padding:7px 14px;font-size:13px;';
+        b.onclick = function () { applyEffort(provider, model, o.id); };
+        row.appendChild(b);
+      });
+      el.appendChild(row);
+      document.body.appendChild(el);
+      effortEl = el;
+    });
+  }
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (visible(panel()) || visible(document.querySelector('.sheet-backdrop'))) { closeAll(); return; }
+    var p = pill();
+    if (!p) return;
+    p.click();
+    setTimeout(function () {
+      var panelEl = panel();
+      if (panelEl) buildEffort(panelEl);
+    }, 120);
+  });
+
+  setInterval(function () {
+    place();
+    if (effortEl && !visible(panel())) removeEffort();
+  }, 300);
+  window.addEventListener('resize', place);
+  window.addEventListener('scroll', place, true);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', place);
+  place();
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -312,6 +444,7 @@ function mobilePageHtml() {
     '<body>',
     '<div id="root"></div>',
     '<script type="module" src="/m/mobile.js"></script>',
+    MODEL_BUTTON_HTML,
     '</body>',
     '</html>',
   ].join('')

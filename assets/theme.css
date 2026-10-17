@@ -79,3 +79,33 @@
   display: none !important;
 }
 
+/* ── 模型按钮：移到输入栏左侧原麦克风位置 ─────────────────────────── */
+/* 隐藏原来的模型 chip（改由下方自定义按钮打开同一弹窗） */
+.chat-pill[aria-label^="切换模型"] {
+  display: none !important;
+}
+/* 给自定义模型按钮在输入栏里留出位置 */
+.chat-input {
+  margin-left: 44px !important;
+}
+/* 自定义模型按钮：与「+」「麦克风」同一个 .chat-attach-btn 视觉 */
+#dm-model-btn {
+  position: fixed;
+  z-index: 80;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary, #6b6e78);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s ease;
+}
+#dm-model-btn:active {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+
