@@ -507,6 +507,17 @@ export function apply(ctx, config) {
         await wr().archiveSession(payload.sessionId, { stopActivity: true })
         return { ok: true, value: { archivedSessionIds: [] } }
       }
+      case 'mobile.preferences': {
+        // 手机 bundle 的启动探针；形态必须匹配 dsh-palm，否则会判定「连不上 host」。
+        return { ok: true, value: { mobileEnterToSend: true } }
+      }
+      case 'mobile.runningSessions': {
+        const { items = [] } = await controller.list({}, new AbortController().signal)
+        return { ok: true, value: { sessionIds: items.filter((it) => it.running).map((it) => it.sessionId) } }
+      }
+      case 'mobile.pending': {
+        return { ok: true, value: { approvals: [], questions: [] } }
+      }
       default:
         return { ok: false, error: { code: 'not-supported', message: `method ${method} is not implemented by dsh-mobile` } }
     }
