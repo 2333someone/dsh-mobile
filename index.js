@@ -1055,6 +1055,302 @@ const TURN_PILL_HTML = `<script>
 </script>`
 
 
+// 顶栏「子代理」入口：只在聊天页（顶栏右侧含 aria-label="更多" 的按钮）的
+// 「更多」按钮之前插一个自绘图标；点击弹出自绘面板（列表 → 聊天内容两个视图）。
+// 面板自己走 /m/api/subagent.list 与 /m/api/session.history 两个 RPC，
+// 不碰 bundle 的路由／导航栈，也不改它的 React 树（按钮是同层兄弟节点）。
+const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" type="button" aria-label="子代理" title="子代理任务"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5.5" r="2.6"/><circle cx="5" cy="17" r="2.6"/><circle cx="19" cy="17" r="2.6"/><path d="M12 8.1V14M12 14H6.8M12 14h5.2"/></svg></button><script>
+(function () {
+  var btn = document.getElementById('dm-subagent-btn');
+  if (!btn) return;
+
+  var REFRESH_MS = 8000;
+  var panel = null;      // 遮罩节点（.dm-subagent-backdrop）
+  var timer = null;      // 列表自动刷新
+  var view = 'list';     // 'list' | 'chat'
+  var chatSid = '';
+  var lastSessionId = '';
+
+  // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id。
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body);
+          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
+            lastSessionId = body.payload.sessionId;
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, arguments);
+    };
+  }
+
+  function currentSession() {
+    try {
+      var s = new URL(location.href).searchParams.get('session');
+      if (s) return s;
+    } catch (e) {}
+    return lastSessionId;
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-sub-' + Date.now(), payload: payload })
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function excerpt(s, n) {
+    var t = String(s == null ? '' : s).replace(/\\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  }
+  // 事件里的文本内容：content 数组（[{type:'text',text}]）或裸字符串都收下。
+  function textOf(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    var out = [];
+    for (var i = 0; i < content.length; i++) {
+      var p = content[i];
+      if (typeof p === 'string') out.push(p);
+      else if (p && p.type === 'text' && typeof p.text === 'string') out.push(p.text);
+    }
+    return out.join(' ').trim();
+  }
+
+  function el(tag, cls, html) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  }
+
+  // ── 面板骨架：一次性建好，之后只换 body 内容 ─────────────────────────
+  function build() {
+    var back = el('div', 'dm-subagent-backdrop');
+    var sheet = el('div', 'dm-subagent-sheet');
+    var head = el('div', 'dm-subagent-head');
+    var back2 = el('button', 'dm-subagent-back', '← 返回列表');
+    back2.type = 'button';
+    var title = el('div', 'dm-subagent-title', '子代理');
+    var close = el('button', 'dm-subagent-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭');
+    head.appendChild(back2);
+    head.appendChild(title);
+    head.appendChild(close);
+    var body = el('div', 'dm-subagent-body');
+    sheet.appendChild(head);
+    sheet.appendChild(body);
+    back.appendChild(sheet);
+    document.body.appendChild(back);
+
+    back.addEventListener('click', function (e) {
+      if (e.target !== back) return;   // 点面板内部不关
+      closePanel();
+    });
+    close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
+    back2.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (view !== 'list') { view = 'list'; chatSid = ''; renderList(true); }
+    });
+
+    panel = { back: back, sheet: sheet, head: head, title: title, back2: back2, body: body };
+    return panel;
+  }
+
+  function openPanel() {
+    if (!panel) build();
+    panel.back.classList.add('dm-subagent-open');
+    if (view !== 'list') { view = 'list'; chatSid = ''; }
+    renderList(true);
+    startTimer();
+  }
+
+  function closePanel() {
+    stopTimer();
+    if (panel) panel.back.classList.remove('dm-subagent-open');
+  }
+
+  function startTimer() {
+    stopTimer();
+    timer = window.setInterval(function () {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      if (view === 'list') renderList(false);
+      else renderChat();
+    }, REFRESH_MS);
+  }
+  function stopTimer() {
+    if (timer !== null) { window.clearInterval(timer); timer = null; }
+  }
+
+  // ── 列表视图 ──────────────────────────────────────────────────────────
+  function renderList(showLoading) {
+    if (!panel) return;
+    view = 'list';
+    panel.back2.classList.remove('dm-subagent-show');
+    panel.title.textContent = '子代理';
+    if (showLoading) panel.body.innerHTML = '<p class="dm-subagent-hint">加载中…</p>';
+
+    var sid = currentSession();
+    if (!sid) {
+      panel.body.innerHTML = '<p class="dm-subagent-hint">未识别到当前会话</p>';
+      return;
+    }
+    rpc('subagent.list', { parentSessionId: sid }).then(function (res) {
+      if (!panel || view !== 'list') return;
+      var entries = (res && res.ok && res.value && Array.isArray(res.value.entries)) ? res.value.entries : [];
+      var rows = [];
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (!e || e.kind !== 'child') continue;
+        rows.push({ id: String(e.id || ''), label: e.label, activity: e.activity });
+      }
+      panel.title.textContent = '子代理 · ' + rows.length + ' 个';
+      if (rows.length === 0) {
+        panel.body.innerHTML = '<p class="dm-subagent-hint">当前没有子代理</p>';
+        return;
+      }
+      var frag = document.createDocumentFragment();
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k];
+        var running = r.activity === 'running';
+        var row = el('button', 'dm-subagent-row');
+        row.type = 'button';
+        row.setAttribute('data-sid', r.id);
+        row.innerHTML =
+          '<span class="dm-subagent-dot' + (running ? ' dm-subagent-dot-run' : '') + '"></span>' +
+          '<span class="dm-subagent-main">' +
+            '<span class="dm-subagent-label">' + esc(r.label || r.id.slice(0, 8)) + '</span>' +
+            '<span class="dm-subagent-sub">' + (running ? '运行中' : '空闲') + '</span>' +
+          '</span>' +
+          '<span class="dm-subagent-chev">›</span>';
+        frag.appendChild(row);
+      }
+      panel.body.innerHTML = '';
+      panel.body.appendChild(frag);
+    }).catch(function () {
+      if (!panel || view !== 'list') return;
+      panel.body.innerHTML = '<p class="dm-subagent-hint">加载失败</p>';
+    });
+  }
+
+  // ── 聊天内容视图 ──────────────────────────────────────────────────────
+  function renderChat() {
+    if (!panel) return;
+    view = 'chat';
+    panel.back2.classList.add('dm-subagent-show');
+    panel.title.textContent = '子代理 · ' + chatSid.slice(0, 8);
+    panel.body.innerHTML = '<p class="dm-subagent-hint">加载中…</p>';
+
+    // 带上 parentSessionId：宿主读子代理会话必须走 durable 父地址
+    //（{kind:'subagent'}），父 id 由列表视图所在的当前会话直接给出。
+    rpc('session.history', { sessionId: chatSid, maxMessages: 50, parentSessionId: currentSession() }).then(function (res) {
+      if (!panel || view !== 'chat') return;
+      var ok = !!(res && res.ok && res.value);
+      var events = ok && Array.isArray(res.value.events) ? res.value.events : [];
+      var items = [];
+      for (var i = 0; i < events.length; i++) {
+        var ev = events[i] && events[i].event;
+        if (!ev || typeof ev.type !== 'string') continue;
+        var data = (ev.data && typeof ev.data === 'object') ? ev.data : {};
+        if (ev.type === 'user/message') {
+          items.push({ role: 'user', text: excerpt(textOf(data.content), 120) });
+        } else if (ev.type === 'assistant/message') {
+          var m = (data.message && typeof data.message === 'object') ? data.message : data;
+          items.push({ role: 'assistant', text: excerpt(textOf(m.content), 160) });
+        } else if (ev.type === 'tool/call') {
+          items.push({ role: 'tool', text: String(data.name || '工具') });
+        }
+      }
+      if (items.length === 0) {
+        panel.body.innerHTML = '<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>';
+        return;
+      }
+      var frag = document.createDocumentFragment();
+      for (var k = 0; k < items.length; k++) {
+        var it = items[k];
+        var row = el('div', 'dm-subagent-msg dm-subagent-msg-' + it.role);
+        var icon = it.role === 'user' ? '我' : (it.role === 'assistant' ? 'AI' : '⚙');
+        row.innerHTML =
+          '<span class="dm-subagent-who">' + icon + '</span>' +
+          '<span class="dm-subagent-text">' + esc(it.text || '(无文本)') + '</span>';
+        frag.appendChild(row);
+      }
+      panel.body.innerHTML = '';
+      panel.body.appendChild(frag);
+    }).catch(function () {
+      if (!panel || view !== 'chat') return;
+      panel.body.innerHTML = '<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>';
+    });
+  }
+
+  // 行点击：取 data-sid，切成聊天内容视图。
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var row = t.closest('.dm-subagent-row');
+    if (!row) return;
+    var sid = row.getAttribute('data-sid');
+    if (!sid) return;
+    e.preventDefault();
+    chatSid = sid;
+    renderChat();
+  });
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (panel && panel.back.classList.contains('dm-subagent-open')) closePanel();
+    else openPanel();
+  });
+
+  // ── 只在聊天页显示：顶栏右侧含 aria-label="更多" 的按钮即认定为聊天页 ──
+  function slot() {
+    var slots = document.querySelectorAll('.mobile-headerSlot-right');
+    for (var i = 0; i < slots.length; i++) {
+      var s = slots[i];
+      // 聊天页特征：右侧槽里有一个「更多」按钮。
+      var more = s.querySelector('button[aria-label="更多"]');
+      if (more) return { slot: s, more: more };
+    }
+    return null;
+  }
+
+  function ensure() {
+    var found = slot();
+    if (!found) {
+      // 不在聊天页（或顶栏暂未渲染）：把按钮摘下来，避免出现在别的页面。
+      if (btn.parentNode) btn.parentNode.removeChild(btn);
+      return;
+    }
+    if (btn.parentNode !== found.slot) found.slot.insertBefore(btn, found.more);
+    else if (btn.nextSibling !== found.more) found.slot.insertBefore(btn, found.more);
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    window.setTimeout(function () { pending = false; ensure(); }, 60);
+  }
+  try {
+    var mo = new MutationObserver(schedule);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(ensure, 400);
+  ensure();
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -1080,6 +1376,7 @@ function mobilePageHtml() {
     SHEET_CLOSE_HTML,
     EMOJI_ICON_HTML,
     TURN_PILL_HTML,
+    SUBAGENT_BTN_HTML,
     '</body>',
     '</html>',
   ].join('')
@@ -1296,13 +1593,91 @@ export function apply(ctx, config) {
   const sc = () => ctx.sessionController
   const wr = () => ctx.workspaceRegistry
 
-  async function readHistory(sessionId, beforeSeq, maxMessages) {
+  // ── 会话历史读取 ──────────────────────────────────────────────────────────
+  //
+  // 子代理（origin:'subagent'）的会话不能用 {kind:'session', sessionId} 读：
+  // 宿主的 validateAddress 会直接抛 session/agent-busy（"subagent Sessions
+  // require their durable parent address"）—— 于是事件数永远是 0，看上去就像
+  // "读不到"。子代理必须走 durable 父地址：
+  //   {kind:'subagent', parentSessionId, childSessionId, mode}
+  // mode 取 'unknown' 可匹配 one-shot / continuable / external 任意一种，
+  // 省一次目录查询。follow 取 cursor 与 page 取事件用的是同一个 address。
+  //
+  // 子代理 id → 父会话 id。subagent.list 每次返回都会顺手登记（每行自带
+  // parentId），所以面板的「先列子代理、再点开看聊天」路径永远命中缓存，
+  // 从不需要下面的反查扫描。
+  const subagentParent = new Map()
+
+  function recordSubagentParents(rows) {
+    if (!Array.isArray(rows)) return
+    for (const r of rows) {
+      if (r && typeof r.id === 'string' && typeof r.parentId === 'string' && r.parentId !== '') {
+        subagentParent.set(r.id, r.parentId)
+      }
+    }
+  }
+
+  // 认父：① 缓存 ② 调用方给的根会话 id ③ 最后才反查。
+  // 反查只缓存未命中时走一次：遍历当前会话列表逐个 listDescendants 找命中项，
+  // 结果进缓存，同一个子代理只付一次代价。
+  async function parentOfSubagent(childSessionId, hint) {
+    const cached = subagentParent.get(childSessionId)
+    if (cached !== undefined) return cached
+    if (typeof hint === 'string' && hint !== '' && hint !== childSessionId) return hint
+    try {
+      const subagents = typeof ctx.get === 'function' ? ctx.get('subagents') : undefined
+      if (subagents && typeof subagents.listDescendants === 'function') {
+        const { items = [] } = await sc().list({}, new AbortController().signal)
+        for (const it of items) {
+          const root = it && it.sessionId
+          if (typeof root !== 'string' || root === '' || root === childSessionId) continue
+          try {
+            const rows = await subagents.listDescendants(root, new AbortController().signal)
+            recordSubagentParents(rows)
+            if (subagentParent.has(childSessionId)) return subagentParent.get(childSessionId)
+          } catch {}
+        }
+      }
+    } catch {}
+    return undefined
+  }
+
+  // 普通会话一条路走完；子代理若按普通地址读不到（宿主抛 session/agent-busy），
+  // 认父后用 durable 父地址重试一次。已认父时先走父地址，省掉那次注定失败的尝试。
+  async function readHistory(sessionId, beforeSeq, maxMessages, parentHint) {
+    const cached = subagentParent.get(sessionId)
+    const knownParent = cached !== undefined
+      ? cached
+      : (typeof parentHint === 'string' && parentHint !== '' && parentHint !== sessionId ? parentHint : undefined)
+    if (knownParent !== undefined) {
+      const viaParent = await readHistoryAs(beforeSeq, maxMessages, {
+        kind: 'subagent',
+        parentSessionId: knownParent,
+        childSessionId: sessionId,
+        mode: 'unknown',
+      })
+      if (viaParent.events.length > 0) return viaParent
+    }
+    const direct = await readHistoryAs(beforeSeq, maxMessages, { kind: 'session', sessionId })
+    if (direct.events.length > 0 || knownParent !== undefined) return direct
+    const found = await parentOfSubagent(sessionId, parentHint)
+    if (found === undefined) return direct
+    const retry = await readHistoryAs(beforeSeq, maxMessages, {
+      kind: 'subagent',
+      parentSessionId: found,
+      childSessionId: sessionId,
+      mode: 'unknown',
+    })
+    return retry.events.length > 0 ? retry : direct
+  }
+
+  async function readHistoryAs(beforeSeq, maxMessages, address) {
     const controller = sc()
     const signal = new AbortController().signal
     let cursor
     let projections
     try {
-      const frames = controller.follow({ address: { kind: 'session', sessionId } }, signal)
+      const frames = controller.follow({ address }, signal)
       for await (const f of frames) {
         if (f && f.type === 'snapshot') {
           cursor = f.cursor
@@ -1316,7 +1691,7 @@ export function apply(ctx, config) {
     if (cursor === undefined) return { events: [], hasMore: false }
     const page = await controller.page(
       {
-        address: { kind: 'session', sessionId },
+        address,
         throughSeq: cursor,
         ...(beforeSeq === undefined ? {} : { beforeSeq }),
         maxMessages: Math.max(1, Math.min(Number(maxMessages) || 50, 200)),
@@ -1552,7 +1927,11 @@ export function apply(ctx, config) {
       }
       case 'session.history': {
         if (!payload.sessionId) return { ok: false, error: { code: 'bad-request', message: 'sessionId required' } }
-        return { ok: true, value: await readHistory(payload.sessionId, payload.beforeSeq, payload.maxMessages) }
+        const parentHint = typeof payload.parentSessionId === 'string' ? payload.parentSessionId : undefined
+        return {
+          ok: true,
+          value: await readHistory(payload.sessionId, payload.beforeSeq, payload.maxMessages, parentHint),
+        }
       }
       case 'session.prompt': {
         const requestId = `req-${randomBytes(8).toString('hex')}`
@@ -1740,7 +2119,21 @@ export function apply(ctx, config) {
         return { ok: true, value: { presets: [], authorable: false, hasDocument: false } }
       }
       case 'subagent.list': {
-        return { ok: true, value: { entries: [], parentAvailable: false } }
+        const parentSessionId = typeof payload?.parentSessionId === 'string' ? payload.parentSessionId : ''
+        if (parentSessionId === '') return { ok: true, value: { entries: [], parentAvailable: false } }
+        const subagents = typeof ctx.get === 'function' ? ctx.get('subagents') : undefined
+        if (!subagents || typeof subagents.listDescendants !== 'function') {
+          return { ok: true, value: { entries: [], parentAvailable: false } }
+        }
+        try {
+          const rows = await subagents.listDescendants(parentSessionId, new AbortController().signal)
+          // 顺手登记「子代理 id → 父会话 id」：面板点开某行看聊天时要用父地址读，
+          // 这里记住了就免去反查（每行自带 parentId，本函数的入参就是它）。
+          recordSubagentParents(rows)
+          return { ok: true, value: { entries: rows, parentAvailable: rows.length > 0 } }
+        } catch {
+          return { ok: true, value: { entries: [], parentAvailable: false } }
+        }
       }
       // ── 命令 / 搜索 ──
       case 'mobile.commands': {

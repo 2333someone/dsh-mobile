@@ -472,5 +472,228 @@
   line-height: 1 !important;
 }
 
+/* ── 顶栏「子代理」入口 + 自绘面板 ──────────────────────────────────────────
+   按钮由 index.js 的 SUBAGENT_BTN_HTML 注入到聊天页顶栏 .mobile-headerSlot-right
+   里（「更多」按钮之前），复用 bundle 的 .mobile-iconbtn，因此这里只补图标配色
+   与激活态，尺寸／圆角全部沿用 bundle；面板是页面自绘的（不依赖 bundle 的
+   .sheet），但外观对齐它：白底（--bg-surface）圆角上翻、遮罩（--backdrop）
+   可点关闭、底部安全区内缩。z-index 取 60，与 bundle 的 .sheet-backdrop 同层
+   ——两者不会同时打开（点本按钮不经过 bundle 的抽屉），同层可避免被输入框
+   （z-index 50）盖住，也不会压住更高层的 toast。
+   颜色一律走主题变量，深浅主题自动跟随，不再写死色值。 */
+
+/* 图标跟着顶栏文字色（--text-secondary），不抢「更多」按钮的视觉权重。 */
+#dm-subagent-btn {
+  color: var(--text-secondary, #4a4a5a);
+}
+
+/* 遮罩：默认不渲染（display:none），打开时加 .dm-subagent-open。
+   不用 visibility / opacity 是因为面板里挂着 8s 轮询，隐藏期间也要停掉
+   （JS 在关闭时 clearInterval）；display:none 最省事且不吃触摸事件。 */
+.dm-subagent-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 60;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: var(--backdrop, rgba(15, 18, 34, 0.45));
+  animation: dm-subagent-fade 0.18s ease;
+}
+.dm-subagent-backdrop.dm-subagent-open {
+  display: flex;
+}
+@keyframes dm-subagent-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dm-subagent-sheet {
+  display: flex;
+  flex-direction: column;
+  /* 与 .sheet:not(.sheet-full) 一致：最多半屏高，内容在内部滚动。 */
+  max-height: 72vh;
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-bottom: none;
+  border-radius: var(--radius-sheet, 20px) var(--radius-sheet, 20px) 0 0;
+  box-shadow: var(--shadow-lg, 0 8px 28px rgba(16, 24, 40, 0.16));
+  overflow: hidden;
+  animation: dm-subagent-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes dm-subagent-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dm-subagent-backdrop,
+  .dm-subagent-sheet {
+    animation: none !important;
+  }
+}
+
+/* 头部：← 返回列表 / 标题 / ✕ 关闭。返回按钮只在聊天内容视图出现
+   （JS 加 .dm-subagent-show），列表视图下不占位，标题才居中好看。 */
+.dm-subagent-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-subagent-back {
+  display: none;
+  flex: none;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-chip, 10px);
+  background: transparent;
+  color: var(--accent, #6366f1);
+  font-size: var(--text-md, 13px);
+  cursor: pointer;
+}
+.dm-subagent-back.dm-subagent-show {
+  display: inline-flex;
+}
+.dm-subagent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-base, 15px);
+  font-weight: 600;
+  color: var(--text-primary, #1a1a2e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-subagent-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-chip, 10px);
+  background: transparent;
+  color: var(--text-tertiary, #6a6a7a);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 内容区：列表与聊天内容共用，内部滚动，底部留出安全区。 */
+.dm-subagent-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px 8px calc(12px + env(safe-area-inset-bottom, 0px));
+}
+
+.dm-subagent-hint {
+  margin: 0;
+  padding: 22px 12px;
+  text-align: center;
+  color: var(--text-tertiary, #6a6a7a);
+  font-size: var(--text-md, 13px);
+}
+
+/* 列表行：状态圆点 + 名称 + 状态词 + 右侧箭头，整行可点（48px 触控高度）。 */
+.dm-subagent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-card, 14px);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.dm-subagent-row:active {
+  background: var(--fill, rgba(26, 26, 46, 0.05));
+}
+.dm-subagent-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  /* 空闲：灰点，与会话列表里非运行中的状态点同语义。 */
+  background: var(--text-quaternary, #9a9aaa);
+}
+.dm-subagent-dot-run {
+  background: var(--positive, #22c55e);
+}
+.dm-subagent-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dm-subagent-label {
+  font-size: var(--text-base, 15px);
+  color: var(--text-primary, #1a1a2e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-subagent-sub {
+  font-size: var(--text-sm, 12px);
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-subagent-chev {
+  flex: none;
+  color: var(--text-quaternary, #9a9aaa);
+  font-size: 18px;
+}
+
+/* 聊天内容视图：极简时间线，一行一条消息（角色标签 + 文本摘要）。 */
+.dm-subagent-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-card, 14px);
+}
+.dm-subagent-who {
+  flex: none;
+  min-width: 28px;
+  padding: 1px 6px;
+  border-radius: var(--radius-chip, 10px);
+  background: var(--bg-elevated, #f1f1f4);
+  color: var(--text-tertiary, #6a6a7a);
+  font-size: var(--text-xs, 11px);
+  text-align: center;
+}
+.dm-subagent-msg-user .dm-subagent-who {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.1));
+  color: var(--accent, #6366f1);
+}
+.dm-subagent-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-md, 13px);
+  line-height: 1.5;
+  color: var(--text-secondary, #4a4a5a);
+  overflow-wrap: anywhere;
+}
+
 
 
