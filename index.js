@@ -540,6 +540,72 @@ function assetText(name) {
   return asset(name).toString('utf8')
 }
 
+// ── 可见视口高度变量 --dm-vh ──────────────────────────────────────────────
+// 手机端右侧竖向滚动条的第二层根因（第一层是 7729f83 修的 body 站位按钮）。
+//
+// bundle 的根容器（assets/mobile.bundle.js，禁止改）这样写：
+//     #root { height: 100vh; height: 100dvh; }
+// 100dvh 是对的，但**老 WebView（夸克 Quark / 鸿蒙 ArkWeb）不认 dvh**
+// → 整条声明作废 → 落到上一行的 100vh 兜底。而 100vh 是**大视口高度**
+// （地址栏收起时的高度），比当前可见区高 K px，于是 #root 被撑成
+// 「可见高 + K」，文档溢出 K → 视口右侧冒出一条竖向滚动条。
+//
+// 修法：这里算出**实际可见高度**，写进 documentElement 的 --dm-vh，
+// 由 theme.css 的 `height: var(--dm-vh, 100vh)` 覆盖掉那条 100vh 兜底。
+//
+// 必须放在最前面：--dm-vh 要在首帧之前就有值，否则第一帧仍是溢出布局；
+// 本脚本只写 style、不碰 DOM 结构，先跑对后面的注入脚本无副作用。
+//
+// 防键盘抖动（红线）：visualViewport 在地址栏收展、软键盘弹出时高频变化。
+//   ① rAF 合并：一帧内的多次事件只写一次属性；
+//   ② 1px 阈值：变化不足 1px 直接忽略（键盘动画的亚像素抖动全部滤掉）。
+// 只有超阈值才真正触发一次 style 写入 + 重排。
+const VIEWPORT_VH_HTML = `<script>
+(function () {
+  var KEY = '--dm-vh';
+  var THRESHOLD = 1; // px：小于这个变化量就不写，专治键盘/地址栏动画的抖动
+  var last = -1;
+  var frame = 0;
+
+  function measure() {
+    var vv = window.visualViewport;
+    // visualViewport.height 是**当前可见**高度（已扣掉地址栏/键盘）；
+    // 老 WebView 没有 visualViewport 时退回 innerHeight —— 后者在老 WebView
+    // 里也等于可见高度（100vh 之所以偏大，是因为它取的是大视口）。
+    var h = vv && typeof vv.height === 'number' && vv.height > 0 ? vv.height : window.innerHeight;
+    return Math.round(h);
+  }
+
+  function apply() {
+    frame = 0;
+    var h = measure();
+    if (h <= 0) return;
+    if (last >= 0 && Math.abs(h - last) < THRESHOLD) return; // 不显著 → 不写、不重排
+    last = h;
+    document.documentElement.style.setProperty(KEY, h + 'px');
+  }
+
+  // 一帧内的多次事件合并成一次写入。
+  function schedule() {
+    if (frame) return;
+    frame = (window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); })(apply);
+  }
+
+  apply(); // 首帧：必须在 bundle 的 #root 渲染前就把值写好
+
+  window.addEventListener('resize', schedule, { passive: true });
+  window.addEventListener('orientationchange', schedule, { passive: true });
+  if (window.visualViewport) {
+    // 地址栏收展、软键盘弹出都走这里（部分 WebView 上 window.resize 不触发）。
+    window.visualViewport.addEventListener('resize', schedule, { passive: true });
+    window.visualViewport.addEventListener('scroll', schedule, { passive: true });
+  }
+  // 兜底：极老 WebView 上 visualViewport 缺失、resize 也不触发时，
+  // 低频轮询（1s）仍能跟上地址栏收展；阈值保证它平时不产生任何写入。
+  window.setInterval(schedule, 1000);
+})();
+</script>`
+
 // 输入框上方工具行：+ / 模型 / 上下文用量 图标；模型打开底部上滑抽屉。
 // 另：运行中且输入框有文字时，把「停止」按钮改成「发送」（排队发送）。
 const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="模型"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6M9 12h6M9 15h3"/></svg></button><script>
@@ -2533,6 +2599,7 @@ function mobilePageHtml() {
     '<body>',
     '<div id="root"></div>',
     '<script type="module" src="/m/mobile.js"></script>',
+    VIEWPORT_VH_HTML,
     MODEL_BUTTON_HTML,
     SHEET_CLOSE_HTML,
     EMOJI_ICON_HTML,
@@ -4193,7 +4260,17 @@ export function apply(ctx, config) {
     if (st === undefined || st.attemptId !== attemptId || st.revision !== revision) {
       // 换 attempt / 换 revision：上一套状态整块作废（同时把旧的收走，避免 Map 膨胀）。
       if (st !== undefined) streamStates.delete(key)
-      st = { key, attemptId, revision, seen: new Set(), lastIndex: -1, turn: undefined, step: undefined, seq: 0 }
+      st = {
+        key,
+        attemptId,
+        revision,
+        seen: new Set(),
+        lastIndex: -1,
+        turn: undefined,
+        step: undefined,
+        seq: 0,
+        seqBase: 0,
+      }
       streamStates.set(key, st)
       // 兜底上限：异常多的 attemptId 时不让 Map 无界增长。
       if (streamStates.size > 64) {
@@ -4222,6 +4299,12 @@ export function apply(ctx, config) {
       const st = streamStateFor(sessionId, attemptId, revision)
       if (typeof frame.turn === 'number') st.turn = frame.turn
       if (typeof frame.step === 'number') st.step = frame.step
+      // startedAfterSeq = 「这一轮开始时，会话里最后一个已落盘的 seq」。
+      // 合成 chunk 的 seq 必须以它为基准，否则 fold() 按 seq 排序时会把正在生成的
+      // 气泡排到已有历史消息**前面**去（假 seq 从 0 起会闹这个笑话）。
+      if (typeof frame.startedAfterSeq === 'number' && Number.isFinite(frame.startedAfterSeq)) {
+        st.seqBase = frame.startedAfterSeq
+      }
       return undefined
     }
     // end：收尾，丢弃这一轮的状态。不推帧。
@@ -4255,10 +4338,12 @@ export function apply(ctx, config) {
     if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return undefined
     if (typeof chunk.text !== 'string' || chunk.text === '') return undefined
 
-    // 合成 assistant/chunk 事件。seq/time 只用于 bundle 的排序与「最后更新」显示：
-    // 单调递增即可，用 index 做基准确保同一轮内绝对递增。
-    const seq = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index : st.seq + 1
-    st.seq = seq
+    // 合成 assistant/chunk 事件。seq 必须严格落在「历史之后」且轮内单调递增：
+    // bundle 的 fold() 是 `[...e].sort((a,b)=>a.seq-b.seq)`，seq 太小会把气泡排错位置。
+    // 基准 = startedAfterSeq（上一轮最后一个已落盘 seq），偏移 = index+1。
+    const offset = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index + 1 : ++st.seq
+    const seq = st.seqBase + offset
+    if (typeof frame.index === 'number' && Number.isFinite(frame.index)) st.seq = offset
     const time = typeof frame.time === 'number' && Number.isFinite(frame.time) ? frame.time : Date.now()
     const data = { chunk: { type: chunk.type, text: chunk.text } }
     if (st.turn !== undefined) data.turn = st.turn
