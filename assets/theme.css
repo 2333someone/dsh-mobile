@@ -88,6 +88,8 @@
 /* 隐藏 pill 后保住工具行高度，避免上下文用量整体上移 */
 .chat-tools {
   min-height: 40px !important;
+  /* 抬高工具行层级：保证其内部弹出的上下文抽屉不被输入栏盖住 */
+  z-index: 90 !important;
 }
 /* 模型小弹窗：独立居中对话框（脱离聊天流，不再顶动用量） */
 /* composer 的 backdrop-filter 会成为 fixed 后代的定位基准，这里解除它 */
@@ -183,7 +185,8 @@
   top: auto !important;
   width: auto !important;
   min-width: 0 !important;
-  max-height: 50vh !important;
+  min-height: 34vh !important;
+  max-height: 60vh !important;
   overflow-y: auto !important;
   background: var(--bg-surface, #fff) !important;
   border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06)) !important;
