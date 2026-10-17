@@ -246,4 +246,62 @@
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3 4 11h5v10h6V11h5z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
+/* ── 关闭过渡：点空白处收起时，抽屉从上往下缩回（而不是瞬间消失） ──
+   打开是 sheet-up（自下而上滑入），关闭走对称的反向：顶边向下收，
+   整体滑回底部并淡出。JS（index.js 注入）先拦截遮罩点击、加上
+   .dm-closing 播放动画，动画结束后再真正触发关闭。 */
+@keyframes dm-sheet-down {
+  to {
+    transform: translateY(110%);
+  }
+}
+/* 只淡出遮罩的「背景色」，不要用 opacity：opacity 会连抽屉内容一起变透明，
+   滑出过程中会看见底下的聊天内容穿透抽屉。 */
+@keyframes dm-backdrop-out {
+  to {
+    background-color: transparent;
+  }
+}
+.sheet.dm-closing {
+  animation: dm-sheet-down 0.28s cubic-bezier(0.4, 0, 1, 1) both !important;
+  will-change: transform;
+  pointer-events: none !important;
+}
+.sheet-backdrop.dm-closing {
+  animation: dm-backdrop-out 0.28s ease both !important;
+}
+/* 上下文用量在 theme.css 里被改造成同款底部抽屉，关闭走同一套动画 */
+.chat-context-pop.dm-closing {
+  animation: dm-sheet-down 0.28s cubic-bezier(0.4, 0, 1, 1) both !important;
+  will-change: transform;
+  pointer-events: none !important;
+}
+.chat-context-pop-scrim.dm-closing {
+  /* 原背景是 !important，动画改不动它；收起时把底色交给伪元素淡出。 */
+  background: transparent !important;
+}
+.chat-context-pop-scrim.dm-closing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--backdrop, rgba(15, 15, 25, 0.35));
+  animation: dm-backdrop-out-fade 0.28s ease both;
+}
+@keyframes dm-backdrop-out-fade {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet.dm-closing,
+  .chat-context-pop.dm-closing {
+    animation: none !important;
+  }
+  .sheet-backdrop.dm-closing,
+  .chat-context-pop-scrim.dm-closing::after {
+    animation: none !important;
+  }
+}
+
+
 
