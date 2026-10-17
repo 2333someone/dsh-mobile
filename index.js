@@ -3252,18 +3252,23 @@ export function apply(ctx, config) {
   /** deviceId → 该设备正在看的会话集合（生命周期 = SSE 连接）。 */
   const observers = new Map()
 
+  /**
+   * 登记一台设备正在看的会话。
+   *
+   * **这是「在看哪个会话」的赋值，不是累加**：bundle 的
+   * `D.current?.observe(i.kind==='chat' ? i.session.sessionId : undefined)`
+   * 永远只可能是「某一条路由」，所以 observe 到新会话 = 离开旧会话
+   *（与 dsh-palm 的 SessionObserverRegistry.observe 同语义：覆盖登记）。
+   * 旧会话的 follow 任务由 openMux 的 syncTimer 负责摘掉。
+   */
   function addObservation(deviceId, sessionId) {
     let set = observers.get(deviceId)
     if (set === undefined) {
       set = new Set()
       observers.set(deviceId, set)
     }
-    if (set.has(sessionId)) return
-    // 手机上滑换会话：跟进数量必须有界，超了丢最老的一个。
-    if (set.size >= MAX_FOLLOWED_PER_DEVICE) {
-      const oldest = set.values().next().value
-      if (oldest !== undefined) set.delete(oldest)
-    }
+    if (set.size === 1 && set.has(sessionId)) return
+    set.clear()
     set.add(sessionId)
   }
 
@@ -3711,6 +3716,28 @@ export function apply(ctx, config) {
       pending.questions.clear()
     }
   }, 'dsh-mobile: user-questions pending registry')
+
+  /**
+   * session/event 的第二条来源：宿主事件总线（`ctx.on('session/event', …, {global:true})`）。
+   *
+   * 这是 dsh-palm 的关键设计（api-proxy-mux.ts 顶部注释）：必须**一次性全局注册**，
+   * 而不是按会话懒注册，否则「会话变有趣」到「手机开始订阅」之间存在一段空窗，
+   * 那段空窗里的事件没有任何补偿路径，会变成永久空洞。
+   *
+   * 与 follow 并存而不是互相替代：两条同源（follow 内部读的就是这条总线），重复投递
+   * 由每连接的 seq 水位去重掉，不会重复到达手机。两者任一可用即可送达。
+   */
+  ctx.effect(() => {
+    try {
+      return ctx.on('session/event', (session, event) => {
+        if (!session || typeof session.id !== 'string') return
+        if (!event || typeof event !== 'object') return
+        emitMux({ type: 'session/event', sessionId: session.id, event })
+      }, { global: true })
+    } catch {
+      return undefined // 总线不可用：follow 仍在提供 session/event
+    }
+  }, 'dsh-mobile: sse session event bus')
 
   // ── SSE 实时面：会话投影（session/projection）← sessionController.control() ───
   //

@@ -222,6 +222,18 @@
 body:has(> #dm-model-btn) #dm-model-btn {
   display: none !important;
 }
+/* 同一手法覆盖后加入的两个「先写进 body 再搬位」站位按钮：
+   #dm-perm-btn（权限，c7b56ae 引入）与 #dm-subagent-btn（子代理，da491de 引入）。
+   两者在各自的注入脚本里只被搬进聊天页的目标容器（#dm-tools / 顶栏右侧槽）；
+   一旦不在聊天页、或目标容器还没渲染出来，它们就留在 <body> 文档流末尾，
+   以自身高度把 <html> 撑到「视口高 + H」—— 这正是 33d41ce 只挡住
+   #dm-model-btn 之后滚动条仍然复现的原因。
+   用 :has(>) 精确命中「还在 body 流里的那个实例」：被搬进目标容器后选择器
+   自然失效，聊天页上的显示与点击完全不受影响。 */
+body:has(> #dm-perm-btn) #dm-perm-btn,
+body:has(> #dm-subagent-btn) #dm-subagent-btn {
+  display: none !important;
+}
 #dm-tools {
   flex: none;
   display: flex;
