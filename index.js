@@ -518,15 +518,127 @@ export function apply(ctx, config) {
       case 'mobile.pending': {
         return { ok: true, value: { approvals: [], questions: [] } }
       }
-      // 手机端设置/诊断类控制项：给安全空值，避免点开就弹错。
+      // ── 设置页 ──
+      case 'settings.read':
+      case 'settings.describe': {
+        const settings = typeof ctx.get === 'function' ? ctx.get('settings') : undefined
+        if (!settings || typeof settings.describe !== 'function') {
+          return { ok: true, value: { writable: false, hasDocument: false, namespaces: [] } }
+        }
+        let list
+        try {
+          list = settings.describe({ redactSecrets: true })
+        } catch {
+          list = []
+        }
+        const namespaces = (Array.isArray(list) ? list : []).map((d) => ({
+          ns: d.ns,
+          schema: d.schema,
+          value: d.value,
+          ...(d.base !== undefined ? { base: d.base } : {}),
+          ...(d.user !== undefined ? { user: d.user } : {}),
+          applies: d.applies || 'live',
+          secrets: Array.isArray(d.secrets) ? d.secrets : [],
+          revision: d.revision,
+        }))
+        return { ok: true, value: { writable: false, hasDocument: false, namespaces } }
+      }
+      case 'settings.mutate': {
+        return { ok: false, error: { code: 'not-found', message: '设置项不可用' } }
+      }
+      // ── 设备管理 ──
+      case 'pair.devices': {
+        const list = [...devices.entries()].map(([deviceId, d]) => ({
+          deviceId,
+          name: d.name || '设备',
+          createdAt: d.createdAt,
+          lastSeenAt: d.lastSeenAt,
+          userAgent: d.userAgent || '',
+          primary: d.primary === true,
+        }))
+        return { ok: true, value: { devices: list, maxDevices: MAX_DEVICES } }
+      }
+      case 'pair.revoke': {
+        const removed = devices.delete(String(payload.deviceId || ''))
+        if (removed) persistDevices(cfg.devicesFile, devices)
+        return { ok: true, value: { removed } }
+      }
+      case 'pair.rename': {
+        const d = devices.get(String(payload.deviceId || ''))
+        if (!d) return { ok: false, error: { code: 'not-found', message: '设备不存在' } }
+        const name = String(payload.name || '').trim().slice(0, 40)
+        if (name !== '') d.name = name
+        persistDevices(cfg.devicesFile, devices)
+        return { ok: true, value: { ok: true } }
+      }
+      case 'pair.setPrimary': {
+        const target = String(payload.deviceId || '')
+        if (!devices.has(target)) return { ok: false, error: { code: 'not-found', message: '设备不存在' } }
+        for (const [, d] of devices) d.primary = false
+        devices.get(target).primary = true
+        persistDevices(cfg.devicesFile, devices)
+        return { ok: true, value: { ok: true } }
+      }
+      // ── 预设 / 子代理 ──
+      case 'agentPreset.list': {
+        return { ok: true, value: { presets: [], authorable: false, hasDocument: false } }
+      }
+      case 'subagent.list': {
+        return { ok: true, value: { entries: [], parentAvailable: false } }
+      }
+      // ── 命令 / 搜索 ──
+      case 'mobile.commands': {
+        return { ok: true, value: { items: [] } }
+      }
+      case 'mobile.commandExec': {
+        return { ok: false, error: { code: 'not-supported', message: '命令执行暂未开放' } }
+      }
+      case 'mobile.searchAll':
+      case 'mobile.searchMessages': {
+        return { ok: true, value: { items: [], hasMore: false } }
+      }
+      // ── 通知 / 推送 ──
+      case 'mobile.notifyEvents': {
+        return { ok: true, value: { items: [] } }
+      }
+      case 'push.config': {
+        return { ok: true, value: { channels: {} } }
+      }
+      case 'push.subscribe':
+      case 'push.unsubscribe': {
+        return { ok: true, value: { ok: true } }
+      }
+      // ── 语音 / 附件 / 文件 ──
+      case 'mobile.voiceServices': {
+        return { ok: true, value: { services: [] } }
+      }
+      case 'mobile.transcribe': {
+        return { ok: false, error: { code: 'unavailable', message: '语音转写暂未开放' } }
+      }
+      case 'mobile.readAttachment': {
+        return { ok: false, error: { code: 'unavailable', message: '附件读取暂未开放' } }
+      }
+      case 'mobile.readFile': {
+        return { ok: false, error: { code: 'unavailable', message: '文件预览暂未开放' } }
+      }
+      case 'mobile.listDirectory': {
+        return { ok: true, value: { entries: [] } }
+      }
+      case 'mobile.previews': {
+        return { ok: true, value: {} }
+      }
+      case 'mobile.readChat': {
+        return { ok: false, error: { code: 'unavailable', message: '折叠会话读取不可用' } }
+      }
+      case 'mobile.respond': {
+        return { ok: true, value: { accepted: false, reason: 'not-pending' } }
+      }
+      // ── 诊断 ──
       case 'mobile.latestVersion': {
         return { ok: true, value: { latest: '0.1.0', isNewer: false } }
       }
       case 'mobile.usage': {
         return { ok: true, value: { providers: [] } }
-      }
-      case 'settings.describe': {
-        return { ok: true, value: { writable: false, hasDocument: false, namespaces: [] } }
       }
       case 'mobile.error':
       case 'mobile.perf':
