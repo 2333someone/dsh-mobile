@@ -311,5 +311,18 @@
   display: none;
 }
 
+/* ── 会话行外圈：与工作区卡片（.mobile-row）同款描边 + 圆角 ────────────
+    会话行复用同一个 .mobile-row，但被 .mobile-row-swipe 包着；bundle 里
+    .mobile-row-swipe .mobile-row 把 border-radius 归零（滑动露出删除按钮时
+    边缘才齐平），于是会话行看着是「只有淡阴影的白卡片」，没有描边。
+    这里只在滑动行内部把圆角按 --radius-card 补回来，并按 .mobile-row 的
+    border: 1px solid var(--card-border) 画一圈——不复制工作区卡片左侧的
+    accent 竖条（.mobile-row-active::before），只对齐外圈。
+    .mobile-row-swipe 只在会话列表里出现，不影响设置/目录/搜索结果行。 */
+.mobile-row-swipe .mobile-row {
+  border: 1px solid var(--card-border, #e8e8ed) !important;
+  border-radius: var(--radius-card, 14px) !important;
+}
+
 
 
