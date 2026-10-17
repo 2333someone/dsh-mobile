@@ -367,6 +367,26 @@ async function queryOfficialBalance(apiKey) {
 }
 
 // 从宿主 `deepseekAccount` 服务读取平台登录态下的余额，返回 Row（展示串）或 undefined。
+// getBalance 要求 AccountClientMetadata 三个必填字段；宿主据此派生平台请求头。
+async function readAccountBalance(ctx) {
+  const account = typeof ctx.get === 'function' ? ctx.get('deepseekAccount') : undefined
+  if (account === undefined || typeof account.getBalance !== 'function') return undefined
+  const client = {
+    version: 'dsh-mobile',
+    locale: 'zh',
+    // AccountClientMetadata.timezoneOffsetSeconds：UTC 以东为正，JS 的 getTimezoneOffset() 符号相反。
+    timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+  }
+  let result
+  try {
+    result = await account.getBalance(client)
+  } catch {
+    return undefined
+  }
+  if (!result || result.status !== 'ready') return undefined
+  // 钱包本身就是 {currency, balance}；拼串后原始对象不再外流。
+  return balanceRow(result.value) ?? balanceRow(result.bonusWallets)
+}
 
 // ── assets ──────────────────────────────────────────────────────────────────
 const assetCache = new Map()
@@ -648,25 +668,30 @@ const EMOJI_ICON_HTML = `<script>
       done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
       warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>'
     };
-    // [emoji 序列, 图标 key]：只精确匹配这些序列，做模糊匹配会误伤正文。
+    // [emoji 序列, 图标 key, 作用域 class]：只精确匹配这些序列（含 FE0F 变体选择器），
+    // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
+    // 📨👥🧩🔔⏰⚙️🔌🎯）都不会被替换。
     var MAP = [
-      ['\\u{1F50D}', 'search'],
-      ['\\u{1F4C2}', 'read'],
-      ['\\u2699\\uFE0F', 'gear'],
-      ['\\u2699', 'gear'],
-      ['\\u270F\\uFE0F', 'pencil'],
-      ['\\u270F', 'pencil'],
-      ['\\u{1F4BB}', 'code'],
-      ['\\u{1F527}', 'tool'],
-      ['\\u23F3', 'running'],
-      ['\\u274C', 'failed'],
-      ['\\u23F9\\uFE0F', 'stopped'],
-      ['\\u23F9', 'stopped'],
-      ['\\u2705', 'done'],
-      ['\\u2714\\uFE0F', 'done'],
-      ['\\u2714', 'done'],
-      ['\\u26A0\\uFE0F', 'warning'],
-      ['\\u26A0', 'warning']
+      // 工具步骤行：search / read / bash / write|edit / code / 其它
+      ['\\u{1F50D}', 'search', 'chat-tool-lead'],
+      ['\\u{1F4C2}', 'read', 'chat-tool-lead'],
+      ['\\u2699\\uFE0F', 'gear', 'chat-tool-lead'],
+      ['\\u2699', 'gear', 'chat-tool-lead'],
+      ['\\u270F\\uFE0F', 'pencil', 'chat-tool-lead'],
+      ['\\u270F', 'pencil', 'chat-tool-lead'],
+      ['\\u{1F4BB}', 'code', 'chat-tool-lead'],
+      ['\\u{1F527}', 'tool', 'chat-tool-lead'],
+      // 过程卡状态符号：运行 / 失败 / 中断 / 完成
+      ['\\u23F3', 'running', 'chat-proc-lead'],
+      ['\\u274C', 'failed', 'chat-proc-lead'],
+      ['\\u23F9\\uFE0F', 'stopped', 'chat-proc-lead'],
+      ['\\u23F9', 'stopped', 'chat-proc-lead'],
+      ['\\u2705', 'done', 'chat-proc-lead'],
+      ['\\u2714\\uFE0F', 'done', 'chat-proc-lead'],
+      ['\\u2714', 'done', 'chat-proc-lead'],
+      // 报错计数「⚠ N 处报错」
+      ['\\u26A0\\uFE0F', 'warning', 'chat-proc-errors'],
+      ['\\u26A0', 'warning', 'chat-proc-errors']
     ];
 
     function makeIcon(key) {
@@ -683,6 +708,20 @@ const EMOJI_ICON_HTML = `<script>
       return svg;
     }
 
+    // 向上找祖先：命中 scope class 才算在目标容器内（React 会把 class 挂在 span 上，
+    // 容器自身也可能带多个 class，这里用 classList.contains 精确判断）。
+    function inScope(node, scope) {
+      var p = node.parentNode;
+      var guard = 0;
+      while (p && guard++ < 12) {
+        if (p.classList && p.classList.contains(scope)) return true;
+        var cls = p.getAttribute && p.getAttribute('class');
+        if (typeof cls === 'string' && cls.split(/\s+/).indexOf(scope) >= 0) return true;
+        p = p.parentNode;
+      }
+      return false;
+    }
+
     // 单个文本节点：命中就切出该 emoji 换成 <svg>，剩余文本继续扫，直到没有命中。
     function scanNode(node) {
       var guard = 0;
@@ -691,6 +730,7 @@ const EMOJI_ICON_HTML = `<script>
         var seq = null;
         var key = null;
         var at = -1;
+        var scope = null;
         for (var i = 0; i < MAP.length; i++) {
           var idx = text.indexOf(MAP[i][0]);
           if (idx < 0) continue;
@@ -699,7 +739,13 @@ const EMOJI_ICON_HTML = `<script>
             at = idx;
             seq = MAP[i][0];
             key = MAP[i][1];
+            scope = MAP[i][2];
           }
+        }
+        if (seq && scope && !inScope(node, scope)) {
+          // 命中了序列但不在目标容器里（正文/通知等）：跳过，别替换。
+          seq = null;
+          key = null;
         }
         if (!seq) {
           node.dmIconDone = 1;
@@ -760,6 +806,190 @@ const EMOJI_ICON_HTML = `<script>
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
     schedule();
   } catch (e) {}
+})();
+</script>`
+
+// 轮次药丸（.chat-jump-turns）改造：
+//  1) 把 label 里的 "/" 文本节点换成一条短横线（.dm-turn-sep），两个数字分别
+//     包进 .dm-turn-cur / .dm-turn-total —— 配合 theme.css 的 flex 纵向堆叠，
+//     读起来就是「当前在上、横线、总数在下」。
+//  2) 关掉长按刮擦：在捕获阶段吞掉该按钮的 pointerdown/move/up/cancel/
+//     lostpointercapture，bundle 的 wr/Tr/Er/Dr 完全收不到事件。
+//     但打开清单的 setState（dn）在模块闭包里，脚本调不到；而 bundle 的
+//     onClick 只在 e.detail===0（键盘）时才 dn(!0)。于是「点击」改为：
+//     给按钮打上 data-dm-bypass 让拦截器放行一轮，再派发一对合成的
+//     pointerdown/pointerup（同一坐标 = 未移动），Er 就会走 !t.moved 分支
+//     调 dn(!0) 打开轮次清单。全程 try/catch，失败只退化为「点不开」，
+//     不会报错、也不会恢复刮擦。
+const TURN_PILL_HTML = `<script>
+(function () {
+  var PILL = '.chat-jump-turns';
+  var LABEL = '.chat-jump-turns-label';
+  var SEP = 'dm-turn-sep';
+  var POINTER_EVENTS = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture'];
+  var done = new WeakSet();
+
+  function pillOf(node) {
+    return node && node.closest ? node.closest(PILL) : null;
+  }
+
+  // ── 1) 分隔线：把 "/" 换成横线元素 ───────────────────────────────────
+  // bundle 渲染的是「当前轮」「/」「总轮」三个文本节点；React 只会改文本
+  // 节点的 data，不会重建它们，所以替换一次即可长期有效。数字变化后重跑
+  // 也只是把同样的结构再确认一遍（幂等）。
+  function decorate(label) {
+    if (!label || done.has(label)) return;
+    var sep = label.querySelector('.' + SEP);
+    if (sep) { done.add(label); return; }
+    var texts = [];
+    for (var i = 0; i < label.childNodes.length; i++) {
+      var n = label.childNodes[i];
+      if (n.nodeType === 3) texts.push(n);
+    }
+    if (texts.length < 3) return; // 结构不是 [cur, "/", total]，不动
+
+    var cur = texts[0];
+    var slash = texts[1];
+    var total = texts[texts.length - 1];
+
+    // 数字各包一层 span（顺便把 tabular-nums 用上，避免位数变化时抖动）
+    var curSpan = document.createElement('span');
+    curSpan.className = 'dm-turn-cur';
+    curSpan.textContent = cur.nodeValue || '';
+    var totalSpan = document.createElement('span');
+    totalSpan.className = 'dm-turn-total';
+    totalSpan.textContent = total.nodeValue || '';
+
+    var sepSpan = document.createElement('span');
+    sepSpan.className = SEP;
+    sepSpan.setAttribute('aria-hidden', 'true');
+
+    // 顺序：当前 → 横线 → 总数；中间的 "/" 与其它文本节点清空（保留节点，
+    // 免得 React 按索引更新时对不上）。
+    label.replaceChild(curSpan, cur);
+    slash.nodeValue = '';
+    if (total !== slash) total.nodeValue = '';
+    for (var j = 0; j < texts.length; j++) {
+      var t = texts[j];
+      if (t !== cur && t !== slash && t !== total) t.nodeValue = '';
+    }
+    label.insertBefore(sepSpan, total.parentNode === label ? total : null);
+    label.replaceChild(totalSpan, total);
+
+    // 上面的 insertBefore 在 total 之前插入，但 flex 纵向容器里空文本节点
+    // 不占位；再兜一层：确保 DOM 顺序是 curSpan, sepSpan, totalSpan。
+    if (curSpan.nextSibling !== sepSpan) label.insertBefore(sepSpan, curSpan.nextSibling);
+    if (sepSpan.nextSibling !== totalSpan) label.appendChild(totalSpan);
+
+    done.add(label);
+
+    // 数字变化：React 改的是 span 里的文本，用 characterData 观察不到了，
+    // 但 span 引用不变，无需处理；真正会重建的是 label 本身（整块重渲染），
+    // 那时 MutationObserver 会拿到新节点重新 decorate。
+  }
+
+  function scan() {
+    try {
+      var labels = document.querySelectorAll(LABEL);
+      for (var i = 0; i < labels.length; i++) decorate(labels[i]);
+      var pills = document.querySelectorAll(PILL);
+      for (var k = 0; k < pills.length; k++) {
+        var p = pills[k];
+        if (!p.getAttribute('title')) p.setAttribute('title', '点按查看轮次清单');
+      }
+    } catch (e) {}
+  }
+
+  // ── 2) 关掉刮擦手势 ─────────────────────────────────────────────────
+  for (var e = 0; e < POINTER_EVENTS.length; e++) {
+    document.addEventListener(POINTER_EVENTS[e], function (event) {
+      var pill = pillOf(event.target);
+      if (!pill) return;
+      if (pill.getAttribute('data-dm-bypass') === '1') return; // 放行一次
+      // 只掐掉 bundle 的手势逻辑；原生默认行为（焦点、滚动）不受影响。
+      event.stopImmediatePropagation();
+    }, true);
+  }
+
+  // ── 3) 点击 = 打开轮次清单 ──────────────────────────────────────────
+  // bundle 的 Er 在「未移动」的 pointerup 上调 dn(!0)。合成的 pointer 事件
+  // 需要 pointerId/isPrimary 等字段，老浏览器没有 PointerEvent 构造器的
+  // 话就直接放弃（此时单击无反应，但刮擦仍已禁用）。
+  var canSynthesize = typeof window.PointerEvent === 'function';
+
+  function fireTap(pill) {
+    if (!canSynthesize) return false;
+    try {
+      var r = pill.getBoundingClientRect();
+      var x = Math.round(r.left + r.width / 2);
+      var y = Math.round(r.top + r.height / 2);
+      var opts = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        buttons: 1,
+      };
+      pill.setAttribute('data-dm-bypass', '1');
+      try {
+        pill.dispatchEvent(new PointerEvent('pointerdown', opts));
+        opts.buttons = 0;
+        pill.dispatchEvent(new PointerEvent('pointerup', opts));
+      } finally {
+        pill.removeAttribute('data-dm-bypass');
+      }
+      return true;
+    } catch (err) {
+      try { pill.removeAttribute('data-dm-bypass'); } catch (e2) {}
+      return false;
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    var pill = pillOf(event.target);
+    if (!pill) return;
+    // 键盘触发（detail===0）时 bundle 自己会 dn(!0)，不要重复派发。
+    if (event.detail === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    fireTap(pill);
+  }, true);
+
+  // ── 观察 DOM，药丸出现 / 重渲染后重新处理 ────────────────────────────
+  try {
+    var mo = new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var rec = records[i];
+        if (rec.type === 'characterData') {
+          // 数字文本变了：找到所属 label，重新对齐结构（幂等，已处理会跳过）。
+          var label = rec.target.parentNode;
+          if (label && label.closest) {
+            var l = label.closest(LABEL);
+            if (l) {
+              done.delete(l);
+              decorate(l);
+            }
+          }
+        }
+      }
+      scan();
+    });
+    mo.observe(document.documentElement || document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  } catch (e) {
+    setInterval(scan, 500);
+  }
+  setInterval(scan, 300);
+  scan();
 })();
 </script>`
 
