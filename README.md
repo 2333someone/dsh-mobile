@@ -1,38 +1,28 @@
 # dsh-mobile
 
-**掌上 dsh** —— dsh 的独立手机端插件：在 dsh **设置页**提供「掌上 dsh」面板（出码配对、设备管理、访问地址），手机端通过 `/m/` 页面浏览工作区/会话并发消息。可经公网反代访问。
+**掌上 dsh** —— dsh 的手机端插件。手机页面直接复用 [dsh-palm](https://github.com/Eternalloveone/dsh-palm) 的完整手机 UI（独立 React bundle：会话列表、聊天页、工具卡、推理块、Markdown/代码块、模型选择等），由本插件按 dsh 0.2.1 的原生服务实现它期望的 `/m/api/<method>` RPC 协议。
 
-设计语言对齐 dsh：DeepSeek 品牌蓝 `#4D6BFE`、亮/暗双主题、大圆角排版。图标为原创（品牌火花 + 听筒轮廓）。
+> dsh-palm 的 host 端在 0.2.1 已不可用（`settings.installSection` 被移除），因此只复用它的**手机 bundle 与 PWA 资源**（Apache-2.0，见 [NOTICE](NOTICE)），host 侧重写。
 
-## 能力（v0.1）
+## 能力
 
-- **dsh 设置页「掌上 dsh」面板**（客户端 `settings.section`）：
-  - 展示访问地址（局域网 + 公网）
-  - 生成 6 位配对码（桌面出码）
-  - 已配对设备列表 + 撤销
-- **`/m/` 手机页面** —— 未配对输入 6 位码；已配对进入工作区/会话/聊天 UI。
-- **6 位码配对** —— 桌面出码 → 手机输码 → 宿主机校验后下发 HttpOnly 设备 cookie（5 分钟有效，一次性）。
-- **工作区 / 会话浏览 + 发消息** —— 按工作区分组，读取会话历史并轮询刷新，手机端发送 prompt（`sessionController.prompt` 排队模式）。
-- **零运行时 npm 依赖**（host 端只依赖 dsh 注入的服务；客户端用浏览器内置 React）。
+- **完整手机端 UI**（dsh-palm bundle）：`/m/` 聊天页、会话/工作区浏览、模型选择、工具卡与推理块展示。
+- **6 位码配对**：桌面 dsh 设置页「掌上 dsh」出码 → 手机 `/m/` 输码 → HttpOnly 设备 cookie。
+- **RPC 协议**：`POST /m/api/<method>`（`{rpcId, payload}` → `{type:'server-response', rpcId, result}`），已实现 `session.list/history/prompt/create/models/selectModel/rename/cancel/updateQueue/search` 与 `workspace.list/create/rename/delete/archiveSession`。
+- **双 HTTP 面**：GUI 的 webServer（回环，供设置面板）+ 独立监听 `0.0.0.0:19387`（手机/局域网/公网反代）。
+- **设置页面板**：dsh 设置 →「掌上 dsh」：访问地址、生成配对码、设备撤销。
 
 ## 安装
 
-在 Harness 内用插件管理器安装本目录（bundle）；或 `plugin_manager install_bundle` 指向本目录。安装后**刷新一次 dsh 页面**（客户端模块按需打包，需重新加载才会注册设置段）。
+`plugin_manager install_bundle` 指向本目录。安装后**刷新一次 dsh 页面**以加载客户端设置段。
 
-## 配对流程
+## 使用
 
-1. 电脑上打开 dsh **设置 → 掌上 dsh**，点「生成配对码」，记下 6 位码。
-2. 手机浏览器打开 `/m/`（见面板里的访问地址），输入这 6 位码点「配对」。
-3. 配对成功，手机自动进入应用。
+1. 电脑：dsh **设置 → 掌上 dsh** →「生成配对码」。
+2. 手机：打开 `http://<主机IP>:19387/m/`（或公网地址），输入 6 位码。
+3. 配对后进入完整聊天界面。
 
-## 公网访问
-
-本插件只挂在 dsh 现有的 `webServer` 上，**不改变其绑定**。公网可达需要部署侧满足两点：
-
-1. dsh 的 webserver 绑定 `0.0.0.0`（在 profile patch 里覆盖 `@deepseek-ai/dsh-host-webserver` 的 `host`/`port`）。
-2. 反向代理把公网域名转发到该宿主机端口（已有 Lucky 反代 `https://dshm.elysia.xin:45632` → 后端 `192.168.3.45:19387` 时可复用）。
-
-`publicBaseUrl` 配置项用于在设置面板展示公网地址（不参与安全判定）。
+公网：本插件监听 `0.0.0.0:19387`，已有反代（如 `https://dshm.elysia.xin:45632` → `192.168.3.45:19387`）可直接复用，无需改 GUI 的绑定与动态端口。
 
 ## 配置
 
@@ -41,10 +31,18 @@
   name: 'dsh-mobile'
   config:
     enabled: true
-    publicBaseUrl: 'https://dshm.elysia.xin:45632'   # 可选，仅展示
-    devicesFile: ''                                   # 可选，默认 ~/.dsh/dsh-mobile-devices.json
+    mobilePort: 19387
+    mobileHost: '0.0.0.0'
+    publicBaseUrl: 'https://dshm.elysia.xin:45632'
+    devicesFile: ''   # 默认 ~/.dsh/dsh-mobile-devices.json
 ```
+
+## 已知限制（相对 dsh-palm 原版）
+
+- **实时推送未接**：`/m/api/events.mux` / `events.notify` 返回 404，手机端退回轮询（原版 README 所述 fallback）；消息不丢，但不如原版即时。
+- **审批/提问应答未接**：`respond` 方法未实现，手机端无法替 agent 确认工具调用/回答 ask_user_question；这类轮次需在桌面处理。
+- 手机端设备管理页（`pair.devices` 等本地方法）未接，设备管理请在桌面设置页操作。
 
 ## License
 
-MIT
+MIT（插件代码）；手机 bundle 与 PWA 资源来自 dsh-palm，Apache-2.0，见 NOTICE。

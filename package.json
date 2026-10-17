@@ -1,7 +1,7 @@
 {
   "name": "dsh-mobile",
   "version": "0.1.0",
-  "description": "掌上 dsh —— 独立移动端页面：6 位码配对、设备信任、工作区/会话浏览与手机发消息，可经公网反代访问。",
+  "description": "掌上 dsh —— 手机端完整聊天界面（复用 dsh-palm 手机 bundle）：6 位码配对、设备信任、工作区/会话/聊天，可经公网反代访问。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -17,9 +17,13 @@
     "cordis.patch.yml",
     "locale/*.json",
     "assets/icon.svg",
-    "assets/mobile.html",
+    "assets/mobile.bundle.js",
+    "assets/icon-192.png",
+    "assets/icon-512.png",
+    "assets/apple-touch-icon.png",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "license": "MIT",
   "private": true,

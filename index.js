@@ -1,16 +1,18 @@
 /**
- * dsh-mobile —— 掌上 dsh（host 半 + 客户端设置页）。
+ * dsh-mobile —— 掌上 dsh。
+ *
+ * 手机端「照搬 dsh-palm」：直接复用它的独立手机 bundle（React 内联、挂 #root），
+ * 由本插件实现它期望的 /m/api/<method> RPC 协议（会话/工作区/模型/历史等）。
+ * dsh-palm 的 host 端在 0.2.1 已不可用（settings.installSection 被移除），所以
+ * 只复用它的手机 bundle，host 侧按 0.2.1 原生服务重写。
  *
  * 双 HTTP 面：
- * - 共享 webServer（回环）：/m/ 页面 + /m/api —— 供桌面 GUI 设置面板同源调用。
- * - 独立监听 0.0.0.0:<mobilePort>（默认 19387）：同一套路由 —— 供手机/局域网/
- *   公网反代访问。不依赖 GUI 的动态端口与绑定，LAN 开箱即用。
+ * - 共享 webServer（回环）：供桌面 GUI 设置面板同源调用。
+ * - 独立监听 0.0.0.0:<mobilePort>（默认 19387）：供手机/局域网/公网反代访问。
  *
- * 配对（dsh-palm 方向）：桌面设置页「生成配对码」→ 手机在 /m/ 输入该 6 位码
- * → 宿主机校验后下发 HttpOnly 设备 cookie。一次性 token，5 分钟过期。
+ * 配对：桌面设置页出 6 位码 → 手机输码 → HttpOnly 设备 cookie。
  *
- * 客户端设置页（client.js）在 dsh 设置面板注册「掌上 dsh」段：出码、设备管理、
- * 访问地址展示。
+ * 手机 bundle 与 PWA 资源来自 dsh-palm（Apache-2.0），见 NOTICE。
  */
 import { createServer } from 'node:http'
 import { randomBytes, randomInt } from 'node:crypto'
@@ -25,12 +27,19 @@ export const inject = ['webServer', 'sessionController', 'workspaceRegistry']
 const COOKIE_NAME = 'dsh_mobile'
 const MOBILE_ROOT = '/m/'
 const API_PREFIX = '/m/api'
-const ICON_PATH = '/m/icon.svg'
+const BUNDLE_URL = '/m/mobile.js'
+const MANIFEST_URL = '/m/manifest.webmanifest'
+const ICON_SVG_URL = '/m/icon.svg'
+const ICON_192_URL = '/m/icon-192.png'
+const ICON_512_URL = '/m/icon-512.png'
+const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
 const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
 const MAX_DEVICES = 16
 const DEFAULT_MOBILE_PORT = 19387
+const SMALL_BODY = 64 * 1024
+const PROMPT_BODY = 2 * 1024 * 1024
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -57,14 +66,18 @@ function sendText(res, status, type, text) {
   send(res, status, { 'Content-Type': type }, text)
 }
 
-function readBody(req, maxBytes = 1 << 20) {
+function sendBuffer(res, status, type, buf) {
+  send(res, status, { 'Content-Type': type, 'Cache-Control': 'public, max-age=3600' }, buf)
+}
+
+function readBody(req, maxBytes = SMALL_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0
     const chunks = []
     req.on('data', (c) => {
       size += c.length
       if (size > maxBytes) {
-        reject(new Error('request body too large'))
+        reject(new Error('body too large'))
         req.destroy()
         return
       }
@@ -75,13 +88,13 @@ function readBody(req, maxBytes = 1 << 20) {
   })
 }
 
-async function readJsonBody(req) {
-  const raw = await readBody(req)
+async function readJsonBody(req, budget = SMALL_BODY) {
+  const raw = await readBody(req, budget)
   if (!raw) return {}
   try {
     return JSON.parse(raw)
   } catch {
-    throw new Error('invalid JSON body')
+    throw new Error('invalid json body')
   }
 }
 
@@ -107,7 +120,6 @@ function lanIPv4Addresses() {
     .flat()
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => i.address)
-    // 169.254.0.0/16 是 APIPA 链路本地地址，手机连不上，别展示。
     .filter((a) => !a.startsWith('169.254.'))
 }
 
@@ -138,10 +150,9 @@ function persistDevices(file, devices) {
   }
 }
 
-// ── message text extraction ─────────────────────────────────────────────────
+// ── message text extraction (fallback simple API) ───────────────────────────
 function textOfEventData(data) {
   if (!data || typeof data !== 'object') return ''
-  // assistant/message wraps the message as { message, stream, usage }
   const msg = 'message' in data ? data.message : data
   if (!msg || !Array.isArray(msg.content)) return ''
   return msg.content
@@ -150,21 +161,58 @@ function textOfEventData(data) {
     .join('')
 }
 
-// ── assets (read lazily, cached) ────────────────────────────────────────────
-let mobileHtmlCache
-function mobileHtml() {
-  if (mobileHtmlCache === undefined) {
-    mobileHtmlCache = readFileSync(join(__dirname, 'assets', 'mobile.html'), 'utf8')
+// ── assets ──────────────────────────────────────────────────────────────────
+const assetCache = new Map()
+function asset(name) {
+  if (!assetCache.has(name)) {
+    assetCache.set(name, readFileSync(join(__dirname, 'assets', name)))
   }
-  return mobileHtmlCache
+  return assetCache.get(name)
+}
+function assetText(name) {
+  return asset(name).toString('utf8')
 }
 
-let iconSvgCache
-function iconSvg() {
-  if (iconSvgCache === undefined) {
-    iconSvgCache = readFileSync(join(__dirname, 'assets', 'icon.svg'), 'utf8')
-  }
-  return iconSvgCache
+function mobilePageHtml() {
+  return [
+    '<!doctype html>',
+    '<html lang="zh-CN">',
+    '<head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">',
+    '<meta name="theme-color" content="#f5f5f7">',
+    '<meta name="referrer" content="no-referrer">',
+    '<meta name="mobile-web-app-capable" content="yes">',
+    '<meta name="apple-mobile-web-app-capable" content="yes">',
+    '<meta name="apple-mobile-web-app-title" content="dsh">',
+    '<link rel="manifest" href="/m/manifest.webmanifest">',
+    '<link rel="apple-touch-icon" href="/m/apple-touch-icon.png">',
+    '<link rel="icon" href="/m/icon.svg">',
+    '<title>dsh</title>',
+    '</head>',
+    '<body>',
+    '<div id="root"></div>',
+    '<script type="module" src="/m/mobile.js"></script>',
+    '</body>',
+    '</html>',
+  ].join('')
+}
+
+function manifestJson() {
+  return JSON.stringify({
+    id: MOBILE_ROOT,
+    name: 'dsh 掌上助手',
+    short_name: 'dsh',
+    start_url: MOBILE_ROOT,
+    scope: MOBILE_ROOT,
+    display: 'standalone',
+    background_color: '#151424',
+    theme_color: '#f3f5f9',
+    icons: [
+      { src: '/m/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/m/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+    ],
+  }, null, 2)
 }
 
 // ── apply ───────────────────────────────────────────────────────────────────
@@ -182,7 +230,6 @@ export function apply(ctx, config) {
 
   const devices = loadDevices(cfg.devicesFile)
   let pairToken = null // { code, expiresAt }
-
   const cookieName = COOKIE_NAME
 
   function deviceTokenOf(req) {
@@ -202,11 +249,7 @@ export function apply(ctx, config) {
   }
 
   function issuePairToken() {
-    const now = Date.now()
-    pairToken = {
-      code: String(randomInt(0, 1e6)).padStart(6, '0'),
-      expiresAt: now + TOKEN_TTL_MS,
-    }
+    pairToken = { code: String(randomInt(0, 1e6)).padStart(6, '0'), expiresAt: Date.now() + TOKEN_TTL_MS }
     return pairToken
   }
 
@@ -240,13 +283,10 @@ export function apply(ctx, config) {
     return { lan, publicBase, port }
   }
 
-  // ── API handlers ──────────────────────────────────────────────────────────
+  // ── settings-panel endpoints (simple JSON) ────────────────────────────────
   function me(req, res) {
     const device = authenticatedDevice(req)
-    if (!device) {
-      sendJson(res, 401, { ok: false, paired: false })
-      return
-    }
+    if (!device) return sendJson(res, 401, { ok: false, paired: false })
     sendJson(res, 200, { ok: true, paired: true, deviceName: device.name })
   }
 
@@ -259,45 +299,22 @@ export function apply(ctx, config) {
     readJsonBody(req)
       .then((body) => {
         const result = acceptPairCode(String(body.code || ''), req.headers['user-agent'])
-        if (!result) {
-          sendJson(res, 200, { ok: false, error: '配对码无效或已过期' })
-          return
-        }
+        if (!result) return sendJson(res, 200, { ok: false, error: '配对码无效或已过期' })
         const maxAge = Math.round(IDLE_EXPIRE_MS / 1000)
-        sendJson(
-          res,
-          200,
-          { ok: true, paired: true, deviceId: result.deviceId },
-          { 'Set-Cookie': `${cookieName}=${result.token}; Path=/m; HttpOnly; SameSite=Lax; Max-Age=${maxAge}` },
-        )
+        sendJson(res, 200, { ok: true, paired: true, deviceId: result.deviceId }, {
+          'Set-Cookie': `${cookieName}=${result.token}; Path=/m; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+        })
       })
       .catch((err) => sendJson(res, 400, { ok: false, error: String((err && err.message) || err) }))
   }
 
-  function status(_req, res) {
+  function status(req, res) {
     const now = Date.now()
     const devicesView = [...devices.entries()].map(([deviceId, d]) => ({
-      deviceId,
-      name: d.name || '设备',
-      createdAt: d.createdAt,
-      lastSeenAt: d.lastSeenAt,
-      userAgent: d.userAgent || '',
+      deviceId, name: d.name || '设备', createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, userAgent: d.userAgent || '',
     }))
-    const pending = pairToken && now <= pairToken.expiresAt
-      ? { code: pairToken.code, expiresAt: pairToken.expiresAt }
-      : null
+    const pending = pairToken && now <= pairToken.expiresAt ? { code: pairToken.code, expiresAt: pairToken.expiresAt } : null
     sendJson(res, 200, { ok: true, addresses: accessAddresses(), devices: devicesView, pending })
-  }
-
-  function listDevices(_req, res) {
-    const items = [...devices.entries()].map(([deviceId, d]) => ({
-      deviceId,
-      name: d.name || '设备',
-      createdAt: d.createdAt,
-      lastSeenAt: d.lastSeenAt,
-      userAgent: d.userAgent || '',
-    }))
-    sendJson(res, 200, { ok: true, items })
   }
 
   function revokeDevice(req, res) {
@@ -310,148 +327,234 @@ export function apply(ctx, config) {
       .catch((err) => sendJson(res, 400, { ok: false, error: String((err && err.message) || err) }))
   }
 
-  function listWorkspaces(_req, res) {
-    const list = (ctx.workspaceRegistry && typeof ctx.workspaceRegistry.list === 'function' ? ctx.workspaceRegistry.list() : [])
-      .map((w) => ({ id: w.id, title: w.title || basename(w.path), path: w.path }))
-    sendJson(res, 200, { ok: true, items: list })
+  function requireLoopback(req, res, fn) {
+    if (!isLoopback(req)) return sendJson(res, 403, { ok: false, error: 'forbidden: this endpoint is host-only' })
+    fn(req, res)
   }
 
-  async function listSessions(_req, res) {
-    const sc = ctx.sessionController
-    const { items = [] } = await sc.list({}, new AbortController().signal)
-    const rows = items.map((it) => {
-      let title = typeof it.projections?.values?.title === 'string' && it.projections.values.title !== '' ? it.projections.values.title : null
-      if (!title && it.cwd) title = basename(it.cwd)
-      if (!title) title = '会话'
-      return {
-        sessionId: it.sessionId,
-        title,
-        updatedAt: it.updatedAt,
-        running: !!it.running,
-        blank: !!it.blank,
-        cwd: it.cwd || null,
-      }
-    })
-    sendJson(res, 200, { ok: true, items: rows })
-  }
+  // ── RPC adapter (dsh-palm protocol) ───────────────────────────────────────
+  const sc = () => ctx.sessionController
+  const wr = () => ctx.workspaceRegistry
 
-  async function getSession(_req, res, url) {
-    const sessionId = url.searchParams.get('sessionId')
-    const maxMessages = Number(url.searchParams.get('maxMessages') || 50)
-    if (!sessionId) {
-      sendJson(res, 400, { ok: false, error: 'sessionId required' })
-      return
-    }
-    const sc = ctx.sessionController
+  async function readHistory(sessionId, beforeSeq, maxMessages) {
+    const controller = sc()
     const signal = new AbortController().signal
     let cursor
+    let projections
     try {
-      const frames = sc.follow({ address: { kind: 'session', sessionId } }, signal)
+      const frames = controller.follow({ address: { kind: 'session', sessionId } }, signal)
       for await (const f of frames) {
         if (f && f.type === 'snapshot') {
           cursor = f.cursor
+          projections = f.projections
           break
         }
       }
     } catch {
       cursor = undefined
     }
-    if (cursor === undefined) {
-      sendJson(res, 200, { ok: true, messages: [], hasMore: false })
-      return
-    }
-    const page = await sc.page(
-      { address: { kind: 'session', sessionId }, throughSeq: cursor, maxMessages: Math.max(1, Math.min(maxMessages, 200)) },
+    if (cursor === undefined) return { events: [], hasMore: false }
+    const page = await controller.page(
+      {
+        address: { kind: 'session', sessionId },
+        throughSeq: cursor,
+        ...(beforeSeq === undefined ? {} : { beforeSeq }),
+        maxMessages: Math.max(1, Math.min(Number(maxMessages) || 50, 200)),
+      },
       signal,
     )
-    const messages = []
-    for (const rec of page.records || []) {
-      const ev = rec && rec.event
-      if (!ev) continue
-      if (ev.type === 'user/message' || ev.type === 'assistant/message') {
-        const text = textOfEventData(ev.data)
-        if (text === '') continue
-        messages.push({ role: ev.type === 'user/message' ? 'user' : 'assistant', text, seq: ev.seq, time: ev.time })
+    const events = (page.records || []).map((r) => ({ event: r.event }))
+    return {
+      events,
+      hasMore: !!page.hasMore,
+      ...(projections ? { projections } : {}),
+    }
+  }
+
+  function toWorkspaceView(w) {
+    return {
+      workspaceId: String(w.id),
+      path: w.path,
+      title: w.title || basename(w.path),
+      sessionIds: [...(w.sessionIds || [])],
+      createdAt: w.createdAt,
+      updatedAt: w.updatedAt,
+    }
+  }
+
+  async function dispatchRpc(method, payload) {
+    const controller = sc()
+    switch (method) {
+      case 'session.list': {
+        const { items = [] } = await controller.list({ cursor: payload.cursor }, new AbortController().signal)
+        return { ok: true, value: { items } }
+      }
+      case 'session.history': {
+        if (!payload.sessionId) return { ok: false, error: { code: 'bad-request', message: 'sessionId required' } }
+        return { ok: true, value: await readHistory(payload.sessionId, payload.beforeSeq, payload.maxMessages) }
+      }
+      case 'session.prompt': {
+        const requestId = `req-${randomBytes(8).toString('hex')}`
+        await controller.prompt(
+          {
+            requestId,
+            sessionId: payload.sessionId,
+            mode: payload.mode === 'steer' ? 'steer' : 'queue',
+            content: Array.isArray(payload.content) ? payload.content : [],
+            ...(payload.clientTimeZone ? { clientTimeZone: payload.clientTimeZone } : {}),
+          },
+          new AbortController().signal,
+        )
+        return { ok: true, value: { accepted: true } }
+      }
+      case 'session.create': {
+        const value = await controller.create({
+          ...(payload.workspaceId ? { workspaceId: payload.workspaceId } : {}),
+          ...(payload.cwd ? { cwd: payload.cwd } : {}),
+          ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
+          ...(payload.agentPreset ? { agentPreset: payload.agentPreset } : {}),
+        })
+        return { ok: true, value: { sessionId: value.sessionId, ...(value.agentPreset ? { agentPreset: value.agentPreset } : {}) } }
+      }
+      case 'session.models': {
+        const catalog = await controller.modelCatalog()
+        return {
+          ok: true,
+          value: {
+            current: catalog.default,
+            routable: (catalog.routableProviders || []).length > 0,
+            groups: catalog.groups || [],
+            failures: catalog.failures || [],
+          },
+        }
+      }
+      case 'session.selectModel': {
+        const value = await controller.selectModel({
+          sessionId: payload.sessionId,
+          provider: payload.provider,
+          model: payload.model,
+          ...(payload.reasoningEffort ? { reasoningEffort: payload.reasoningEffort } : {}),
+        })
+        return { ok: true, value: { selected: value.selected } }
+      }
+      case 'session.rename': {
+        const value = await controller.rename({ sessionId: payload.sessionId, title: payload.title })
+        return { ok: true, value: { title: value.title, seq: value.seq } }
+      }
+      case 'session.cancel': {
+        controller.cancel({ sessionId: payload.sessionId })
+        return { ok: true, value: { accepted: true } }
+      }
+      case 'session.updateQueue': {
+        await controller.updateQueue({ sessionId: payload.sessionId, itemId: payload.itemId, action: payload.action })
+        return { ok: true, value: { accepted: true } }
+      }
+      case 'session.search': {
+        const value = await controller.search({ query: payload.query }, new AbortController().signal)
+        return { ok: true, value: { items: value.items || [], hasMore: !!value.hasMore } }
+      }
+      case 'workspace.list': {
+        const items = (wr() ? wr().list() : []).map(toWorkspaceView)
+        return { ok: true, value: { items, archivedSessionIds: [] } }
+      }
+      case 'workspace.create': {
+        const value = await ctx.workspaceController.create({
+          ...(payload.path ? { path: payload.path } : {}),
+          ...(payload.title ? { title: payload.title } : {}),
+        })
+        return { ok: true, value }
+      }
+      case 'workspace.rename': {
+        const value = await ctx.workspaceController.rename({ workspaceId: payload.workspaceId, title: payload.title })
+        return { ok: true, value }
+      }
+      case 'workspace.delete': {
+        await ctx.workspaceController.delete({ workspaceId: payload.workspaceId })
+        return { ok: true, value: { deleted: true } }
+      }
+      case 'workspace.archiveSession': {
+        await wr().archiveSession(payload.sessionId, { stopActivity: true })
+        return { ok: true, value: { archivedSessionIds: [] } }
+      }
+      default:
+        return { ok: false, error: { code: 'not-supported', message: `method ${method} is not implemented by dsh-mobile` } }
+    }
+  }
+
+  async function handleRpc(req, res, method) {
+    const device = authenticatedDevice(req)
+    if (!device) {
+      req.resume()
+      sendJson(res, 403, { ok: false, error: { code: 'unpaired', message: 'mobile session is not paired' } })
+      return
+    }
+    let envelope
+    try {
+      envelope = await readJsonBody(req, method === 'session.prompt' ? PROMPT_BODY : SMALL_BODY)
+    } catch {
+      sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'invalid json body' } })
+      return
+    }
+    const rpcId = typeof envelope.rpcId === 'string' ? envelope.rpcId : ''
+    if (!rpcId) {
+      sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'missing rpcId' } })
+      return
+    }
+    let result
+    try {
+      result = await dispatchRpc(method, envelope.payload || {})
+    } catch (err) {
+      const record = err && typeof err === 'object' ? err : {}
+      result = {
+        ok: false,
+        error: {
+          code: typeof record.code === 'string' ? record.code : 'internal',
+          message: (err && err.message) || String(err),
+          details: record.details || {},
+        },
       }
     }
-    sendJson(res, 200, { ok: true, messages, hasMore: !!page.hasMore })
+    sendJson(res, 200, { type: 'server-response', rpcId, result })
   }
 
-  async function createSession(req, res) {
-    const body = await readJsonBody(req)
-    const sc = ctx.sessionController
-    const value = await sc.create({ ...(body.workspaceId ? { workspaceId: body.workspaceId } : {}) })
-    sendJson(res, 200, { ok: true, sessionId: value.sessionId })
-  }
-
-  async function promptSession(req, res) {
-    const body = await readJsonBody(req)
-    const text = String(body.text || '').trim()
-    if (!body.sessionId || text === '') {
-      sendJson(res, 400, { ok: false, error: 'sessionId and text required' })
-      return
-    }
-    const sc = ctx.sessionController
-    const requestId = `req-${randomBytes(8).toString('hex')}`
-    await sc.prompt(
-      { requestId, sessionId: body.sessionId, mode: 'queue', content: [{ type: 'text', text }] },
-      new AbortController().signal,
-    )
-    sendJson(res, 200, { ok: true, accepted: true })
-  }
-
-  function requireLoopback(req, res, fn) {
-    if (!isLoopback(req)) {
-      sendJson(res, 403, { ok: false, error: 'forbidden: this endpoint is host-only' })
-      return
-    }
-    fn(req, res)
-  }
-
+  // ── API dispatch ──────────────────────────────────────────────────────────
   async function handleApi(req, res, url) {
-    const sub = url.pathname.slice(API_PREFIX.length).replace(/\/+$/, '')
+    const sub = url.pathname.slice(API_PREFIX.length)
     const method = (req.method || 'GET').toUpperCase()
     const key = `${method} ${sub}`
 
-    const pairedRequired = ['GET /workspaces', 'GET /sessions', 'GET /session', 'POST /session/create', 'POST /session/prompt', 'GET /me']
-    if (pairedRequired.includes(key) && !authenticatedDevice(req)) {
-      sendJson(res, 401, { ok: false, paired: false })
+    // settings panel (simple JSON)
+    switch (key) {
+      case 'GET /me':
+        return me(req, res)
+      case 'POST /pair/issue':
+        return requireLoopback(req, res, pairIssue)
+      case 'POST /pair/accept':
+        return pairAccept(req, res)
+      case 'GET /status':
+        return requireLoopback(req, res, status)
+      case 'POST /device/revoke':
+        return requireLoopback(req, res, revokeDevice)
+      default:
+        break
+    }
+
+    // dsh-palm RPC: POST /m/api/<method>
+    if (method === 'POST' && sub.startsWith('/') && sub.indexOf('/', 1) === -1 && sub.includes('.')) {
+      return handleRpc(req, res, sub.slice(1))
+    }
+
+    // SSE endpoints not implemented: answer 404 so the phone falls back to polling.
+    if (sub === '/events.mux' || sub === '/events.notify') {
+      res.statusCode = 404
+      res.end()
       return
     }
 
-    try {
-      switch (key) {
-        case 'GET /me':
-          return me(req, res)
-        case 'POST /pair/issue':
-          return requireLoopback(req, res, pairIssue)
-        case 'POST /pair/accept':
-          return pairAccept(req, res)
-        case 'GET /status':
-          return requireLoopback(req, res, status)
-        case 'GET /devices':
-          return requireLoopback(req, res, listDevices)
-        case 'POST /device/revoke':
-          return requireLoopback(req, res, revokeDevice)
-        case 'GET /workspaces':
-          return listWorkspaces(req, res)
-        case 'GET /sessions':
-          return await listSessions(req, res)
-        case 'GET /session':
-          return await getSession(req, res, url)
-        case 'POST /session/create':
-          return await createSession(req, res)
-        case 'POST /session/prompt':
-          return await promptSession(req, res)
-        default:
-          return sendJson(res, 404, { ok: false, error: 'not found' })
-      }
-    } catch (err) {
-      sendJson(res, 500, { ok: false, error: String((err && err.message) || err) })
-    }
+    sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
-  // ── shared request router (both HTTP faces use this) ──────────────────────
+  // ── request router (both HTTP faces) ──────────────────────────────────────
   async function routeRequest(req, res) {
     let url
     try {
@@ -467,27 +570,28 @@ export function apply(ctx, config) {
       res.end()
       return
     }
-    if (path === MOBILE_ROOT) {
-      sendHtml(res, 200, mobileHtml())
-      return
-    }
-    if (path === ICON_PATH) {
-      sendText(res, 200, 'image/svg+xml', iconSvg())
-      return
-    }
-    if (path === API_PREFIX || path.startsWith(API_PREFIX + '/')) {
-      await handleApi(req, res, url)
-      return
-    }
+    if (path === MOBILE_ROOT) return sendHtml(res, 200, mobilePageHtml())
+    if (path === BUNDLE_URL) return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'))
+    if (path === MANIFEST_URL) return sendText(res, 200, 'application/manifest+json', manifestJson())
+    if (path === ICON_SVG_URL) return sendBuffer(res, 200, 'image/svg+xml', asset('icon.svg'))
+    if (path === ICON_192_URL) return sendBuffer(res, 200, 'image/png', asset('icon-192.png'))
+    if (path === ICON_512_URL) return sendBuffer(res, 200, 'image/png', asset('icon-512.png'))
+    if (path === APPLE_TOUCH_URL) return sendBuffer(res, 200, 'image/png', asset('apple-touch-icon.png'))
+    if (path === API_PREFIX || path.startsWith(API_PREFIX + '/')) return handleApi(req, res, url)
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
-  // ── face 1: shared webServer (loopback; powers the GUI settings panel) ────
+  // ── face 1: shared webServer (GUI settings panel) ─────────────────────────
   ctx.effect(() => {
     const routes = [
       { kind: 'exact', path: '/m', handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: MOBILE_ROOT, handler: (req, res) => routeRequest(req, res) },
-      { kind: 'exact', path: ICON_PATH, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: BUNDLE_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: MANIFEST_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: ICON_SVG_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: ICON_192_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: ICON_512_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: APPLE_TOUCH_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'prefix', path: API_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))
@@ -496,7 +600,7 @@ export function apply(ctx, config) {
     }
   }, 'dsh-mobile: webServer routes')
 
-  // ── face 2: dedicated 0.0.0.0 listener for phone / LAN / public ───────────
+  // ── face 2: dedicated 0.0.0.0 listener (phone / LAN / public) ─────────────
   ctx.effect(() => {
     const port = Number(cfg.mobilePort) || DEFAULT_MOBILE_PORT
     const host = cfg.mobileHost || '0.0.0.0'
@@ -514,9 +618,7 @@ export function apply(ctx, config) {
         console.error('[dsh-mobile] mobile listener error:', err && err.message)
       }
     })
-    server.listen(port, host, () => {
-      console.log(`[dsh-mobile] mobile listener on http://${host}:${port}/m/`)
-    })
+    server.listen(port, host, () => console.log(`[dsh-mobile] mobile listener on http://${host}:${port}/m/`))
     return () => {
       try {
         server.close()
@@ -537,5 +639,5 @@ export function apply(ctx, config) {
     return () => clearInterval(timer)
   }, 'dsh-mobile: sweep')
 
-  console.log(`[dsh-mobile] mounted: /m/ + /m/api on webServer and 0.0.0.0:${cfg.mobilePort} (devices: ${devices.size})`)
+  console.log(`[dsh-mobile] mounted: mobile bundle on webServer + 0.0.0.0:${cfg.mobilePort} (devices: ${devices.size})`)
 }
