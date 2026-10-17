@@ -4356,12 +4356,26 @@ export function apply(ctx, config) {
    */
   const streamStates = new Map()
 
-  /** 取（必要时新建）某会话当前 attempt 的流式状态。 */
+  /**
+   * 取（必要时新建）某会话当前 attempt 的流式状态。
+   *
+   * **只按 (sessionId, attemptId) 取，不把 revision 当身份的一部分。**
+   *
+   * 坑（已核宿主源码 `AssistantStreamAttempt`）：`revision` 是**每个 chunk 都递增**的
+   * —— `push()` 里 emit 的是 `revision: this.nextRevision()`，start/chunk/end 各调一次。
+   * 它不是「一轮的身份」，而是「帧的序号」。若把 `st.revision !== revision` 当作换新一轮
+   * 的判据，状态会在**每一个 chunk 上被整块重置**，于是：
+   *   ① start 里记下的 seqBase（startedAfterSeq）丢失 → 合成 seq 退回从 1 开始，
+   *      bundle 的 fold() 按 seq 排序时把正在生成的气泡排到已有历史消息**前面**；
+   *   ② start 里记下的 turn/step 丢失 → 每个 chunk 都定位不到同一个待定气泡，
+   *      逐字效果退化成「每来一个字就新开一个气泡」。
+   * 真正的「换一轮」是 attemptId 变了（新一轮 index 从 0 重来），只按它判。
+   */
   function streamStateFor(sessionId, attemptId, revision) {
     const key = `${sessionId}\u0000${attemptId ?? ''}`
     let st = streamStates.get(key)
-    if (st === undefined || st.attemptId !== attemptId || st.revision !== revision) {
-      // 换 attempt / 换 revision：上一套状态整块作废（同时把旧的收走，避免 Map 膨胀）。
+    if (st === undefined || st.attemptId !== attemptId) {
+      // 换 attempt：上一套状态整块作废（同时把旧的收走，避免 Map 膨胀）。
       if (st !== undefined) streamStates.delete(key)
       st = {
         key,
@@ -4379,6 +4393,9 @@ export function apply(ctx, config) {
       if (streamStates.size > 64) {
         for (const k of [...streamStates.keys()].slice(0, streamStates.size - 64)) streamStates.delete(k)
       }
+    } else if (typeof revision === 'number') {
+      // 同一轮内的后续帧：只把 revision 往前推（它是帧序号，不是身份）。
+      st.revision = revision
     }
     return st
   }
