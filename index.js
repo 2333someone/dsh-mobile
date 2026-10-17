@@ -135,6 +135,12 @@ const MAX_SSE_SUBSCRIBERS = 8
 const MAX_FOLLOWED_PER_DEVICE = 4
 // follow 流异常后的重试退避。
 const FOLLOW_RETRY_MS = 3000
+/**
+ * 「没人再看这个会话」多久之后拆掉它的 follow 宿主流。
+ * 必须明显长于 bundle 的 observe 重申周期（30s）与一次 SSE 重连的时间，
+ * 否则换页/锁屏会被误判成离开 —— 那反倒把正在看的东西拆了。
+ */
+const OBSERVE_TTL_MS = 5 * 60 * 1000
 // 每个被观察会话最多重服务商 N 次，之后放弃该会话（手机重开会重新登记）。
 const MAX_FOLLOW_RESTARTS = 5
 // 每个 SSE 连接的最大寿命上限：宿主不支持 reopen 时靠它回收资源。
@@ -3300,6 +3306,105 @@ export function apply(ctx, config) {
     const set = observers.get(deviceId)
     return set !== undefined && set.has(sessionId)
   }
+  /**
+   * session/event 的来源之一：sessionController.follow({address}, signal)。
+   *
+   * **生命周期挂在「正在看的那个会话」上，而不是挂在单次 SSE 连接上**：手机的 SSE 会
+   * 因隧道抖动/锁屏/后台等各种原因频繁重连，而 bundle 的 `mobile.observe` 重申是
+   * 每 30s 一次。若把 follow 绑在某条 SSE 连接上，每次重连都可能落到
+   * 「重连 → 下一次 observe 重申」这段最坏 30s 的空窗里，期间会话产生的事件没人跟进。
+   * 所以这里按 sessionId 做单例，断开 SSE 不拆 follow；只有「再没有设备在看」时才回收。
+   */
+  const follows = new Map() // sessionId -> { ref: AbortController, task }
+  /** sessionId -> 最近一次有设备声明在看它的时刻（回收器的计时基准）。 */
+  const lastObserved = new Map()
+
+  /** 还有设备在看这个会话吗。 */
+  function anyoneObserving(sessionId) {
+    for (const set of observers.values()) {
+      if (set.has(sessionId)) return true
+    }
+    return false
+  }
+
+  /**
+   * 某会话最后一次「有人在看」的时刻。
+   * 用它而不是「当前有没有人在看」做回收判据：手机每次 SSE 重连后要等下一次 observe
+   * 重申（最多 30s）才重新出现在 observers 里，这中间它其实还在前台看着。
+   */
+  function lastObservedAt(sessionId) {
+    return lastObserved.get(sessionId) ?? 0
+  }
+
+  /** 起（或复用）某会话的 follow 单例。幂等。 */
+  function ensureFollow(sessionId) {
+    const existing = follows.get(sessionId)
+    if (existing !== undefined) return existing
+    const ref = new AbortController()
+    const state = { ref, task: undefined }
+    const task = (async () => {
+      let restarts = 0
+      let triedParentLookup = false
+      while (!ref.signal.aborted && restarts <= MAX_FOLLOW_RESTARTS) {
+        try {
+          const frames = sc().follow({ address: addressForSession(sessionId) }, ref.signal)
+          for await (const f of frames) {
+            if (ref.signal.aborted) return
+            if (!f) continue
+            if (f.type === 'snapshot') {
+              // 快照里的 records 是已经存在的历史，不重推（聊天窗自己读过历史）。
+              // 只告诉手机「从 lastSeq 起之后的事件会实时到达」，bundle 据此刷新缓存。
+              if (typeof f.cursor === 'number') {
+                emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
+              }
+              continue
+            }
+            if (f.type === 'event' && f.event) {
+              emitMux({ type: 'session/event', sessionId, event: f.event })
+            }
+          }
+          if (ref.signal.aborted) return
+          // 流自然结束（宿主重载 / 会话消失）：只要还有人在看就退避重试。
+          if (!anyoneObserving(sessionId)) return
+          restarts += 1
+          await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
+        } catch {
+          if (ref.signal.aborted) return
+          // 没认过父的子代理会在这里撞上 session/agent-busy：认父后重试一次。
+          if (!triedParentLookup && !subagentParent.has(sessionId)) {
+            triedParentLookup = true
+            try {
+              const parent = await parentOfSubagent(sessionId, undefined)
+              if (parent !== undefined && parent !== sessionId) {
+                subagentParent.set(sessionId, parent)
+                continue
+              }
+            } catch {}
+          }
+          if (!anyoneObserving(sessionId)) return
+          restarts += 1
+          await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
+        }
+      }
+    })()
+    task.catch(() => {})
+    task.then(() => {
+      if (follows.get(sessionId) === state) follows.delete(sessionId)
+    })
+    state.task = task
+    follows.set(sessionId, state)
+    return state
+  }
+
+  /** 停止某会话的 follow，释放宿主流。 */
+  function stopFollow(sessionId) {
+    const state = follows.get(sessionId)
+    if (state === undefined) return
+    follows.delete(sessionId)
+    try {
+      state.ref.abort()
+    } catch {}
+  }
 
   /** 所有存活的 SSE 连接（扇出目标）。 */
   const muxStreams = new Set()
@@ -3473,79 +3578,20 @@ export function apply(ctx, config) {
       }, entry.rpcId)
     }
 
-    /** 这台设备正在 follow 的会话 → 它的循环任务。 */
-    const followTasks = new Map()
-
-    function startFollow(sessionId) {
-      if (stream.closed || followTasks.has(sessionId)) return
-      const task = (async () => {
-        let restarts = 0
-        let triedParentLookup = false
-        while (!stream.closed && !controller.signal.aborted && restarts <= MAX_FOLLOW_RESTARTS) {
-          try {
-            const frames = sc().follow({ address: addressForSession(sessionId) }, controller.signal)
-            for await (const f of frames) {
-              if (stream.closed || controller.signal.aborted) return
-              // 手机切走了这个会话：让这个任务自然退出。
-              if (observers.get(deviceId)?.has(sessionId) !== true) return
-              if (!f) continue
-              if (f.type === 'snapshot') {
-                // 快照里的 records 是已经存在的历史，不重推（聊天窗自己读过历史）。
-                // 只告诉手机「从 lastSeq 起之后的事件会实时到达」，bundle 据此刷新缓存。
-                if (typeof f.cursor === 'number') {
-                  emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
-                }
-                continue
-              }
-              if (f.type === 'event' && f.event) {
-                emitMux({ type: 'session/event', sessionId, event: f.event })
-              }
-            }
-            if (stream.closed || controller.signal.aborted) return
-            // 流自然结束（宿主重载 / 会话消失）：退避重试。
-            restarts += 1
-            await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
-          } catch {
-            if (stream.closed || controller.signal.aborted) return
-            // 没认过父的子代理会在这里撞上 session/agent-busy：认父后重试一次。
-            if (!triedParentLookup && !subagentParent.has(sessionId)) {
-              triedParentLookup = true
-              try {
-                const parent = await parentOfSubagent(sessionId, undefined)
-                if (parent !== undefined && parent !== sessionId) {
-                  subagentParent.set(sessionId, parent)
-                  continue
-                }
-              } catch {}
-            }
-            restarts += 1
-            await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
-          }
-        }
-      })()
-      task.catch(() => {})
-      followTasks.set(sessionId, task)
-      void task.finally(() => {
-        if (followTasks.get(sessionId) === task) followTasks.delete(sessionId)
-      })
-    }
-
-    // 把设备的观察集合同步到 follow 任务集合：设备切会话时自动起新任务。
-    // 停任务不需要打断宿主流 —— while 每轮自己会检查还在不在观察集里并退出。
+    // 把设备的观察集合同步到 follow 单例：这条 SSE 连接看什么，就确保什么有人在跟进。
+    // 设备换会话时旧的 follow 不会立刻停 —— 由下面的 OBSERVE_TTL_MS 宽限期回收，
+    // 这样手机短时回来还能续上同一条宿主流（不需要从零重放）。
     syncTimer = setInterval(() => {
       if (stream.closed) return
       if (!deviceStillPaired()) {
         closeStream()
         return
       }
-      const wanted = new Set(observedSessions(deviceId))
-      for (const sessionId of wanted) startFollow(sessionId)
-      for (const sessionId of [...followTasks.keys()]) {
-        if (!wanted.has(sessionId)) followTasks.delete(sessionId)
-      }
+      for (const sessionId of observedSessions(deviceId)) ensureFollow(sessionId)
     }, 2000)
 
     // 连接寿命上限：超长挂机也回收一次（手机的 EventSource 会自动重连并重新 observe）。
+    // follow 单例不随它回收 —— 回收的是这条 socket，不是会话跟随。
     lifetimeTimer = setTimeout(closeStream, SSE_MAX_LIFETIME_MS)
   }
   // ── API dispatch ──────────────────────────────────────────────────────────
@@ -3844,6 +3890,30 @@ export function apply(ctx, config) {
       for (const dispose of disposers) dispose?.()
     }
   }, 'dsh-mobile: sse session list')
+
+  // ── 僵尸 follow 回收 ──────────────────────────────────────────────────────
+  // follow 的生命周期挂在「会话」而不是挂在 SSE 连接上（见 ensureFollow），所以它需要一个
+  // 独立的回收器：没人再看某个会话超过 OBSERVE_TTL_MS 就把它的宿主流拆掉。
+  // 宽限期必须明显长于 bundle 的 observe 重申周期（30s）与一次 SSE 重连的时间，否则
+  // 换页/锁屏会被误判为离开，反而把正在看的东西拆了。
+  ctx.effect(() => {
+    const timer = setInterval(() => {
+      try {
+        const now = Date.now()
+        for (const sessionId of [...follows.keys()]) {
+          if (anyoneObserving(sessionId)) continue
+          if (now - lastObservedAt(sessionId) <= OBSERVE_TTL_MS) continue
+          stopFollow(sessionId)
+        }
+      } catch {}
+    }, Math.max(5000, Math.round(OBSERVE_TTL_MS / 6)))
+    timer.unref?.()
+    return () => {
+      clearInterval(timer)
+      // 插件卸载：所有 follow 一并收掉，绝不留宿主流。
+      for (const sessionId of [...follows.keys()]) stopFollow(sessionId)
+    }
+  }, 'dsh-mobile: follow reaper')
 
   // ── 待处理项过期回收 ────────────────────────────────────────────────────────
   ctx.effect(() => {
