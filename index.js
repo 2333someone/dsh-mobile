@@ -636,8 +636,11 @@ const SHEET_CLOSE_HTML = `<script>
 
 // emoji 图标替换：bundle 里这些图标是纯文本节点，CSS 换不掉，只能运行时把命中的
 // emoji 换成同尺寸的行内描边 SVG。只精确匹配下表里的序列（含 FE0F 变体选择器），
-// ▾/▸ 折叠箭头和正文里的 emoji 都不会被碰到。用 splitText + replaceChild 做替换，
-// 绝不 innerHTML 重写整个节点（会毁掉 React 状态与事件）。
+// ▾/▸ 折叠箭头和正文里的 emoji 都不会被碰到。
+// 用 splitText 切出 emoji，再把该文本节点「搬」进 display:none 的 .dm-emoji-src
+// 并在前面插入 <svg>：只搬不换、不用 replaceChild、绝不 innerHTML 重写整个节点。
+// （replaceChild 摘掉文本节点后 React 仍持有它，重渲染时会去更新一个已脱离文档
+//  的孤儿节点 —— 图标不更新、还会重复堆叠。与 TURN_PILL_HTML 同一套哲学。）
 const EMOJI_ICON_HTML = `<script>
 (function () {
   try {
@@ -661,15 +664,16 @@ const EMOJI_ICON_HTML = `<script>
     // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
     // 📨👥🧩🔔⏰⚙️🔌🎯）都不会被替换。
     var MAP = [
-      // 工具步骤行：search / read / bash / write|edit / code / 其它
-      ['\\u{1F50D}', 'search', 'chat-tool-lead'],
-      ['\\u{1F4C2}', 'read', 'chat-tool-lead'],
-      ['\\u2699\\uFE0F', 'gear', 'chat-tool-lead'],
-      ['\\u2699', 'gear', 'chat-tool-lead'],
-      ['\\u270F\\uFE0F', 'pencil', 'chat-tool-lead'],
-      ['\\u270F', 'pencil', 'chat-tool-lead'],
-      ['\\u{1F4BB}', 'code', 'chat-tool-lead'],
-      ['\\u{1F527}', 'tool', 'chat-tool-lead'],
+      // 工具步骤行（容器是 .chat-step-icon，bundle 里根本不存在 chat-tool-lead）：
+      // search / read / bash / write|edit / code / 其它
+      ['\\u{1F50D}', 'search', 'chat-step-icon'],
+      ['\\u{1F4C2}', 'read', 'chat-step-icon'],
+      ['\\u2699\\uFE0F', 'gear', 'chat-step-icon'],
+      ['\\u2699', 'gear', 'chat-step-icon'],
+      ['\\u270F\\uFE0F', 'pencil', 'chat-step-icon'],
+      ['\\u270F', 'pencil', 'chat-step-icon'],
+      ['\\u{1F4BB}', 'code', 'chat-step-icon'],
+      ['\\u{1F527}', 'tool', 'chat-step-icon'],
       // 过程卡状态符号：运行 / 失败 / 中断 / 完成
       ['\\u23F3', 'running', 'chat-proc-lead'],
       ['\\u274C', 'failed', 'chat-proc-lead'],
@@ -711,10 +715,13 @@ const EMOJI_ICON_HTML = `<script>
       return false;
     }
 
-    // 单个文本节点：命中就切出该 emoji 换成 <svg>，剩余文本继续扫，直到没有命中。
+    // 单个文本节点：命中就建 slot（图标 + 隐藏原文）。残余文本由 installSlot
+    // 自己递归扫完，所以这里命中一次即可结束。
     function scanNode(node) {
       var guard = 0;
       while (node && node.parentNode && guard++ < 60) {
+        // React 改写过的 slot 内容：不新建结构，只更新图标。
+        if (isSlot(node.parentNode) && refreshSlot(node)) return;
         var text = node.nodeValue || '';
         var seq = null;
         var key = null;
@@ -736,16 +743,126 @@ const EMOJI_ICON_HTML = `<script>
           seq = null;
           key = null;
         }
-        if (!seq) {
-          node.dmIconDone = 1;
-          return;
-        }
-        var target = node;
-        if (at > 0) target = target.splitText(at);
-        var rest = target.splitText(seq.length);
-        target.parentNode.replaceChild(makeIcon(key), target);
-        node = rest;
+        if (!seq) return;
+        installSlot(node, seq, key);
+        return;
       }
+    }
+
+    // 防重入标记打在稳定的 slot 元素上（文本节点会被 splitText 切成新的，
+    // 标记打在它身上会丢）—— slot 只建一次，之后每次重扫只是更新图标。
+    function isSlot(node) {
+      return !!(node && node.nodeType === 1 && node.dmEmojiSlot);
+    }
+
+    // 在 emoji 处建一个稳定的 slot 结构（只建一次）：
+    //   <svg class="dm-icon dm-icon-done">                      ← 真正显示的图标
+    //   <span class="dm-emoji-src" style="display:none">⏳</span> ← 原文搬进这里
+    // 关键：只「搬」不「换」。emoji 文本节点被 appendChild 进 slot，实例始终
+    // 留在文档里，React 以后 nodeValue 更新（⏳→✅）照旧生效。若像以前那样
+    // replaceChild 摘掉它，React 就会去更新一个已脱离文档的孤儿节点：图标不再
+    // 更新，且重渲染产出的新文本会被再替换一次，图标重复堆叠。
+    // 文本里 emoji 两侧还有别的字符时，残余部分会被切回父级继续扫描。
+    function installSlot(textNode, seq, key) {
+      var parent = textNode.parentNode;
+      if (!parent) return null;
+      var at = (textNode.nodeValue || '').indexOf(seq);
+      if (at < 0) return null;
+      // 先把 emoji 精确切成一个单独的文本节点，两侧残余留在父级继续扫。
+      var target = textNode;
+      if (at > 0) target = textNode.splitText(at);
+      var rest = target.splitText(seq.length);
+
+      var slot = document.createElement('span');
+      slot.className = 'dm-emoji-src';
+      slot.setAttribute('aria-hidden', 'true');
+      slot.dmEmojiSlot = 1;
+      parent.insertBefore(slot, target);
+      slot.appendChild(target); // 搬，不删：节点实例保持同一份
+      slot.dmIconSeq = seq;
+      syncIcon(slot, key);
+      if (rest && rest.nodeValue) {
+        // 残尾（emoji 后面的「5 处报错」之类）留在父级显示；打上归属标记，
+        // 下次 React 把整段重写回来时要先清掉它，否则会出现重复的旧文本。
+        rest.dmEmojiRest = 1;
+        rest.dmEmojiOwner = slot;
+        scanNode(rest);
+      }
+      return slot;
+    }
+
+    // 让 slot 前面的 svg 与当前 emoji 对应：已经是对的就不动，变了就换掉旧的，
+    // 同一个 slot 永远只留一个图标（不会两个并存）。
+    function syncIcon(slot, key) {
+      if (!slot || !slot.parentNode) return;
+      var want = key || '';
+      if (slot.getAttribute('data-dm-icon') === want) return;
+      var parent = slot.parentNode;
+      // 摘掉挂在 slot 前面的旧图标（可能不止一个，保险起见循环清干净）。
+      var prev = slot.previousSibling;
+      while (prev && prev.nodeType === 1) {
+        var cls = prev.getAttribute && prev.getAttribute('class');
+        if (typeof cls !== 'string' || cls.indexOf('dm-icon') < 0) break;
+        var dead = prev;
+        prev = prev.previousSibling;
+        parent.removeChild(dead);
+      }
+      if (want) parent.insertBefore(makeIcon(want), slot);
+      slot.setAttribute('data-dm-icon', want);
+    }
+
+    // slot 里的 emoji 被 React 改写了（⏳→✅、🔧→🔍）：按新内容换图标。
+    // 改型后可能不再精确等于原 seq，所以整段重新匹配一次。
+    function refreshSlot(textNode) {
+      var slot = textNode.parentNode;
+      if (!slot || !slot.parentNode) return false;
+      var text = textNode.nodeValue || '';
+      var seq = null;
+      var key = null;
+      var scope = null;
+      for (var i = 0; i < MAP.length; i++) {
+        if (text.indexOf(MAP[i][0]) < 0) continue;
+        if (seq === null || MAP[i][0].length > seq.length) {
+          seq = MAP[i][0];
+          key = MAP[i][1];
+          scope = MAP[i][2];
+        }
+      }
+      // 整段正好是某个 emoji：直接换图标（最常见：⏳→✅、🔧→🔍）。
+      if (seq !== null && seq === text) {
+        slot.dmIconSeq = seq;
+        syncIcon(slot, (!scope || inScope(textNode, scope)) ? key : '');
+        return true;
+      }
+      // React 把整行（含残尾）重写进这个节点了：清掉上一次切出去的残尾，
+      // 否则旧文本会留在 DOM 里，读出来变成「⚠ 5 处报错 3 处报错」。
+      var parent0 = slot.parentNode;
+      if (parent0) {
+        var restSnapshot = parent0.childNodes ? Array.prototype.slice.call(parent0.childNodes) : [];
+        for (var k = 0; k < restSnapshot.length; k++) {
+          var sib = restSnapshot[k];
+          if (sib && sib.dmEmojiRest && sib.dmEmojiOwner === slot && sib.parentNode) {
+            sib.parentNode.removeChild(sib);
+          }
+        }
+      }
+      // emoji 没了，或夹进了别的内容：拆掉 slot，把文本还给父级重新扫一遍。
+      var parent = slot.parentNode;
+      var held = textNode;
+      slot.removeChild(held);
+      parent.insertBefore(held, slot);
+      parent.removeChild(slot);
+      // 顺手清掉散落在它前面的孤立图标，避免留下无主 svg。
+      var prev = held.previousSibling;
+      while (prev && prev.nodeType === 1) {
+        var cls = prev.getAttribute && prev.getAttribute('class');
+        if (typeof cls !== 'string' || cls.indexOf('dm-icon') < 0) break;
+        var dead = prev;
+        prev = prev.previousSibling;
+        parent.removeChild(dead);
+      }
+      scanNode(held);
+      return true;
     }
 
     function skip(node) {
@@ -755,10 +872,13 @@ const EMOJI_ICON_HTML = `<script>
       return n === 'SCRIPT' || n === 'STYLE' || n === 'NOSCRIPT' || n === 'TEXTAREA';
     }
 
+    // 全程可重入：slot 已存在时 scanNode 只是刷新图标、不再新建结构，所以
+    // 每次 flush 走一遍全树也不会重复堆叠。防重入标记打在 slot 元素上
+    // （dmEmojiSlot），文本节点上不再打标记 —— 它会被 splitText 切成新实例。
     function walk(root) {
       if (!root) return;
       if (root.nodeType === 3) {
-        if (!root.dmIconDone && !skip(root)) scanNode(root);
+        if (!skip(root)) scanNode(root);
         return;
       }
       if (root.nodeType !== 1) return;
@@ -766,7 +886,7 @@ const EMOJI_ICON_HTML = `<script>
       var n = tw.nextNode();
       while (n) {
         var next = tw.nextNode();
-        if (!n.dmIconDone && !skip(n)) scanNode(n);
+        if (!skip(n)) scanNode(n);
         n = next;
       }
     }
@@ -786,10 +906,8 @@ const EMOJI_ICON_HTML = `<script>
     }
 
     var mo = new MutationObserver(function (records) {
-      for (var i = 0; i < records.length; i++) {
-        // React 改写了文本：清掉标记，下次 flush 重新扫这个节点。
-        if (records[i].type === 'characterData' && records[i].target) records[i].target.dmIconDone = 0;
-      }
+      // 文本节点不再打标记（会被 splitText 切掉）；槽位状态存在 slot 元素上，
+      // 这里只负责触发一次 flush。
       schedule();
     });
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
