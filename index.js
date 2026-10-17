@@ -169,6 +169,34 @@ const MUX_ALWAYS_FORWARDED = new Set([
   'question/resolved',
   'stream/error',
 ])
+/**
+ * 手机聊天页流式同步：模型逐字生成时，手机上也要同步逐字出现。
+ *
+ * 第一层：宿主的 sessionController.follow() 只有在请求里显式带 `assistantStream: true`
+ * 时才产出 `{type:'assistant-stream', frame}` 帧 —— 契约里它是 optional 的 opt-in，
+ * 不带就一帧都没有。这是「手机要等整条消息生成完才显示」的源头。
+ *
+ * 第二层（更关键）：手机 bundle 的 mux 解析器 `Pn()` 只认 15 种帧类型，
+ * **`assistant-stream` 并不在其中**（它在 bundle 里只作为依赖自检的文案字符串出现一次）。
+ * 直接把 `{type:'assistant-stream'}` 推下去会被 `Pn()` 静默丢弃，做了也白做。
+ *
+ * bundle 真正用来渲染流式气泡的是 `session/event` + 事件类型 `assistant/chunk`
+ *（bundle reducer `Ke()`：`case 'assistant/chunk': case 'message/chunk': it(...)`；
+ *  `it()` 走 `ze()` 归一化，认 `{chunk:{type:'text-delta'|'reasoning-delta', text}}`，
+ *  靠 `{turn,step}` 或 `id` 定位到同一个待定气泡后做文本累加）。
+ *
+ * 所以宿主帧必须在**服务端**翻译成 `session/event`，再按 mux 信封推给手机。
+ * 已核实的宿主帧契约（SessionAssistantStreamFrame）：
+ *   start : { type:'start', attemptId, revision, startedAfterSeq, turn, step }
+ *   chunk : { type:'chunk', attemptId, revision, index, time, chunk:JsonValue }
+ *   end   : { type:'end',   attemptId, revision, index, outcome:{kind:'committed'|'abandoned',...} }
+ */
+const FOLLOW_ASSISTANT_STREAM = true
+/**
+ * 一轮流式里最多记住多少个已推 chunk 的 index（去重集合上限）。
+ * 一轮正常是几百到几千个 chunk；封顶是为了长回复下不去无界增长。
+ */
+const STREAM_SEEN_INDEX_MAX = 5000
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -1690,6 +1718,33 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     startBg();
   }
 
+  // ── 对外暴露一个只读快照 + 开面板的入口 ────────────────────────────────
+  // 工具行里的「子代理状态」图标（SUBAGENT_STATUS_BTN_HTML）要显示运行中数量、
+  // 点击要打开本面板。它在本脚本之后执行、且是另一个闭包，唯一不新增轮询、
+  // 又不重画面板的办法就是复用这里的预取缓存与 openPanel：这里挂一个 hub，
+  // 状态图标只读快照（纯内存，不发 RPC），点击调 openPanel。
+  try {
+    window.__dmSubagentHub = {
+      // { sid, known:boolean, total:number, running:number }
+      // known=false 表示「还没拉到当前会话的数据」，图标据此保持隐藏。
+      snapshot: function () {
+        try {
+          var sid = currentSession();
+          var rows = cachedRows(sid);
+          if (rows === null) return { sid: sid, known: false, total: 0, running: 0 };
+          var running = 0;
+          for (var i = 0; i < rows.length; i++) {
+            if (rows[i] && rows[i].activity === 'running') running++;
+          }
+          return { sid: sid, known: true, total: rows.length, running: running };
+        } catch (e) {
+          return { sid: '', known: false, total: 0, running: 0 };
+        }
+      },
+      openPanel: function () { try { openPanel(); } catch (e) {} },
+    };
+  } catch (e) {}
+
   var pending = false;
   function schedule() {
     if (pending) return;
@@ -1705,6 +1760,498 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
 })();
 </script>`
 
+// 工具行右侧「审批提醒」图标：有待处理的审批 / 提问时亮起并带数字角标，点开
+// 自绘浮层重新列出它们（可反复开关 —— 用户「不小心关掉」的那张卡片就是从这里
+// 再打开的），并可在浮层内直接允许 / 拒绝。
+//
+// 数据全部走已有 RPC：mobile.pending（列举）/ mobile.respond（应答），
+// 与 bundle 的审批卡片同源同权限，不新增任何服务端接口。
+const APPROVAL_BTN_HTML = `<button id="dm-approval-btn" class="dm-tool-btn" type="button" aria-label="审批提醒" title="审批提醒"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8.6a6 6 0 1 0-12 0c0 4.4-1.5 5.9-2 6.7-.3.5 0 1.2.7 1.2h14.6c.7 0 1-.7.7-1.2-.5-.8-2-2.3-2-6.7z"/><path d="M13.7 19.4a2 2 0 0 1-3.4 0"/></svg><span id="dm-approval-badge" class="dm-icon-badge"></span></button><script>
+(function () {
+  var btn = document.getElementById('dm-approval-btn');
+  if (!btn) return;
+  var badge = document.getElementById('dm-approval-badge');
+
+  var POLL_MS = 6000;       // 角标轮询（复用已有 mobile.pending，与 bundle 同频量级）
+  var PANEL_MS = 4000;      // 浮层打开时的刷新间隔
+  var lastSessionId = '';
+  var panel = null;
+  var bgTimer = null;
+  var busy = false;
+  var snap = { approvals: [], questions: [] };
+
+  // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id。
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body);
+          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
+            lastSessionId = body.payload.sessionId;
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, arguments);
+    };
+  }
+
+  function currentSession() {
+    try {
+      var s = new URL(location.href).searchParams.get('session');
+      if (s) return s;
+    } catch (e) {}
+    return lastSessionId;
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-appr-' + Date.now(), payload: payload })
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  // ── 待处理计数：审批按条计，提问按 rpcId 归组后计「批」 ──────────────────
+  function groups() {
+    var out = [];
+    var seen = Object.create(null);
+    var qs = Array.isArray(snap.questions) ? snap.questions : [];
+    for (var i = 0; i < qs.length; i++) {
+      var it = qs[i];
+      if (!it || typeof it.rpcId !== 'string' || it.rpcId === '') continue;
+      if (seen[it.rpcId]) { seen[it.rpcId].items.push(it); continue; }
+      var g = { rpcId: it.rpcId, items: [it] };
+      seen[it.rpcId] = g;
+      out.push(g);
+    }
+    return out;
+  }
+  function count() {
+    var a = Array.isArray(snap.approvals) ? snap.approvals.length : 0;
+    return a + groups().length;
+  }
+
+  function paintBadge() {
+    var n = count();
+    if (n <= 0) {
+      btn.classList.add('dm-icon-hidden');
+      btn.setAttribute('aria-hidden', 'true');
+      if (badge) { badge.textContent = ''; badge.classList.remove('dm-icon-badge-show'); }
+      return;
+    }
+    btn.classList.remove('dm-icon-hidden');
+    btn.removeAttribute('aria-hidden');
+    if (badge) {
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.classList.add('dm-icon-badge-show');
+    }
+  }
+
+  // ── 浮层骨架（一次性建好，之后只换 body） ───────────────────────────────
+  function build() {
+    var back = el('div', 'dm-approval-backdrop');
+    var sheet = el('div', 'dm-approval-sheet');
+    var head = el('div', 'dm-approval-head');
+    var title = el('div', 'dm-approval-title', '待处理');
+    var close = el('button', 'dm-approval-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭');
+    head.appendChild(title);
+    head.appendChild(close);
+    var body = el('div', 'dm-approval-body');
+    var status = el('div', 'dm-approval-status');
+    sheet.appendChild(head);
+    sheet.appendChild(body);
+    sheet.appendChild(status);
+    back.appendChild(sheet);
+    document.body.appendChild(back);
+
+    back.addEventListener('click', function (e) {
+      if (e.target !== back) return;
+      closePanel();
+    });
+    close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
+
+    panel = { back: back, body: body, title: title, status: status };
+    return panel;
+  }
+
+  function setStatus(text, kind) {
+    if (!panel) return;
+    var cls = 'dm-approval-status';
+    if (text) cls += ' dm-approval-status-show';
+    if (kind) cls += ' dm-approval-status-' + kind;
+    panel.status.className = cls;
+    panel.status.textContent = text || '';
+  }
+
+  function openPanel() {
+    if (!panel) build();
+    panel.back.classList.add('dm-approval-open');
+    setStatus('');
+    paint();
+    refresh();
+  }
+  function closePanel() {
+    if (!panel) return;
+    panel.back.classList.remove('dm-approval-open');
+    setStatus('');
+  }
+  function isOpen() {
+    return !!panel && panel.back.classList.contains('dm-approval-open');
+  }
+
+  // 审批卡片：工具名 + 原因 + 允许一次 / 拒绝。
+  function approvalCard(a) {
+    var card = el('div', 'dm-approval-card');
+    card.setAttribute('data-kind', 'approval');
+    card.setAttribute('data-approval-id', String(a.approvalId || ''));
+    card.setAttribute('data-rpc', String(a.rpcId || ''));
+    card.appendChild(el('div', 'dm-approval-card-title', '审批 · ' + (a.toolName || '工具')));
+    if (a.reason) card.appendChild(el('div', 'dm-approval-card-sub', String(a.reason)));
+    var acts = el('div', 'dm-approval-acts');
+    var allow = el('button', 'dm-approval-act dm-approval-allow', '允许一次');
+    allow.type = 'button';
+    allow.setAttribute('data-outcome', 'allowed-once');
+    var deny = el('button', 'dm-approval-act dm-approval-deny', '拒绝');
+    deny.type = 'button';
+    deny.setAttribute('data-outcome', 'rejected');
+    acts.appendChild(allow);
+    acts.appendChild(deny);
+    card.appendChild(acts);
+    return card;
+  }
+
+  // 提问卡片：按批（rpcId）分组，每组渲染若干问题（单选 / 多选）+ 提交。
+  function questionCard(g) {
+    var card = el('div', 'dm-approval-card');
+    card.setAttribute('data-kind', 'question');
+    card.setAttribute('data-rpc', String(g.rpcId || ''));
+    card.appendChild(el('div', 'dm-approval-card-title', '提问'));
+    var items = Array.isArray(g.items) ? g.items : [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i] || {};
+      var id = String(it.id == null ? i : it.id);
+      var box = el('div', 'dm-approval-q');
+      box.setAttribute('data-q-id', id);
+      if (it.header) box.appendChild(el('div', 'dm-approval-q-header', String(it.header)));
+      box.appendChild(el('div', 'dm-approval-q-text', String(it.question || '问题')));
+      if (it.detail) box.appendChild(el('div', 'dm-approval-q-detail', String(it.detail)));
+      var opts = Array.isArray(it.options) ? it.options : [];
+      var list = el('div', 'dm-approval-q-opts');
+      var multi = it.multiSelect === true;
+      for (var k = 0; k < opts.length; k++) {
+        var o = opts[k] || {};
+        var label = el('label', 'dm-approval-opt');
+        var input = document.createElement('input');
+        input.type = multi ? 'checkbox' : 'radio';
+        input.name = 'dmq-' + String(g.rpcId || '') + '-' + id;
+        input.value = String(o.label == null ? '' : o.label);
+        label.appendChild(input);
+        label.appendChild(el('span', 'dm-approval-opt-label', input.value));
+        if (o.description) label.appendChild(el('span', 'dm-approval-opt-desc', String(o.description)));
+        list.appendChild(label);
+      }
+      box.appendChild(list);
+      card.appendChild(box);
+    }
+    var submit = el('button', 'dm-approval-submit', '提交');
+    submit.type = 'button';
+    card.appendChild(submit);
+    return card;
+  }
+
+  function paint() {
+    if (!panel) return;
+    var body = panel.body;
+    body.innerHTML = '';
+    var n = count();
+    panel.title.textContent = '待处理 · ' + n + ' 项';
+    if (n === 0) {
+      body.appendChild(el('p', 'dm-approval-hint', '当前没有待处理的审批或提问'));
+      return;
+    }
+    var aps = Array.isArray(snap.approvals) ? snap.approvals : [];
+    for (var i = 0; i < aps.length; i++) {
+      if (!aps[i]) continue;
+      body.appendChild(approvalCard(aps[i]));
+    }
+    var gs = groups();
+    for (var k = 0; k < gs.length; k++) body.appendChild(questionCard(gs[k]));
+  }
+
+  function refresh() {
+    var sid = currentSession();
+    return rpc('mobile.pending', { sessionId: sid }).then(function (res) {
+      if (!res || !res.ok || !res.value) return false;
+      var v = res.value;
+      snap = {
+        approvals: Array.isArray(v.approvals) ? v.approvals : [],
+        questions: Array.isArray(v.questions) ? v.questions : [],
+      };
+      paintBadge();
+      if (isOpen()) paint();
+      return true;
+    }).catch(function () { return false; });
+  }
+
+  // ── 应答 ────────────────────────────────────────────────────────────────
+  function respondApproval(card, outcome) {
+    if (busy) return;
+    busy = true;
+    setStatus('提交中…');
+    var aid = card.getAttribute('data-approval-id') || '';
+    rpc('mobile.respond', {
+      rpcId: card.getAttribute('data-rpc') || '',
+      response: { sessionId: currentSession(), approvalId: aid, outcome: outcome }
+    }).then(function (res) {
+      busy = false;
+      if (!isOpen()) return;
+      if (!res || !res.ok) {
+        setStatus((res && res.error && res.error.message) ? res.error.message : '处理失败', 'err');
+        return;
+      }
+      setStatus(outcome === 'rejected' ? '已拒绝' : '已允许', 'ok');
+      refresh();
+    }).catch(function () {
+      busy = false;
+      if (!isOpen()) return;
+      setStatus('处理失败', 'err');
+    });
+  }
+
+  // 提问应答：answers = [{ id, selected:[label…] }]，与 bundle 提交的同形。
+  function submitQuestion(card) {
+    if (busy) return;
+    var boxes = card.querySelectorAll('.dm-approval-q');
+    var answers = [];
+    for (var i = 0; i < boxes.length; i++) {
+      var box = boxes[i];
+      var id = box.getAttribute('data-q-id') || '';
+      var inputs = box.querySelectorAll('input');
+      var selected = [];
+      for (var k = 0; k < inputs.length; k++) {
+        if (inputs[k].checked) selected.push(inputs[k].value);
+      }
+      answers.push({ id: id, selected: selected });
+    }
+    busy = true;
+    setStatus('提交中…');
+    rpc('mobile.respond', {
+      rpcId: card.getAttribute('data-rpc') || '',
+      response: { sessionId: currentSession(), answer: { answers: answers } }
+    }).then(function (res) {
+      busy = false;
+      if (!isOpen()) return;
+      if (!res || !res.ok) {
+        setStatus((res && res.error && res.error.message) ? res.error.message : '提交失败', 'err');
+        return;
+      }
+      setStatus('已提交', 'ok');
+      refresh();
+    }).catch(function () {
+      busy = false;
+      if (!isOpen()) return;
+      setStatus('提交失败', 'err');
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var act = t.closest('.dm-approval-act');
+    if (act) {
+      var c1 = act.closest('.dm-approval-card');
+      if (!c1 || c1.getAttribute('data-kind') !== 'approval') return;
+      e.preventDefault();
+      respondApproval(c1, act.getAttribute('data-outcome') || 'rejected');
+      return;
+    }
+    if (t.closest('.dm-approval-submit')) {
+      var c2 = t.closest('.dm-approval-card');
+      if (!c2 || c2.getAttribute('data-kind') !== 'question') return;
+      e.preventDefault();
+      submitQuestion(c2);
+    }
+  });
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isOpen()) closePanel();
+    else openPanel();
+  });
+
+  // ── 只在聊天页显示：与权限按钮同一判据 ──────────────────────────────────
+  function isChatPage() {
+    var slots = document.querySelectorAll('.mobile-headerSlot-right');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].querySelector('button[aria-label="更多"]')) return true;
+    }
+    return false;
+  }
+
+  function startPoll() {
+    if (bgTimer !== null) return;
+    refresh();
+    bgTimer = window.setInterval(function () {
+      try {
+        if (document.visibilityState && document.visibilityState !== 'visible') return;
+        refresh();
+      } catch (e) {}
+    }, POLL_MS);
+  }
+  function stopPoll() {
+    if (bgTimer !== null) { window.clearInterval(bgTimer); bgTimer = null; }
+  }
+
+  // 幂等：位置对了就不动，避免被 MutationObserver 反复插入而抖动。
+  function ensure() {
+    var row = document.getElementById('dm-tools');
+    var tools = document.querySelector('.chat-tools');
+    if (!row || !tools || !isChatPage()) {
+      if (btn.parentNode) btn.parentNode.removeChild(btn);
+      btn.classList.add('dm-icon-hidden');
+      if (isOpen()) closePanel();
+      stopPoll();
+      return;
+    }
+    var perm = document.getElementById('dm-perm-btn');
+    if (btn.parentNode !== row) {
+      if (perm && perm.parentNode === row) row.insertBefore(btn, perm.nextSibling);
+      else row.appendChild(btn);
+    } else if (perm && perm.parentNode === row && perm.nextSibling !== btn) {
+      row.insertBefore(btn, perm.nextSibling);
+    }
+    startPoll();
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    window.setTimeout(function () { pending = false; ensure(); }, 60);
+  }
+  try {
+    var mo = new MutationObserver(schedule);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(ensure, 400);
+  ensure();
+})();
+</script>`
+
+// 工具行最右侧「子代理状态」图标：当前会话有子代理时才出现，运行中带绿色数字角标，
+// 全部空闲时图标转灰；点击打开已有的子代理面板（SUBAGENT_BTN_HTML 那个，不重画）。
+//
+// 数据不新增轮询：只读 SUBAGENT_BTN_HTML 挂在 window 上的快照（它自己在后台预取
+// subagent.list），本脚本每 1s 做一次纯内存同步，一个 RPC 都不发。
+const SUBAGENT_STATUS_BTN_HTML = `<button id="dm-subagent-status-btn" class="dm-tool-btn" type="button" aria-label="子代理状态" title="子代理状态"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5.5" r="2.6"/><circle cx="5" cy="17" r="2.6"/><circle cx="19" cy="17" r="2.6"/><path d="M12 8.1V14M12 14H6.8M12 14h5.2"/></svg><span id="dm-subagent-status-badge" class="dm-icon-badge"></span></button><script>
+(function () {
+  var btn = document.getElementById('dm-subagent-status-btn');
+  if (!btn) return;
+  var badge = document.getElementById('dm-subagent-status-badge');
+
+  var SYNC_MS = 1000;   // 纯内存同步（读快照），不发任何 RPC
+  function hub() {
+    try { return window.__dmSubagentHub || null; } catch (e) { return null; }
+  }
+
+  function hide() {
+    btn.classList.add('dm-icon-hidden');
+    btn.setAttribute('aria-hidden', 'true');
+    if (badge) { badge.textContent = ''; badge.classList.remove('dm-icon-badge-show'); }
+  }
+
+  function sync() {
+    var h = hub();
+    if (!h || typeof h.snapshot !== 'function') { hide(); return; }
+    var s = h.snapshot();
+    if (!s || !s.known || !(s.total > 0)) { hide(); return; }   // 没子代理 / 还没拉到 → 隐藏
+    btn.classList.remove('dm-icon-hidden');
+    btn.removeAttribute('aria-hidden');
+    var running = s.running > 0;
+    btn.classList.toggle('dm-icon-idle', !running);
+    if (badge) {
+      if (running) {
+        badge.textContent = s.running > 99 ? '99+' : String(s.running);
+        badge.classList.add('dm-icon-badge-show');
+      } else {
+        badge.textContent = '';
+        badge.classList.remove('dm-icon-badge-show');
+      }
+    }
+    btn.setAttribute('title', running ? ('子代理 · ' + s.running + ' 个运行中') : ('子代理 · ' + s.total + ' 个（空闲）'));
+  }
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var h = hub();
+    if (h && typeof h.openPanel === 'function') { h.openPanel(); return; }
+    // 兜底：hub 还没挂上（子代理脚本尚未执行完）时点它自己的按钮，效果一致。
+    var b = document.getElementById('dm-subagent-btn');
+    if (b) b.click();
+  });
+
+  function isChatPage() {
+    var slots = document.querySelectorAll('.mobile-headerSlot-right');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].querySelector('button[aria-label="更多"]')) return true;
+    }
+    return false;
+  }
+
+  // 幂等：位置对了就不动。
+  function ensure() {
+    var row = document.getElementById('dm-tools');
+    var tools = document.querySelector('.chat-tools');
+    if (!row || !tools || !isChatPage()) {
+      if (btn.parentNode) btn.parentNode.removeChild(btn);
+      hide();
+      return;
+    }
+    // 审批图标的右边 = 本图标；审批图标不在行内就挂末尾（下一轮再排正）。
+    var appr = document.getElementById('dm-approval-btn');
+    if (btn.parentNode !== row) {
+      if (appr && appr.parentNode === row) row.insertBefore(btn, appr.nextSibling);
+      else row.appendChild(btn);
+    } else if (appr && appr.parentNode === row && appr.nextSibling !== btn) {
+      row.insertBefore(btn, appr.nextSibling);
+    }
+    sync();
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    window.setTimeout(function () { pending = false; ensure(); }, 60);
+  }
+  try {
+    var mo = new MutationObserver(schedule);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(ensure, 400);
+  setInterval(sync, SYNC_MS);
+  hide();
+  ensure();
+})();
+</script>`
 // 权限预设切换：工具栏「上下文用量」右边一个盾牌按钮，点开自绘面板列出宿主
 // permissionPresets.catalog() 的预设并切换。
 //
@@ -1992,6 +2539,8 @@ function mobilePageHtml() {
     TURN_PILL_HTML,
     SUBAGENT_BTN_HTML,
     PERMISSION_BTN_HTML,
+    APPROVAL_BTN_HTML,
+    SUBAGENT_STATUS_BTN_HTML,
     '</body>',
     '</html>',
   ].join('')
@@ -3630,6 +4179,93 @@ export function apply(ctx, config) {
     return lastObserved.get(sessionId) ?? 0
   }
 
+  // ── 流式增量：宿主 assistant-stream 帧 → 手机 session/event ────────────────
+  /**
+   * sessionId -> 当前这一轮流式 attempt 的去重/顺序状态。
+   * `attemptId` 变了就换一套：新一轮的 index 从 0 重来，不能和上一轮混着判重。
+   */
+  const streamStates = new Map()
+
+  /** 取（必要时新建）某会话当前 attempt 的流式状态。 */
+  function streamStateFor(sessionId, attemptId, revision) {
+    const key = `${sessionId}\u0000${attemptId ?? ''}`
+    let st = streamStates.get(key)
+    if (st === undefined || st.attemptId !== attemptId || st.revision !== revision) {
+      // 换 attempt / 换 revision：上一套状态整块作废（同时把旧的收走，避免 Map 膨胀）。
+      if (st !== undefined) streamStates.delete(key)
+      st = { key, attemptId, revision, seen: new Set(), lastIndex: -1, turn: undefined, step: undefined, seq: 0 }
+      streamStates.set(key, st)
+      // 兜底上限：异常多的 attemptId 时不让 Map 无界增长。
+      if (streamStates.size > 64) {
+        for (const k of [...streamStates.keys()].slice(0, streamStates.size - 64)) streamStates.delete(k)
+      }
+    }
+    return st
+  }
+
+  /**
+   * 把宿主的一个 assistant-stream 帧翻译成手机 bundle 认识的 `session/event`。
+   *
+   * 只翻译 `chunk`（`start` 用来记 turn/step，`end` 用来收尾）：
+   * 逐字效果全靠 chunk，而 start/end 没有对应的 bundle 事件类型，
+   * 硬造一个反而会让 reducer 走进未知分支。
+   *
+   * @returns 合成的事件对象；返回 undefined 表示该帧不必推给手机。
+   */
+  function assistantStreamEvent(sessionId, frame) {
+    if (!frame || typeof frame !== 'object') return undefined
+    const attemptId = typeof frame.attemptId === 'string' ? frame.attemptId : undefined
+    const revision = typeof frame.revision === 'number' ? frame.revision : undefined
+
+    // start：只记 turn/step，供后续 chunk 定位同一个气泡。不推帧。
+    if (frame.type === 'start') {
+      const st = streamStateFor(sessionId, attemptId, revision)
+      if (typeof frame.turn === 'number') st.turn = frame.turn
+      if (typeof frame.step === 'number') st.step = frame.step
+      return undefined
+    }
+    // end：收尾，丢弃这一轮的状态。不推帧。
+    if (frame.type === 'end') {
+      const st = streamStates.get(`${sessionId}\u0000${attemptId ?? ''}`)
+      if (st !== undefined) streamStates.delete(st.key)
+      return undefined
+    }
+    if (frame.type !== 'chunk') return undefined
+
+    const st = streamStateFor(sessionId, attemptId, revision)
+    // ── 去重：同一个 index 只推一次（重复推会让气泡里的字重复出现）──────────
+    if (typeof frame.index === 'number' && Number.isFinite(frame.index)) {
+      if (st.seen.has(frame.index)) return undefined
+      if (st.seen.size >= STREAM_SEEN_INDEX_MAX) {
+        // 触顶：退化成「只接受递增的 index」，不再无界记录。
+        if (frame.index <= st.lastIndex) return undefined
+      } else {
+        st.seen.add(frame.index)
+      }
+      // ── 顺序：乱序会让气泡里的字错乱，落后的 index 直接丢 ──────────────────
+      //（宿主按 index 递增产出；真乱序时丢一个字好过把整段文字打乱）
+      if (frame.index < st.lastIndex) return undefined
+      st.lastIndex = frame.index
+    }
+
+    // bundle 的 `ze()` 归一化器只认 chunk.type ∈ {'text-delta','reasoning-delta'}，
+    // 且 text 是非空字符串；其余（如 tool-call-delta）它直接返回 null → 不渲染。
+    const chunk = frame.chunk
+    if (!chunk || typeof chunk !== 'object') return undefined
+    if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return undefined
+    if (typeof chunk.text !== 'string' || chunk.text === '') return undefined
+
+    // 合成 assistant/chunk 事件。seq/time 只用于 bundle 的排序与「最后更新」显示：
+    // 单调递增即可，用 index 做基准确保同一轮内绝对递增。
+    const seq = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index : st.seq + 1
+    st.seq = seq
+    const time = typeof frame.time === 'number' && Number.isFinite(frame.time) ? frame.time : Date.now()
+    const data = { chunk: { type: chunk.type, text: chunk.text } }
+    if (st.turn !== undefined) data.turn = st.turn
+    if (st.step !== undefined) data.step = st.step
+    return { type: 'assistant/chunk', seq, time, data }
+  }
+
   /** 起（或复用）某会话的 follow 单例。幂等。 */
   function ensureFollow(sessionId) {
     const existing = follows.get(sessionId)
@@ -3641,7 +4277,10 @@ export function apply(ctx, config) {
       let triedParentLookup = false
       while (!ref.signal.aborted && restarts <= MAX_FOLLOW_RESTARTS) {
         try {
-          const frames = sc().follow({ address: addressForSession(sessionId) }, ref.signal)
+          const frames = sc().follow(
+            { address: addressForSession(sessionId), assistantStream: FOLLOW_ASSISTANT_STREAM },
+            ref.signal,
+          )
           for await (const f of frames) {
             if (ref.signal.aborted) return
             if (!f) continue
@@ -3655,6 +4294,12 @@ export function apply(ctx, config) {
             }
             if (f.type === 'event' && f.event) {
               emitMux({ type: 'session/event', sessionId, event: f.event })
+              continue
+            }
+            // ── 流式增量 → 手机能渲染的 session/event ────────────────────────
+            if (f.type === 'assistant-stream' && f.frame) {
+              const ev = assistantStreamEvent(sessionId, f.frame)
+              if (ev !== undefined) emitMux({ type: 'session/event', sessionId, event: ev })
             }
           }
           if (ref.signal.aborted) return
@@ -3696,6 +4341,10 @@ export function apply(ctx, config) {
     if (state === undefined) return
     follows.delete(sessionId)
     if (!anyoneObserving(sessionId)) lastObserved.delete(sessionId)
+    // 拆流时把该会话的流式去重状态一并收走，避免重连后拿旧 index 判重误丢新一轮的字。
+    for (const [key, st] of [...streamStates]) {
+      if (key.startsWith(`${sessionId}\u0000`)) streamStates.delete(st.key)
+    }
     try {
       state.ref.abort()
     } catch {}
