@@ -335,22 +335,11 @@ async function apiKeyValue(ctx, name) {
 
 /** 用给定 key 直查官方 /user/balance，超时软失败。成功返回金额+币种，否则抛错。 */
 async function queryOfficialBalance(apiKey) {
-  const timeoutController = new AbortController()
-  const timeoutTimer = setTimeout(() => timeoutController.abort(), BALANCE_FETCH_TIMEOUT_MS)
-  timeoutTimer.unref?.()
-  let response
-  try {
-    response = await fetch(DEEPSEEK_BALANCE_URL, {
-      method: 'GET',
-      headers: { accept: 'application/json', authorization: `Bearer ${apiKey}` },
-      signal: timeoutController.signal,
-    })
-  } catch (error) {
-    if (timeoutController.signal.aborted) throw new Error('DeepSeek balance query timed out')
-    throw error
-  } finally {
-    clearTimeout(timeoutTimer)
-  }
+  const response = await fetch(DEEPSEEK_BALANCE_URL, {
+    method: 'GET',
+    headers: { accept: 'application/json', authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(BALANCE_FETCH_TIMEOUT_MS),
+  })
   if (!response.ok) {
     throw new Error(`DeepSeek balance endpoint returned ${response.status}`)
   }
@@ -1070,6 +1059,8 @@ export function apply(ctx, config) {
   let pairToken = null // { code, expiresAt, fixed }
   let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
   const cookieName = COOKIE_NAME
+  // 用量页缓存：60 秒 TTL，只缓存查询成功的视图（含数据采集时刻 fetchedAt）。
+  let usageCache = { at: 0, view: null }
 
   function deviceTokensOf(req) {
     const header = req.headers.cookie
@@ -1840,8 +1831,57 @@ export function apply(ctx, config) {
       case 'mobile.latestVersion': {
         return { ok: true, value: { latest: '0.1.0', isNewer: false } }
       }
+      // ── 用量 / 套餐与配额：只报 DeepSeek 官方余额 ────────────────────────
+      // 数据一律在宿主进程内取：优先平台登录态（不需要 API Key），取不到再回退到
+      // Key 直查；两者都拿不到就 no-key。**切忌返回 ok:false**：bundle 挂载时
+      // F().then(...) 的 rejection 是被吞掉的，那时页面会永远卡在「加载中…」。
       case 'mobile.usage': {
-        return { ok: true, value: { providers: [] } }
+        const usageBody = payload && typeof payload === 'object' ? payload : {}
+        const usageNow = Date.now()
+        if (usageBody.refresh !== true && usageCache.view !== null && usageNow - usageCache.at < USAGE_CACHE_TTL_MS) {
+          return { ok: true, value: usageCache.view }
+        }
+        let usageProviders = []
+        let usageFailed = false
+        try {
+          // 链路 A：平台登录态下的钱包余额，不需要任何 API Key。
+          const viaAccount = await readAccountBalance(ctx)
+          if (viaAccount !== undefined) {
+            usageProviders = [{
+              name: DEEPSEEK_BALANCE_NAME,
+              baseURL: DEEPSEEK_BALANCE_BASE_URL,
+              status: 'ok',
+              kind: 'balance',
+              balance: viaAccount,
+              fetchedAt: usageNow,
+            }]
+          } else {
+            // 链路 B：回退到 Key 直查官方 /user/balance。
+            const apiKey = await apiKeyValue(ctx, 'DEEPSEEK_API_KEY')
+            if (apiKey === undefined) {
+              usageProviders = [{ name: DEEPSEEK_BALANCE_NAME, status: 'no-key', kind: 'balance', fetchedAt: usageNow }]
+            } else {
+              const direct = await queryOfficialBalance(apiKey)
+              usageProviders = [{
+                name: DEEPSEEK_BALANCE_NAME,
+                baseURL: DEEPSEEK_BALANCE_BASE_URL,
+                status: 'ok',
+                kind: 'balance',
+                balance: direct,
+                fetchedAt: usageNow,
+              }]
+            }
+          }
+        } catch {
+          // 超时 / 网络 / 解析失败都不该让页面卡住，也不冲掉上一次的好结果。
+          usageFailed = true
+          usageProviders = [{ name: DEEPSEEK_BALANCE_NAME, status: 'error', kind: 'balance', fetchedAt: usageNow }]
+        }
+        const usageView = { providers: usageProviders, fetchedAt: usageNow }
+        // 成功才写缓存；失败保留旧值（首次失败时 usageCache.view 仍是 null）。
+        if (!usageFailed) usageCache = { at: usageNow, view: usageView }
+        if (usageCache.view === null) return { ok: true, value: usageView }
+        return { ok: true, value: usageCache.view }
       }
       case 'mobile.error':
       case 'mobile.perf':
