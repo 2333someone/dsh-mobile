@@ -112,6 +112,51 @@
 .chat-picker-more {
   display: none !important;
 }
+/* 隐藏 bundle 自带的思考强度组（改由下方独立卡片呈现，避免覆盖列表） */
+.chat-picker-panel > .chat-picker-group.dm-effort-group {
+  display: none !important;
+}
+/* 拼了思考强度时，模型弹窗只保留上方圆角 */
+.chat-picker-panel.dm-has-effort {
+  border-radius: 16px 16px 0 0 !important;
+}
+/* 思考强度：紧贴模型弹窗底部、同宽、独立不重叠 */
+#dm-effort {
+  position: fixed;
+  z-index: 61;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-default, rgba(0, 0, 0, 0.08));
+  border-top: none;
+  border-radius: 0 0 16px 16px;
+  padding: 10px 12px 12px;
+  box-sizing: border-box;
+}
+#dm-effort .dm-effort-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-quaternary, #8a8f99);
+  margin-bottom: 8px;
+  text-align: center;
+}
+#dm-effort .dm-effort-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+#dm-effort .dm-effort-chip {
+  border: 1px solid var(--border-default, rgba(0, 0, 0, 0.1));
+  background: transparent;
+  color: var(--text-primary, #2b2d33);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+}
+#dm-effort .dm-effort-chip-on {
+  border-color: #4d6bfe;
+  background: #4d6bfe;
+  color: #fff;
+}
 /* 给自定义模型按钮在输入栏里留出位置 */
 .chat-input {
   margin-left: 44px !important;
