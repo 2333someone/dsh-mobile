@@ -291,38 +291,18 @@ function assetText(name) {
   return asset(name).toString('utf8')
 }
 
-// 输入框上方工具行：把「+」「模型」「上下文用量」统一成图标排列。
+// 输入框上方工具行：+ / 模型 / 上下文用量 图标；模型打开底部上滑抽屉。
 const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="模型"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 9h6M9 12h6M9 15h3"/></svg></button><script>
 (function () {
   var btn = document.getElementById('dm-model-btn');
   if (!btn) return;
-  var catalog = null;
-  var catalogAt = 0;
-  var lastSessionId = '';
-  var effortKey = '';
-
-  // 本页脚本先于 bundle 执行：拦截 RPC 请求，自动记住当前会话 id。
-  var origFetch = window.fetch;
-  if (typeof origFetch === 'function') {
-    window.fetch = function (input, init) {
-      try {
-        var url = typeof input === 'string' ? input : (input && input.url) || '';
-        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
-          var body = JSON.parse(init.body);
-          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
-            lastSessionId = body.payload.sessionId;
-          }
-        }
-      } catch (e) {}
-      return origFetch.apply(this, arguments);
-    };
-  }
 
   function toolsRow() { return document.querySelector('.chat-tools'); }
   function pill() { return document.querySelector('.chat-pill[aria-label^="切换模型"]'); }
-  function panelEl() { return document.querySelector('.chat-picker-panel'); }
-  function effortEl() { return document.getElementById('dm-effort'); }
-  function visible(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+  function sheetOpen() {
+    var b = document.querySelector('.sheet-backdrop');
+    return !!(b && b.getBoundingClientRect().width > 0);
+  }
 
   // 把「+」和模型按钮放进输入框上方的工具行（同一层，随页面出现）。
   function ensureTools() {
@@ -348,133 +328,29 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
     if (row.parentNode !== t) t.insertBefore(row, t.firstChild);
   }
 
-  function rpc(method, payload) {
-    return fetch('/m/api/' + method, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rpcId: 'dm-' + Date.now(), payload: payload }),
-    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
-  }
-  function currentSession() {
-    try {
-      var s = new URL(location.href).searchParams.get('session');
-      if (s) return s;
-    } catch (e) {}
-    return lastSessionId;
-  }
-  function loadCatalog(force) {
-    var now = Date.now();
-    if (!force && catalog && now - catalogAt < 60000) return Promise.resolve(catalog);
-    return rpc('session.models', {}).then(function (res) {
-      if (res && res.ok) { catalog = res.value; catalogAt = Date.now(); }
-      return catalog;
-    });
-  }
-  function closeAll() {
-    var scrim = document.querySelector('.chat-picker-scrim');
-    if (visible(scrim)) scrim.click();
-    var back = document.querySelector('.sheet-backdrop');
-    if (visible(back)) back.click();
-  }
-  function applyEffort(provider, model, effort) {
-    var sid = currentSession();
-    if (!sid) return;
-    var payload = { sessionId: sid, provider: provider, model: model };
-    if (effort) payload.reasoningEffort = effort;
-    rpc('session.selectModel', payload).then(function () { closeAll(); });
-  }
-  function positionEffort() {
-    var panel = panelEl();
-    var el = effortEl();
-    if (!panel || !el || !visible(panel)) return;
-    var r = panel.getBoundingClientRect();
-    el.style.left = Math.round(r.left) + 'px';
-    el.style.width = Math.round(r.width) + 'px';
-    el.style.top = Math.round(r.bottom) + 'px';
-  }
-  function removeEffort() {
-    var el = effortEl();
-    if (el) el.remove();
-    var panel = panelEl();
-    if (panel) panel.classList.remove('dm-has-effort');
-    effortKey = '';
-  }
-  function renderEffort(panel, data) {
-    removeEffort();
-    var el = document.createElement('div');
-    el.id = 'dm-effort';
-    var title = document.createElement('div');
-    title.className = 'dm-effort-title';
-    title.textContent = '思考强度';
-    el.appendChild(title);
-    var row = document.createElement('div');
-    row.className = 'dm-effort-row';
-    var opts = [{ id: '', name: '默认' }].concat((data.efforts || []).map(function (e) { return { id: e.id, name: e.name || e.id }; }));
-    opts.forEach(function (o) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = o.name;
-      var on = (o.id || '') === (data.cur || '');
-      b.className = 'dm-effort-chip' + (on ? ' dm-effort-chip-on' : '');
-      b.onclick = function () { applyEffort(data.provider, data.model, o.id); };
-      row.appendChild(b);
-    });
-    el.appendChild(row);
-    panel.classList.add('dm-has-effort');
-    document.body.appendChild(el);
-    positionEffort();
-    effortKey = data.key;
-  }
-  function ensureEffort(force) {
-    var panel = panelEl();
-    if (!panel || !visible(panel)) return;
-    var p = pill();
-    var key = (p && p.getAttribute('title')) || '';
-    if (key === '') return;
-    if (effortKey === key && effortEl()) { positionEffort(); return; }
-    var parts = key.split('/');
-    if (parts.length !== 2) return;
-    loadCatalog(force).then(function (cat) {
-      if (!cat) return;
-      var provider = parts[0], model = parts[1];
-      var efforts = [];
-      (cat.groups || []).forEach(function (g) {
-        if (g.id !== provider) return;
-        (g.models || []).forEach(function (m) {
-          if (m.id === model && m.reasoning && Array.isArray(m.reasoning.efforts)) efforts = m.reasoning.efforts;
-        });
-      });
-      if (efforts.length === 0) { removeEffort(); return; }
-      var p2 = panelEl();
-      if (!p2) return;
-      renderEffort(p2, {
-        key: key,
-        provider: provider,
-        model: model,
-        efforts: efforts,
-        cur: (cat.current && cat.current.reasoningEffort) || '',
-      });
-    });
-  }
-
   btn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
-    if (visible(panelEl())) { closeAll(); return; }
+    if (sheetOpen()) {
+      document.querySelector('.sheet-backdrop').click();
+      return;
+    }
     var p = pill();
     if (!p) return;
+    // 打开内联面板（被 CSS 隐藏），再点「全部…」唤起底部抽屉（模型 + 思考强度）。
     p.click();
-    setTimeout(function () { ensureEffort(false); }, 20);
+    setTimeout(function () {
+      var more = document.querySelector('.chat-picker-more');
+      if (more) more.click();
+      else {
+        var scrim = document.querySelector('.chat-picker-scrim');
+        if (scrim) scrim.click();
+      }
+    }, 60);
   });
 
-  setInterval(function () {
-    ensureTools();
-    if (visible(panelEl())) { ensureEffort(false); positionEffort(); }
-    else { removeEffort(); }
-  }, 120);
-  window.addEventListener('resize', function () { if (visible(panelEl())) positionEffort(); });
+  setInterval(ensureTools, 120);
   ensureTools();
-  loadCatalog(false);
 })();
 </script>`
 
