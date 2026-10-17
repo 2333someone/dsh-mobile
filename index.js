@@ -1377,12 +1377,54 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     }).catch(function () {});
   }
 
+  // ── 排序：运行中（running）排最前，其余（空闲）跟在后面 ──────────────
+  // 只在渲染前排，不碰 rowsOf／预取缓存／三态逻辑，也不改宿主 subagent.list 数据。
+  //
+  // 稳定性（关键）：同组内保持原始相对顺序。这里用「原下标做次级键」的显式稳定
+  // 排序，不依赖引擎 Array#sort 是否稳定；于是「同一份数据 → 每次都得到完全相同
+  // 的行序列 → 完全相同的 HTML 字符串」，setBody 的 data-dm-html 整段 diff 就不会
+  // 每次刷新都判定为「变了」而重画 DOM（列表不会乱跳／闪烁）。
+  //
+  // 健壮性：activity 缺失、不是字符串、不是 'running' 一律当作空闲（rank=1），不抛错。
+  function sortRowsRunningFirst(rows) {
+    try {
+      if (!Array.isArray(rows)) return [];
+      if (rows.length < 2) return rows.slice();
+      var decorated = [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i] || {};
+        var act = (r && typeof r.activity === 'string') ? r.activity : '';
+        decorated.push({ row: r, rank: act === 'running' ? 0 : 1, idx: i });
+      }
+      decorated.sort(function (a, b) {
+        if (a.rank !== b.rank) return a.rank - b.rank;   // running(0) 先于 其它(1)
+        return a.idx - b.idx;                            // 同组内保持原顺序
+      });
+      var out = [];
+      for (var k = 0; k < decorated.length; k++) out.push(decorated[k].row);
+      return out;
+    } catch (e) {
+      return Array.isArray(rows) ? rows.slice() : [];
+    }
+  }
+
   // 把一组 rows 画进面板。与上一屏内容一致就整段不动 DOM（避免闪烁／丢焦点）。
-  function paintList(rows) {
+  function paintList(rowsIn) {
     if (!panel) return;
     view = 'list';
     panel.back2.classList.remove('dm-subagent-show');
-    panel.title.textContent = '子代理 · ' + rows.length + ' 个';
+
+    // 渲染前排序；返回的是新数组，不会就地打乱传入的缓存数组。
+    var rows = sortRowsRunningFirst(rowsIn);
+
+    // 标题：总数保持不变；有运行中的再补一个「N 个运行中」。
+    // 标题走 textContent，不参与 body 的 data-dm-html diff，所以不影响防抖机制。
+    var runCount = 0;
+    for (var n = 0; n < rows.length; n++) {
+      if (rows[n] && rows[n].activity === 'running') runCount++;
+    }
+    panel.title.textContent = '子代理 · ' + rows.length + ' 个' +
+      (runCount > 0 ? ' · ' + runCount + ' 个运行中' : '');
 
     if (rows.length === 0) {
       setBody('<p class="dm-subagent-hint">当前没有子代理</p>');
