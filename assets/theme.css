@@ -1411,6 +1411,26 @@ body {
   max-height: var(--dm-vh, 100vh) !important;
 }
 
+/* ── 排队消息 dock（bundle 自带 .queue-dock）───────────────────────────────
+   bundle 把它渲染在 .chat-composer 的第一个子元素（输入框上方）；
+   index.js 的 QUEUE_DOCK_PLACE_HTML 会把它真实搬移到 .chat-tools
+   （模型 / 权限 / 上下文压缩那一行）**之前**，也就是用户要的「工具栏上面」。
+   这里只做视觉收口，不做定位搬移 —— 搬移由 DOM 顺序保证，
+   这样 dock 始终在文档流里，不会盖住消息区，也不会引入 overflow。
+   注意：禁止任何全局 overflow:hidden，否则会破坏消息区/列表滚动。 */
+.chat-composer > .queue-dock,
+.chat-tools ~ .queue-dock,
+.queue-dock {
+  /* 与工具行同一套左右留白，视觉上归到工具栏上方那一块 */
+  margin: 0 12px 6px !important;
+  /* 排在工具栏之上时不要被工具行的 z-index 55 反压住 */
+  position: relative;
+  z-index: 1;
+}
 
-
-
+/* 设置页「发送模式」行：复用 bundle 自带的 settings-row 外观，
+   只补一处——值文字（排队 / 直接插入）用弱化色，和「字体大小」等行一致。 */
+.dm-sendmode-row .card-action {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}

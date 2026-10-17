@@ -40,6 +40,9 @@ export const inject = [
   // sessions 用来把 sessionId 解析成 Session 对象（上面两个方法收的是 Session，不是 id）。
   'permissionPresets',
   'sessions',
+  // 排队消息（需求 C）：读 agent.inbox.nextTurn / nextStep 推 session/queue 帧。
+  // agents 提供 sessionId → Agent（含 inbox）的解析；不加会「cannot get without inject」。
+  'agents',
 ]
 
 const COOKIE_NAME = 'dsh_mobile'
@@ -350,6 +353,47 @@ function notifyChannelsView(channels) {
     telegram: { configured: has(ch.telegram && ch.telegram.botToken) && has(ch.telegram && ch.telegram.chatId) },
     wxpusher: { configured: has(ch.wxpusher && ch.wxpusher.spt) },
     pushplus: { configured: has(ch.pushplus && ch.pushplus.token) },
+  }
+}
+
+// ── 发送模式（sendMode）持久化 ──────────────────────────────────────────────
+//
+// 用户在「设置 → 发送模式」里选的「排队 / 直接插入」要能跨刷新、跨重连记住。
+// 选的是**插件自己的配置文件**，不走宿主 settings 命名空间，理由：
+//   ① 宿主的 settings.mutate 在本插件里明确返回 not-found（手机端设置只读），
+//      要在官方命名空间里写，得先给插件注册一个 ns + schema，牵动 Loader 配置，
+//      属于「两条路都做一半」的诱饵；
+//   ② 这个值语义上就是本插件（手机端）的行为开关，不是宿主共享设置；
+//   ③ 读写路径都在本文件内（mobile.preferences / session.prompt 两个 RPC），
+//      一处实现即可闭环，不依赖宿主版本。
+// 因此：单一实现，存 ~/.dsh/dsh-mobile-sendmode.json，与 notify config 同构。
+const SEND_MODE_DEFAULT = 'queue'
+const SEND_MODE_STEER = 'steer'
+const SEND_MODE_QUEUE = 'queue'
+/** 只接受 'queue' / 'steer'；别的（含空串/未设置）一律回落到默认 queue。 */
+function normalizeSendMode(value) {
+  return value === SEND_MODE_STEER ? SEND_MODE_STEER : SEND_MODE_QUEUE
+}
+
+function loadSendMode(file) {
+  try {
+    if (!existsSync(file)) return SEND_MODE_DEFAULT
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    // 兼容两种落盘形态：裸字符串（早期/手写）与 { sendMode } 对象。
+    const raw = (saved && typeof saved === 'object') ? saved.sendMode : saved
+    return normalizeSendMode(typeof raw === 'string' ? raw : SEND_MODE_DEFAULT)
+  } catch {
+    return SEND_MODE_DEFAULT
+  }
+}
+
+function saveSendMode(file, mode) {
+  try {
+    const dir = join(file, '..')
+    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify({ sendMode: normalizeSendMode(mode) }, null, 2))
+  } catch (err) {
+    console.error('[dsh-mobile] failed to persist send mode:', err && err.message)
   }
 }
 
@@ -2645,6 +2689,243 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
 })();
 </script>`
 
+// 发送模式（需求 B 的前端侧）：按设置改写 session.prompt 的 mode。
+//
+// bundle 里 ce() 把 mode 写死成 `queue`（`await m('session.prompt',{sessionId:e,mode:'queue',content:t})`），
+// bundle 不可改，所以唯一可行的切入点是它下面的 window.fetch —— 与 MODEL_BUTTON_HTML
+// 同一手法：在请求发出前把 body 里的 mode 换成用户选的那个值。
+//
+// 设置值从 mobile.preferences 读（宿主下发），并缓存在 localStorage 供首帧使用。
+const SEND_MODE_HTML = `<script>
+(function () {
+  var KEY = 'dm.sendMode';
+  var mode = 'queue';
+
+  function valid(v) { return v === 'steer' || v === 'queue'; }
+
+  try {
+    var cached = localStorage.getItem(KEY);
+    if (valid(cached)) mode = cached;
+  } catch (e) {}
+
+  // 只改 session.prompt 的 mode：别的请求一律原样放行。
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/m/api/session.prompt') >= 0 && init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body);
+          if (body && body.payload && typeof body.payload === 'object') {
+            body.payload.mode = mode;
+            init = { ...init, body: JSON.stringify(body) };
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, arguments.length ? [input, init] : arguments);
+    };
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-' + Date.now(), payload: payload || {} }),
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+
+  // 启动时拉一次真值（宿主是唯一权威；localStorage 只是首帧缓存）。
+  function syncFromHost() {
+    return rpc('mobile.preferences', {}).then(function (res) {
+      var v = res && res.ok && res.value ? res.value.sendMode : undefined;
+      if (!valid(v)) return;
+      mode = v;
+      try { localStorage.setItem(KEY, v); } catch (e) {}
+      window.dispatchEvent(new CustomEvent('dm:sendmode', { detail: { sendMode: v } }));
+    }).catch(function () {});
+  }
+
+  // 给设置页脚本用：读 / 写。
+  window.__dmSendMode = {
+    get: function () { return mode; },
+    set: function (next) {
+      if (!valid(next)) return Promise.resolve(mode);
+      return rpc('mobile.preferences', { sendMode: next }).then(function () {
+        mode = next;
+        try { localStorage.setItem(KEY, next); } catch (e) {}
+        window.dispatchEvent(new CustomEvent('dm:sendmode', { detail: { sendMode: next } }));
+        return mode;
+      });
+    },
+  };
+
+  syncFromHost();
+})();
+</script>`
+
+// 设置页「发送模式」行（需求 A）。
+//
+// 注入点：设置页的「对话」分组（.settings-group 里含「自动滚动 / 震动」的那个 ul）。
+// 识别方式：找标题为「对话」的 .settings-groupTitle，取它所在的 ul —— 与本机语言一致，
+// 不依赖英文文案。找不到就挂到设置页滚动容器 .mobile-scroll 末尾，绝不静默失败。
+//
+// 行内点击直接切换并写回宿主（mobile.preferences 的写通道），附带「已保存」提示。
+const SEND_MODE_SETTINGS_HTML = `<script>
+(function () {
+  var LABELS = {
+    queue: '排队（等当前回复结束）',
+    steer: '直接插入（插队立即生效）',
+  };
+
+  function settingsPage() {
+    // 设置页标志：有搜索框 .settings-search 且标题是「设置」。
+    var title = document.querySelector('.mobile-title');
+    var hasSearch = !!document.querySelector('.settings-search');
+    if (!hasSearch) return null;
+    if (title && String(title.textContent || '').indexOf('设置') < 0) return null;
+    return document.querySelector('.mobile-scroll');
+  }
+
+  function chatGroup() {
+    var titles = document.querySelectorAll('.settings-groupTitle');
+    for (var i = 0; i < titles.length; i++) {
+      var text = String(titles[i].textContent || '');
+      if (text.indexOf('对话') >= 0) return titles[i].closest('ul');
+    }
+    return null;
+  }
+
+  function build() {
+    var li = document.createElement('li');
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'settings-row dm-sendmode-row';
+    btn.id = 'dm-sendmode-row';
+
+    var icon = document.createElement('span');
+    icon.className = 'card-icon';
+    icon.innerHTML = '<span aria-hidden="true">↩</span>';
+
+    var main = document.createElement('span');
+    main.className = 'card-main';
+    var title = document.createElement('span');
+    title.className = 'card-title';
+    var titleText = document.createElement('span');
+    titleText.className = 'card-titleText';
+    titleText.textContent = '发送模式';
+    title.appendChild(titleText);
+    var desc = document.createElement('span');
+    desc.className = 'card-desc';
+    desc.id = 'dm-sendmode-desc';
+    main.appendChild(title);
+    main.appendChild(desc);
+
+    var action = document.createElement('span');
+    action.className = 'card-action';
+    action.id = 'dm-sendmode-value';
+
+    btn.appendChild(icon);
+    btn.appendChild(main);
+    btn.appendChild(action);
+    li.appendChild(btn);
+    return li;
+  }
+
+  function current() {
+    return window.__dmSendMode && typeof window.__dmSendMode.get === 'function'
+      ? window.__dmSendMode.get()
+      : 'queue';
+  }
+
+  function paint() {
+    var row = document.getElementById('dm-sendmode-row');
+    if (!row) return;
+    var m = current();
+    var value = document.getElementById('dm-sendmode-value');
+    var desc = document.getElementById('dm-sendmode-desc');
+    if (value) value.textContent = m === 'steer' ? '直接插入' : '排队';
+    if (desc) desc.textContent = LABELS[m] || LABELS.queue;
+    row.setAttribute('aria-label', '发送模式：' + (m === 'steer' ? '直接插入' : '排队'));
+  }
+
+  function ensure() {
+    var scroll = settingsPage();
+    if (!scroll) return;
+    var row = document.getElementById('dm-sendmode-row');
+    if (row) { paint(); return; }
+
+    var li = build();
+    var group = chatGroup();
+    if (group) group.appendChild(li);
+    else scroll.appendChild(li);
+    paint();
+
+    var btn = document.getElementById('dm-sendmode-row');
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!window.__dmSendMode) return;
+      var next = current() === 'steer' ? 'queue' : 'steer';
+      btn.disabled = true;
+      window.__dmSendMode.set(next).then(function () {
+        btn.disabled = false;
+        paint();
+        flash();
+      }, function () { btn.disabled = false; });
+    });
+  }
+
+  // 一行提示：复用 bundle 自带的 settings-saved 样式，不新增全局样式。
+  function flash() {
+    var scroll = settingsPage();
+    if (!scroll) return;
+    var tip = document.createElement('p');
+    tip.className = 'mobile-pad settings-saved';
+    tip.setAttribute('role', 'status');
+    tip.textContent = '已保存';
+    scroll.insertBefore(tip, scroll.firstChild);
+    setTimeout(function () { if (tip.parentNode) tip.parentNode.removeChild(tip); }, 1600);
+  }
+
+  window.addEventListener('dm:sendmode', paint);
+  setInterval(ensure, 500);
+  ensure();
+})();
+</script>`
+
+// 排队消息的位置（需求 C）：把 bundle 的 .queue-dock 挪到聊天窗工具栏（.chat-tools）**上面**。
+//
+// bundle 把 Ho() 渲染成 .chat-composer 的第一个子元素（输入框上方），而 .chat-tools
+// 是它的**上一个兄弟** —— 也就是「上下文压缩/模型/权限」那一行。用户要的是
+// 「工具栏上面」，即 dock 必须排在 .chat-tools 之前。
+// 用 insertBefore 做真实 DOM 搬移（不是 CSS 定位）：这样它天然在文档流里，
+// 不会盖住消息区，也不会引入 overflow 问题。
+const QUEUE_DOCK_PLACE_HTML = `<script>
+(function () {
+  function dock() { return document.querySelector('.queue-dock[data-queue-dock]'); }
+  function chat() { return document.querySelector('.chat-composer'); }
+  // 工具栏：模型 / 权限 pill + 上下文用量那一行。
+  function tools() { return document.querySelector('.chat-tools'); }
+
+  function place() {
+    var d = dock();
+    if (!d) return;              // 没排队消息时 bundle 直接返回 null，什么都不做
+    var t = tools();
+    if (!t || !t.parentNode) return;
+    // 已经在工具栏前一个位置了就不要动（避免每帧重排、也避免打断用户正在编辑的输入框）。
+    if (d.nextSibling === t) return;
+    t.parentNode.insertBefore(d, t);
+  }
+
+  try {
+    var mo = new MutationObserver(place);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(place, 300);
+  place();
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -2675,6 +2956,9 @@ function mobilePageHtml() {
     PERMISSION_BTN_HTML,
     APPROVAL_BTN_HTML,
     SUBAGENT_STATUS_BTN_HTML,
+    SEND_MODE_HTML,
+    SEND_MODE_SETTINGS_HTML,
+    QUEUE_DOCK_PLACE_HTML,
     '</body>',
     '</html>',
   ].join('')
@@ -2997,6 +3281,8 @@ export function apply(ctx, config) {
     devicesFile: defaultDevicesFile(),
     pairCode: DEFAULT_PAIR_CODE,
     pushConfigFile: join(homedir(), '.dsh', 'dsh-mobile-push.json'),
+    // 发送模式（排队 / 直接插入）的落盘位置：与推送配置分开存，互不牵连。
+    sendModeFile: join(homedir(), '.dsh', 'dsh-mobile-sendmode.json'),
     transcribeServices: [],
     // 手机端模型列表里隐藏的老模型（DeepSeek v3.x / R1 与旧混元）；可在配置里覆盖。
     hiddenModels: [
@@ -3017,6 +3303,8 @@ export function apply(ctx, config) {
   const devices = loadDevices(cfg.devicesFile)
   let pairToken = null // { code, expiresAt, fixed }
   let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
+  // 发送模式：手机端唯一一处真值；下发 mobile.preferences，写回 session.prompt。
+  let sendMode = loadSendMode(cfg.sendModeFile)
   const cookieName = COOKIE_NAME
   // 用量页缓存：60 秒 TTL，只缓存查询成功的视图（含数据采集时刻 fetchedAt）。
   let usageCache = { at: 0, view: null }
@@ -3567,6 +3855,23 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 决定一次 prompt 真正采用的发送模式（需求 B 的宿主侧兜底）。
+   *
+   * 优先级：请求显式带的 mode > 用户存的设置 > 默认 queue。
+   * 「显式带」只认 'steer'/'queue' 两个合法值；bundle 写死的 mode:`queue`
+   * 会走第一档（与默认同值，不改变既有行为），注入脚本改写后才真正切到 steer。
+   */
+  function resolveSendMode(requested) {
+    if (requested === SEND_MODE_STEER || requested === SEND_MODE_QUEUE) return requested
+    return sendMode
+  }
+
+  /** 手机端读设置用：把当前发送模式随启动探针一起下发。 */
+  function sendModeView() {
+    return { sendMode, mobileEnterToSend: true }
+  }
+
+  /**
    * 读当前权限视图，结构对齐 bundle 的解码器（{ options:[{value,name,description?}], currentValue }）。
    *
    * 一律返回 ok:true 的空/降级结构，绝不因为服务缺失而抛错或返回 ok:false：
@@ -3656,12 +3961,22 @@ export function apply(ctx, config) {
           {
             requestId,
             sessionId: payload.sessionId,
-            mode: payload.mode === 'steer' ? 'steer' : 'queue',
+            // 发送模式生效点（需求 B）。
+            // bundle 里 ce() 写死 mode:`queue`，改不了；所以真值来源是两条：
+            //   ① 注入脚本在发消息前按设置改写 payload.mode（前端默认路径）；
+            //   ② 宿主这里读已存的 sendMode 兜底（payload 没带时也一定生效）。
+            // 两条都不依赖对方：只有前端改写时用它，前端没改写时用它存的默认值。
+            mode: resolveSendMode(payload.mode),
             content: Array.isArray(payload.content) ? payload.content : [],
             ...(payload.clientTimeZone ? { clientTimeZone: payload.clientTimeZone } : {}),
           },
           new AbortController().signal,
         )
+        // Agent 忙时这条消息会进队列（Agent 空闲时直接进会话，队列为空帧）。
+        // 宿主 prompt() 返回不等于消息已落盘，晚一拍再读才拿得到 inbox 的新行。
+        if (typeof setTimeout === 'function') {
+          setTimeout(() => emitQueue(payload.sessionId), 120)
+        }
         return { ok: true, value: { accepted: true } }
       }
       case 'session.create': {
@@ -3717,6 +4032,10 @@ export function apply(ctx, config) {
       }
       case 'session.updateQueue': {
         await controller.updateQueue({ sessionId: payload.sessionId, itemId: payload.itemId, action: payload.action })
+        // 编辑/移除/插队都改了队列：立刻重推一帧，dock 当场增删行。
+        // 先清指纹，避免「内容变了但结构相同」被判重吃掉。
+        forgetQueue(payload.sessionId)
+        emitQueue(payload.sessionId)
         return { ok: true, value: { accepted: true } }
       }
       case 'session.search': {
@@ -3762,7 +4081,21 @@ export function apply(ctx, config) {
       }
       case 'mobile.preferences': {
         // 手机 bundle 的启动探针；形态必须匹配 dsh-palm，否则会判定「连不上 host」。
-        return { ok: true, value: { mobileEnterToSend: true } }
+        // 复用它做「发送模式」的读+写通道（需求 A）：
+        //   读：不带 sendMode → 返回 { mobileEnterToSend, sendMode }
+        //   写：带 payload.sendMode（'queue'|'steer'）→ 落盘并返回新值
+        // 复用而不是新增 RPC，是因为 bundle 启动时必定调它一次，
+        // 设置页不用等别的往返就能拿到当前值。
+        const requested = payload && typeof payload === 'object' ? payload.sendMode : undefined
+        if (requested === SEND_MODE_STEER || requested === SEND_MODE_QUEUE) {
+          sendMode = normalizeSendMode(requested)
+          saveSendMode(cfg.sendModeFile, sendMode)
+          // 立刻把新值扇出给所有在线手机：设置页开在另一台设备/标签上也应同步。
+          if (typeof emitMux === 'function') {
+            emitMux({ type: 'mobile/preferences', sendMode, mobileEnterToSend: true })
+          }
+        }
+        return { ok: true, value: sendModeView() }
       }
       case 'mobile.runningSessions': {
         const { items = [] } = await controller.list({}, new AbortController().signal)
@@ -4271,6 +4604,9 @@ export function apply(ctx, config) {
     if (set.size === 1 && set.has(sessionId)) return
     set.clear()
     set.add(sessionId)
+    // 手机切到这个会话：立刻补一帧当前队列，省掉最多 30s 的 observe 重申空窗。
+    forgetQueue(sessionId)
+    emitQueue(sessionId)
   }
 
   /**
@@ -4575,6 +4911,91 @@ export function apply(ctx, config) {
     for (const stream of [...muxStreams]) stream.write(line, frame)
   }
 
+  // ── 排队消息（需求 C 的数据面）：session/queue 帧 ───────────────────────────
+  //
+  // bundle 的排队 UI（.queue-dock，「N 条排队」+ 展开 + 编辑 + 移除）本来就是现成的，
+  // 之前一直不显示，是因为**没有任何地方推 session/queue 帧**——它只出现在 bundle 的
+  // 可识别帧集合里（Nn），宿主侧从未产生。
+  //
+  // bundle 的消费方式（务必按它来，不凭猜）：
+  //   Mn():   n.type===`session/queue` && this.rememberQueue(n)
+  //   rememberQueue: (e.items??[]).map(e => le({id:String(e.id), placement:e.placement, message:e.message}))
+  //   le():   message.content 是 text 数组时拼成 text；editable = 全是 text
+  //   Ho():   e.filter(e => e.placement === `queued`) —— 只有 placement==='queued' 的行进 dock
+  // 所以帧形必须是：{ type:'session/queue', sessionId, items:[{id, placement:'queued', message:{content:[{type:'text',text}]}}] }
+  // 且它已在 MUX_ALWAYS_FORWARDED 里，所有设备都收（不按会话过滤）。
+
+  /** 会话 -> 上一次推出去的队列指纹（避免每次投影刷新都重推同一份）。 */
+  const queueFingerprints = new Map()
+
+  /** 把一个 inbox 消息（UserMessage）翻成 bundle 的 le() 认得的行。 */
+  function queueItemView(message, placement) {
+    if (!message || typeof message !== 'object') return undefined
+    const id = typeof message.id === 'string' ? message.id : (message.id === undefined ? '' : String(message.id))
+    if (id === '') return undefined
+    // content 两种形态都要兜住：数组（常规）与字符串（历史上的简化形态）。
+    const raw = Array.isArray(message.content)
+      ? message.content
+      : typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : []
+    const content = []
+    for (const b of raw) {
+      if (!b || typeof b !== 'object') continue
+      if (typeof b.text === 'string') {
+        content.push({ type: 'text', text: b.text })
+        continue
+      }
+      // 非文本块（图片等）原样保留：bundle 的 le() 会把它们渲染成 `[类型]`
+      // 并把 editable 判为 false（dock 就不给编辑框）—— 比丢掉或伪造 text 诚实。
+      content.push({ type: typeof b.type === 'string' ? b.type : 'text' })
+    }
+    return { id, placement, message: { content } }
+  }
+
+  /**
+   * 读某会话当前的排队项，推一帧 session/queue。
+   * 数据源是宿主 agent.inbox（nextTurn = 等当前轮结束的排队，nextStep = 插队的）。
+   * 失败一律静默：队列显示是增强，不能因为读不到就把 SSE 流搞坏。
+   */
+  function emitQueue(sessionId) {
+    const sid = String(sessionId || '')
+    if (sid === '') return
+    let items
+    try {
+      const store = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+      const agent = store && typeof store.get === 'function' ? store.get(sid) : undefined
+      const inbox = agent && agent.inbox
+      if (!inbox) {
+        // 没有活着的 Agent = 没有排队项：推一次空帧让 dock 收起（幂等且便宜）。
+        items = []
+      } else {
+        const nextTurn = Array.isArray(inbox.nextTurn) ? inbox.nextTurn : []
+        const nextStep = Array.isArray(inbox.nextStep) ? inbox.nextStep : []
+        items = []
+        for (const m of nextTurn) {
+          const view = queueItemView(m, 'queued')
+          if (view) items.push(view)
+        }
+        for (const m of nextStep) {
+          // placement 用 'steering'：bundle 的 CSS 会给它加左侧强调条，
+          // 但 Ho() 只筛 'queued'，所以它不会污染「N 条排队」的计数 —— 正是想要的。
+          const view = queueItemView(m, 'steering')
+          if (view) items.push(view)
+        }
+      }
+    } catch {
+      return
+    }
+    const fingerprint = JSON.stringify(items)
+    if (queueFingerprints.get(sid) === fingerprint) return // 没变化就不推
+    queueFingerprints.set(sid, fingerprint)
+    emitMux({ type: 'session/queue', sessionId: sid, items })
+  }
+
+  /** 会话没了/不再被观察时忘掉它的队列指纹（否则重连后拿旧值判重）。 */
+  function forgetQueue(sessionId) {
+    queueFingerprints.delete(String(sessionId || ''))
+  }
+
   /**
    * 子代理会话必须走 durable 父地址，否则宿主 validateAddress 会抛 session/agent-busy
    *（本插件已有此经验）。认过父的直接用，没认过父先按普通地址走，撞错再认父重试。
@@ -4737,6 +5158,9 @@ export function apply(ctx, config) {
         return
       }
       for (const sessionId of observedSessions(deviceId)) ensureFollow(sessionId)
+      // 队列补漏：Agent 消费掉排队项（轮次结束/开始新回合）时没有通知我们，
+      // 靠这个 2s 节拍把变化推下去。emitQueue 内部按指纹去重，没变化就不推帧。
+      for (const sessionId of observedSessions(deviceId)) emitQueue(sessionId)
     }, 2000)
 
     // 连接寿命上限：超长挂机也回收一次（手机的 EventSource 会自动重连并重新 observe）。
@@ -5018,6 +5442,7 @@ export function apply(ctx, config) {
           // 会话没了：所有设备都不该再观察它。
           for (const deviceId of [...observers.keys()]) removeObservation(deviceId, sessionId)
           for (const stream of muxStreams) stream.seqWatermark.delete(sessionId)
+          forgetQueue(sessionId)
         }, { global: true }),
         ctx.on('api-session/status', (sessionId, running) => {
           if (typeof sessionId !== 'string' || sessionId === '') return
