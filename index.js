@@ -30,6 +30,7 @@ const API_PREFIX = '/m/api'
 const BUNDLE_URL = '/m/mobile.js'
 const MANIFEST_URL = '/m/manifest.webmanifest'
 const ICON_SVG_URL = '/m/icon.svg'
+const THEME_URL = '/m/theme.css'
 const ICON_192_URL = '/m/icon-192.png'
 const ICON_512_URL = '/m/icon-512.png'
 const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
@@ -273,44 +274,7 @@ function mobilePageHtml() {
     '<link rel="apple-touch-icon" href="/m/apple-touch-icon.png">',
     '<link rel="icon" href="/m/icon.svg">',
     '<title>dsh</title>',
-    // 覆盖 dsh-palm 手机 bundle 里那两个悬浮控件的透明底：改成不透明白底 + 立体阴影。
-    // bundle 的样式在运行时注入且不带 !important，所以这里用 !important 稳赢。
-    '<style>',
-    '.chat-jump-latest,.chat-jump-turns,.chat-jump-lastread{',
-    'background:#ffffff !important;',
-    '-webkit-backdrop-filter:none !important;backdrop-filter:none !important;',
-    'opacity:1 !important;',
-    'border-color:rgba(0,0,0,.07) !important;',
-    'box-shadow:0 1px 2px rgba(0,0,0,.10),0 4px 14px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.9) !important;',
-    '}',
-    '.chat-jump-latest,.chat-jump-turns{color:#2b2d33 !important;}',
-    '.chat-jump-latest-hot{color:#4D6BFE !important;border-color:#4D6BFE !important;}',
-    '.chat-jump-lastread{color:#4D6BFE !important;border-color:#4D6BFE !important;}',
-    '.chat-jump-badge{background:#e5484d !important;color:#fff !important;}',
-    /* 会话行右侧时间：收紧字号与间距，给标题让位 */
-    '.sess-time{font-size:10px !important;letter-spacing:-.2px;opacity:.72;}',
-    /* ── 会话行：去对号、左缘状态色条、标题占满一行、时间落到副标题行 ── */
-    '.mobile-row:has(.sess-check),.mobile-row:has(.sess-dot-running){',
-    'grid-template-columns:minmax(0,1fr) auto !important;',
-    'padding-left:18px !important;overflow:hidden;',
-    '}',
-    '.mobile-row:has(.sess-check) .card-icon,.mobile-row:has(.sess-dot-running) .card-icon{display:none !important;}',
-    '.mobile-row:has(.sess-check)::before,.mobile-row:has(.sess-dot-running)::before{',
-    'content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#c9ccd4;',
-    '}',
-    '.mobile-row:has(.sess-dot-running)::before{background:#18a058;}',
-    '.mobile-row:has(.sess-check) .sess-titleline,.mobile-row:has(.sess-dot-running) .sess-titleline{display:contents;}',
-    '.mobile-row:has(.sess-check) .card-main,.mobile-row:has(.sess-dot-running) .card-main{',
-    'display:flex;flex-direction:row;flex-wrap:wrap;align-items:baseline;column-gap:6px;row-gap:3px;',
-    '}',
-    '.mobile-row:has(.sess-check) .sess-title,.mobile-row:has(.sess-dot-running) .sess-title{order:1;flex:1 1 100%;}',
-    '.mobile-row:has(.sess-check) .card-desc,.mobile-row:has(.sess-dot-running) .card-desc{order:2;}',
-    '.mobile-row:has(.sess-check) .sess-status,.mobile-row:has(.sess-dot-running) .sess-status{order:3;}',
-    '.mobile-row:has(.sess-check) .sess-sep,.mobile-row:has(.sess-dot-running) .sess-sep{display:none !important;}',
-    '.mobile-row:has(.sess-check) .sess-time,.mobile-row:has(.sess-dot-running) .sess-time{order:4;margin-left:auto;}',
-    /* 卡片右侧箭头放大、加深 */
-    '.mobile-chevron{font-size:24px !important;color:#8a8f99 !important;}',
-    '</style>',
+    '<link rel="stylesheet" href="/m/theme.css">',
     '</head>',
     '<body>',
     '<div id="root"></div>',
@@ -959,6 +923,15 @@ export function apply(ctx, config) {
     if (path === ICON_192_URL) return sendBuffer(res, 200, 'image/png', asset('icon-192.png'))
     if (path === ICON_512_URL) return sendBuffer(res, 200, 'image/png', asset('icon-512.png'))
     if (path === APPLE_TOUCH_URL) return sendBuffer(res, 200, 'image/png', asset('apple-touch-icon.png'))
+    if (path === THEME_URL) {
+      // 每次请求实时读盘：改 theme.css 后刷新手机即生效，不用重启 dsh。
+      let css = ''
+      try {
+        css = readFileSync(join(__dirname, 'assets', 'theme.css'), 'utf8')
+      } catch {}
+      res.setHeader('Cache-Control', 'no-store')
+      return sendText(res, 200, 'text/css; charset=utf-8', css)
+    }
     if (path === API_PREFIX || path.startsWith(API_PREFIX + '/')) return handleApi(req, res, url)
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
@@ -975,6 +948,7 @@ export function apply(ctx, config) {
       { kind: 'exact', path: ICON_192_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: ICON_512_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: APPLE_TOUCH_URL, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'exact', path: THEME_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'prefix', path: API_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))

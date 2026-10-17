@@ -17,6 +17,7 @@
     "cordis.patch.yml",
     "locale/*.json",
     "assets/icon.svg",
+    "assets/theme.css",
     "assets/mobile.bundle.js",
     "assets/icon-192.png",
     "assets/icon-512.png",
