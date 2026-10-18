@@ -5435,7 +5435,7 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
     // 这里只做呈现与过滤，不内置任何命令名 —— 宿主没注册的命令不会出现在面板里。
     var panel = null;
     // hostCount / skillCount 分来源计数（DOM 证据用）；items 是合并后的展示列表。
-    var state = { items: [], reason: '', skillsReason: '', filter: '', busy: false, hostCount: 0, skillCount: 0 };
+    var state = { items: [], reason: '', skillsReason: '', filter: '', hostCount: 0, skillCount: 0 };
     var lastSessionId = '';
 
     // 与 MODEL_BUTTON_HTML 同一手法：拦截 RPC 请求，自动记住当前会话 id。
@@ -5741,27 +5741,16 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
     }
 
     function pick(it, row) {
-      if (state.busy) return;
-      // 三条完全不同的路径，按来源分流：
-      //   · 本机动作：转交给 bundle 自己的入口（＋ 面板 / 模型抽屉），不经过宿主命令表；
-      //   · 技能：只把 /name + 空格 插进输入框（桌面 onPick 的语义），发送时宿主 pre-step
-      //     （dsh-tool-skill）再把 skill 正文注入，绝不在这里直接 session.prompt；
-      //   · 宿主命令：带 input 的先展开参数输入，其余直接执行。
+      // 与桌面宿主一致：选中命令 = 把 '/name '（末尾一个空格）插进输入框，不执行、
+      // 不发请求。用户补完参数后按发送，bundle 的发送路径会拦下以 / 开头的整行并调
+      // mobile.commandExec（bundle @316472：n.startsWith('/') && 无引用 && 无附件
+      // → Mr(n)，Mr 就是 mobile.commandExec）。技能同理，只是宿主 pre-step 会再注入
+      // skill 正文。这里绝不再自己弹参数框或直接执行。
       if (it.source === 'local') {
         runLocal(it);
         return;
       }
-      if (it.source === 'skill') {
-        pickSkill(it);
-        return;
-      }
-      // 带参数的命令：先展开一个参数输入框，由用户补完再执行（尊重宿主 input.hint，
-      // 绝不替用户猜参数）；不带参数的命令直接执行。
-      if (it.needsInput) {
-        toggleArg(it, row);
-        return;
-      }
-      execCommand(it.name, '');
+      insertLine('/' + it.name + ' ', it.source === 'skill' ? it.name : '');
     }
 
     // 本机动作：先判断入口在不在，再收起面板，等收起动画（200ms）走完才点 ——
@@ -5789,16 +5778,20 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       try { document.body.setAttribute('data-dm-cmd-local-last', it.name); } catch (e) {}
     }
 
-    // 技能选中 = 插入字面文本（桌面 ui-skill client.js:468 的 onPick 返回
-    // { text: '/' + candidate.name + ' ' }）。不发送、不执行、不加载 body。
-    function pickSkill(it) {
-      if (!panel || it.disabled) return;
-      if (!insertComposer('/' + it.name + ' ')) {
-        setStatus('当前不在输入框页面，无法插入技能', 'err');
+    // 把命令插进 composer：不发送、不执行。先插入再收起面板 —— textarea 在遮罩
+    // 下面，插入是同步的，用户看到的就是面板收起后输入框里已经有 '/name '。
+    function insertLine(line, skillName) {
+      if (!panel) return;
+      if (!insertComposer(line)) {
+        setStatus('当前不在输入框页面，无法插入命令', 'err');
         return;
       }
+      // DOM 证据：最后一次插入的整行（只有命令名，不含会话内容）。
+      try {
+        document.body.setAttribute('data-dm-cmd-last-insert', line.trim());
+        if (skillName) document.body.setAttribute('data-dm-cmd-last-skill', skillName);
+      } catch (e) {}
       closePanel();
-      try { document.body.setAttribute('data-dm-cmd-last-skill', it.name); } catch (e) {}
     }
 
     // 往 composer 落文本：bundle 的 textarea 是受控组件，必须用原生 value setter +
@@ -5825,96 +5818,11 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       return true;
     }
 
-    function toggleArg(it, row) {
-      if (!panel) return;
-      var open = panel.body.querySelectorAll('.dm-cmd-argbox');
-      for (var i = 0; i < open.length; i++) {
-        if (open[i].parentNode) open[i].parentNode.removeChild(open[i]);
-      }
-      var wasOpen = row.getAttribute('data-argopen') === '1';
-      var all = panel.body.querySelectorAll('.dm-cmd-row');
-      for (var j = 0; j < all.length; j++) all[j].removeAttribute('data-argopen');
-      if (wasOpen) return;
-      row.setAttribute('data-argopen', '1');
-      var box = el('div', 'dm-cmd-argbox');
-      var input = document.createElement('input');
-      input.className = 'dm-cmd-arginput';
-      input.type = 'text';
-      input.autocomplete = 'off';
-      input.setAttribute('placeholder', it.hint || '参数');
-      input.setAttribute('aria-label', '/' + it.name + ' 参数');
-      var runBtn = el('button', 'dm-cmd-run', '执行');
-      runBtn.type = 'button';
-      runBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        if (runBtn.disabled) return;
-        runBtn.disabled = true;
-        execCommand(it.name, input.value || '').then(function () { runBtn.disabled = false; });
-      });
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          runBtn.click();
-        }
-      });
-      box.appendChild(input);
-      box.appendChild(runBtn);
-      if (row.nextSibling) row.parentNode.insertBefore(box, row.nextSibling);
-      else row.parentNode.appendChild(box);
-      window.setTimeout(function () { try { input.focus(); } catch (e) {} }, 30);
-    }
-
-    function markRow(name, ok) {
-      if (!panel) return;
-      var rows = panel.body.querySelectorAll('.dm-cmd-row');
-      for (var i = 0; i < rows.length; i++) {
-        if (rows[i].getAttribute('data-name') !== name) continue;
-        rows[i].classList.remove('dm-cmd-row-ok', 'dm-cmd-row-err');
-        rows[i].classList.add(ok ? 'dm-cmd-row-ok' : 'dm-cmd-row-err');
-        break;
-      }
-    }
-
-    function execCommand(name, args) {
-      if (state.busy) return Promise.resolve();
-      var sid = currentSession();
-      if (!sid) {
-        setStatus('拿不到当前会话，无法执行', 'err');
-        return Promise.resolve();
-      }
-      state.busy = true;
-      setStatus('执行中… /' + name);
-      return rpc('mobile.commandExec', { sessionId: sid, name: name, args: args }).then(function (res) {
-        state.busy = false;
-        if (!res || !res.ok) {
-          var msg = (res && res.error && res.error.message) ? res.error.message : '命令执行失败';
-          setStatus('执行失败：' + msg, 'err');
-          markRow(name, false);
-          return;
-        }
-        var v = res.value || {};
-        var kind = v.kind === 'success' ? 'success' : 'error';
-        var text = v.text || (kind === 'success' ? '已执行' : '命令返回失败');
-        setStatus('/' + name + '：' + text, kind === 'success' ? 'ok' : 'err');
-        markRow(name, kind === 'success');
-        // DOM 证据：最后一次执行结果（只有命令名与结果类型，没有会话内容）。
-        try {
-          document.body.setAttribute('data-dm-cmd-last', name);
-          document.body.setAttribute('data-dm-cmd-kind', kind);
-        } catch (e) {}
-      }).catch(function () {
-        state.busy = false;
-        setStatus('执行失败：网络异常', 'err');
-        markRow(name, false);
-      });
-    }
-
     function load() {
       if (!panel) return Promise.resolve();
       state.items = [];
       state.reason = '';
       state.skillsReason = '';
-      state.busy = false;
       state.hostCount = 0;
       state.skillCount = 0;
       panel.body.innerHTML = '';
