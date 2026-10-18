@@ -5958,6 +5958,28 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     var gear = document.querySelector('.mobile-header .mobile-headerSlot-right > button[aria-label="设置"]');
     return gear ? gear.closest('.mobile-header') : null;
   }
+  // 按钮模板：两个入口按钮被 append 进 React 管的 .mobile-header 里，
+  // 一旦离开工作区页，React 卸载 header 会把它们一起带走。旧实现只判断
+  // "parentNode 不是 header 就 append"，按钮已被销毁时 getElementById 返回 null，
+  // 于是返回工作区后按钮永久消失（用户反馈：进过别的页面再回来就没了）。
+  // 这里在启动时保留 outerHTML 作为模板，缺失时按原样重建（点击是 document 委托，
+  // 重建不会丢事件）。
+  var btnTemplate = (function () {
+    var p = document.getElementById('dm-plugins-btn');
+    var a = document.getElementById('dm-automation-btn');
+    return p && a ? { html: p.outerHTML + a.outerHTML } : null;
+  })();
+  function rebuildButtons(header) {
+    if (!btnTemplate) return false;
+    var wrap = document.createElement("div");
+    wrap.innerHTML = btnTemplate.html;
+    var p = wrap.querySelector('#dm-plugins-btn');
+    var a = wrap.querySelector('#dm-automation-btn');
+    if (!p || !a) return false;
+    header.appendChild(p);
+    header.appendChild(a);
+    return true;
+  }
   function syncHeader() {
     var header = workspaceHeader();
     var headers = document.querySelectorAll('.mobile-header');
@@ -5965,8 +5987,9 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     if (!header) return;
     var plugins = document.getElementById('dm-plugins-btn');
     var automation = document.getElementById('dm-automation-btn');
-    if (plugins && plugins.parentNode !== header) header.appendChild(plugins);
-    if (automation && automation.parentNode !== header) header.appendChild(automation);
+    if (!plugins || !automation) { rebuildButtons(header); return; }
+    if (plugins.parentNode !== header) header.appendChild(plugins);
+    if (automation.parentNode !== header) header.appendChild(automation);
   }
   var syncQueued = false;
   function queueSync() {
@@ -6020,6 +6043,8 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
   }
 
   window.addEventListener('popstate', function (event) {
+    // 从其它页面返回时立刻重建顶栏入口（否则要等 1s 的兜底定时器）。
+    queueSync();
     var state = event && event.state;
     if (detailName !== null) {
       if (!state || !state.dmHostDetail) { closeDetail(true); return; }
