@@ -2798,7 +2798,18 @@ const SEND_MODE_SETTINGS_HTML = `<script>
 
     var icon = document.createElement('span');
     icon.className = 'card-icon dm-sendmode-icon';
-    icon.innerHTML = '<span aria-hidden="true">↩</span>';
+    // 图标：单色内联 SVG 纸飞机（发送的通用语义），stroke 用 currentColor 继承
+    // 本行图标的灰色 --text-secondary，与设置页其它行的单色图标一致。
+    // 不要用箭头类字符（如 U+21A9）：它在部分浏览器/字体下会被渲染成彩色 emoji，
+    // 语义也不是「发送」。
+    icon.innerHTML =
+      '<span aria-hidden="true">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"' +
+      ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M21 3 3 10.5l7 2.2L12.2 21 21 3Z"/>' +
+      '<path d="M10 12.7 21 3"/>' +
+      '</svg>' +
+      '</span>';
 
     var main = document.createElement('span');
     main.className = 'card-main';

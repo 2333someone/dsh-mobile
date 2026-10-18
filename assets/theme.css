@@ -1442,7 +1442,7 @@ body {
 
 /* ── 设置页「发送模式」行（index.js 的 SEND_MODE_SETTINGS_HTML 注入）───────────
    结构：<li><div class="settings-row dm-sendmode-row">
-            <span class="card-icon dm-sendmode-icon">↩</span>
+            <span class="card-icon dm-sendmode-icon"><svg …纸飞机…></span>
             <span class="card-main">标题 + .dm-sendmode-desc</span>
             <span class="card-action"><select class="settings-input dm-sendmode-select"></span>
    外观一律复用 bundle 的类：.settings-row（48px 图标列 + 1fr + auto 的网格、
@@ -1461,11 +1461,12 @@ body {
   cursor: default;
 }
 
-/* 图标：bundle 的 .settings-row .card-icon > * 只给了 40px 的方块背景，
-   里面的字符字号是继承来的（--text-base 左右），看起来偏小。
-   这里把内层的字号与盒尺寸一起钉成 26px（≥24px，与设置页其它行图标视觉一致），
-   配合 square 盒 + line-height:1 + flex 双轴居中，字形不变形、不偏心。
-   （字符不是 SVG，所以只能改 font-size，不存在 viewBox 变形问题。） */
+/* 图标：内联单色 SVG 纸飞机（index.js 的 build() 里生成，不是字符/emoji）。
+   bundle 的 .settings-row .card-icon > * 只给了 40px 方块 + --text-secondary 前景色，
+   这里沿用同样的 40px 盒 + flex 双轴居中，只把 svg 本身钉成 24px。
+   .card-icon svg 在 bundle 里是 19px 且加载在本文件之后 —— 同等特异性它赢，
+   所以尺寸必须 !important。颜色不写死：svg 用 stroke="currentColor" 继承
+   .card-icon > * 的 --text-secondary 灰，和设置页其它行的单色图标一致。 */
 .dm-sendmode-icon {
   width: 40px !important;
   height: 40px !important;
@@ -1473,11 +1474,14 @@ body {
 .dm-sendmode-icon > * {
   width: 40px !important;
   height: 40px !important;
-  font-size: 26px !important;
-  line-height: 1 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+}
+.dm-sendmode-icon svg {
+  width: 24px !important;
+  height: 24px !important;
+  display: block !important;
 }
 
 /* 描述文字：bundle 的 .card-desc 是 white-space:nowrap + ellipsis，
@@ -1489,14 +1493,19 @@ body {
   line-height: 1.35 !important;
 }
 
-/* 下拉：.settings-input 给了 flex:1，在 card-action 里会把行挤宽，
-   这里收成固定宽度；同时保证 ≥36px 高、≥44px 触控区好按。 */
+/* 下拉：.settings-input 给了 flex:1 + min-width:0，放在 auto 列里会被撑开；
+   这里改成「内容自适应 + 78px 下限」，把省下的宽度还给左边的描述列。
+   注意 min-width 必须 !important：bundle 的 .settings-input{min-width:0} 加载在
+   本文件之后，同等特异性下会把它压掉（所以旧的 104px 其实从未生效过）。
+   padding 从 6px 10px 收到 5px 4px，配合 78px 下限后实际约 78–82px
+   （原生下拉箭头由 UA 画，占掉一部分），「排队」「直接插入」都能完整显示。
+   高度保持 36px，触控不吃亏。 */
 .dm-sendmode-select {
   flex: none !important;
   width: auto !important;
-  min-width: 104px;
+  min-width: 78px !important;
   height: 36px;
-  padding: 6px 10px !important;
+  padding: 5px 4px !important;
   font-size: var(--text-md, 14px) !important;
   line-height: 1.2 !important;
   color: var(--text-primary) !important;
