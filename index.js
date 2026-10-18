@@ -3453,10 +3453,14 @@ const CHAT_STATUS_HTML = `<script>
 
     var PROC_STATE = '.chat-proc-state';
     var TURN = '.chat-turn-status';
+    var TURN_CLASS = 'chat-turn-status';
     var FROM = '深度求索中';   // bundle 里 Mc.running
     var TO = '思考中';
     var WHALE = 'dm-turn-whale';
     var RUNNING = '输出中';
+    // 原始 SSE 收到当前会话的 turn/end 后置位，下一轮 turn/start 复位（见 §5）。
+    // 只在「turn/end 被 fold 丢掉、状态行卡在输出中」时起作用，正常回合用不到。
+    var TURN_ENDED = false;
 
     function trim(s) {
       return (s || '').replace(/^\\s+|\\s+$/g, '');
@@ -3508,7 +3512,7 @@ const CHAT_STATUS_HTML = `<script>
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i];
         var whale = ownWhale(row);
-        var show = turnState(row) === RUNNING;
+        var show = !TURN_ENDED && turnState(row) === RUNNING;
         if (show && !whale) {
           var w = document.createElement('span');
           // 空元素：形状由 theme.css 的 mask 画、颜色由 currentColor 给。
@@ -3518,6 +3522,30 @@ const CHAT_STATUS_HTML = `<script>
         } else if (!show && whale) {
           row.removeChild(whale);
         }
+      }
+      sweepWhales();
+    }
+
+    // 全局兜底（不依赖状态行还在我们以为的位置上）：
+    //   · 状态行被 React 移除 / 换成别的节点后，若鲸鱼尾还连着，父容器已不是
+    //     「输出中」状态行 —— 摘掉；
+    //   · 同一行被重复插入了第二只 —— 只保留第一只；
+    //   · 原始 SSE 已报过 turn/end —— 状态行哪怕还卡在「输出中」也不留鲸鱼尾。
+    // 每次 flush 都跑，幂等；自己 remove 的节点不会再次命中。
+    function sweepWhales() {
+      var all = document.querySelectorAll('.' + WHALE);
+      var keptRow = null;
+      for (var i = 0; i < all.length; i++) {
+        var w = all[i];
+        var row = w.parentNode;
+        var ok = !TURN_ENDED && row && row.nodeType === 1 &&
+          row.classList && row.classList.contains(TURN_CLASS) &&
+          turnState(row) === RUNNING;
+        if (ok && keptRow !== row) {
+          keptRow = row;
+          continue;
+        }
+        if (w.parentNode) w.parentNode.removeChild(w);
       }
     }
 
@@ -3636,6 +3664,50 @@ const CHAT_STATUS_HTML = `<script>
       }
     }
 
+    // ── 5) 原始 SSE 的 turn/end：状态行卡住时也要摘掉鲸鱼尾 ────────────────
+    // bundle 的 mux 只 fold seq 大于水位的事件；一旦 turn/end 被当成旧事件丢掉，
+    // 它的 live-turn 状态就永远为 true —— 状态行不消失、aria-label 一直是
+    // 「输出中」，只靠 §2 的 DOM 判据永远清不掉鲸鱼尾，只能刷新网页。
+    // 这里旁听 /m/api/events.mux 的原始 SSE 帧：收到当前会话的 turn/end 就把
+    // TURN_ENDED 置位，下一次 flush 摘掉鲸鱼尾；turn/start 复位。
+    // 只 addEventListener，不碰 onmessage / onerror / close，也不改事件数据；
+    // 解析前先做子串预判，流式 chunk 不会额外 JSON.parse。
+    // 会话假设：mux 一次只 observe 当前会话，所以它的 session/event 都属于本页。
+    function watchTurnEnd() {
+      var Native = window.EventSource;
+      if (!Native || Native.__dmWhalePatched) return;
+      function Wrapped(url, opts) {
+        var es = new Native(url, opts);
+        try {
+          if (String(url).indexOf('/events.mux') >= 0) {
+            es.addEventListener('message', function (ev) {
+              var data = ev && ev.data;
+              if (typeof data !== 'string') return;
+              if (data.indexOf('turn/end') < 0 && data.indexOf('turn/start') < 0) return;
+              var msg;
+              try { msg = JSON.parse(data); } catch (e) { return; }
+              var event = msg && msg.event;
+              if (!event || msg.type !== 'session/event') return;
+              if (event.type === 'turn/start') {
+                if (TURN_ENDED) { TURN_ENDED = false; schedule(); }
+              } else if (event.type === 'turn/end') {
+                if (!TURN_ENDED) { TURN_ENDED = true; schedule(); }
+              }
+            });
+          }
+        } catch (e) {}
+        return es;
+      }
+      try {
+        Wrapped.prototype = Native.prototype;
+        if (Native.CONNECTING !== undefined) Wrapped.CONNECTING = Native.CONNECTING;
+        if (Native.OPEN !== undefined) Wrapped.OPEN = Native.OPEN;
+        if (Native.CLOSED !== undefined) Wrapped.CLOSED = Native.CLOSED;
+        Wrapped.__dmWhalePatched = true;
+        window.EventSource = Wrapped;
+      } catch (e) {}
+    }
+
     function flush() {
       queued = false;
       try { renameProcState(); } catch (e) {}
@@ -3662,6 +3734,9 @@ const CHAT_STATUS_HTML = `<script>
       attributes: true,
       attributeFilter: ['aria-label']
     });
+    // 必须在 bundle 的模块脚本执行前装上（本脚本是内联 classic，早于 deferred
+    // module），这样 mux 的 new EventSource 才会经过我们的包装。
+    watchTurnEnd();
     schedule();
   } catch (e) {}
 })();
