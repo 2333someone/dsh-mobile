@@ -1755,3 +1755,18 @@ body {
 .dm-approval-backdrop.dm-closing {
   animation: dm-backdrop-fade-out-200 0.2s ease forwards !important;
 }
+
+/* ── 工具行图标（扳手/齿轮等）视觉下沉 ────────────────────────────────────
+   bundle 的 .chat-step-icon 是 16×16 inline-flex + align-items:center，
+   实测它的盒子中心只比「工具」文字墨迹中心低 0.34px —— 几何上已经居中，
+   但眼睛仍觉得图标偏上：因为图标是我们自绘的 24×24 SVG，扳手/齿轮这类
+   图形的墨迹在视框里本来就偏上（视框是正方形，图形不是）。
+   所以这里不动机器对齐，只给图形本身加 1px 下沉补偿，让它和文字的视觉重心
+   对齐。作用域仅限工具行图标，不影响其它按钮/标题行。 */
+/* 注意不要直接给 .chat-step-icon 加 transform：运行中的工具图标带
+   .chat-step-icon-spin（rotate 360° 动画），animation 会覆盖 transform，
+   两种状态下的补偿会不一致。所以把下沉加在**图标内容**上。 */
+.chat-step-icon > svg,
+.chat-step-icon > .dm-icon {
+  transform: translateY(1px);
+}
