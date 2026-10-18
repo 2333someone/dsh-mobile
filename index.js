@@ -3689,38 +3689,37 @@ const CHAT_STATUS_HTML = `<script>
       }
     }
 
-    // ── 4) 去掉过程卡里重复的「思考中」第二行 ─────────────────────────────
-    // 第一行 .chat-proc-state（状态词，已被上面改成「思考中」）之后，bundle 还会
-    // 渲染第二行 .chat-proc-current > .chat-proc-current-text 表示「当前这一步在
-    // 做什么」，思考阶段它也是「思考中」—— 整个折叠块讲的就是思考过程，于是同一个
-    // 词出现两次。只在这一行文字**恰好等于**状态词时隐藏它；一旦变成「正在回答」
-    // 「运行命令」等真实步骤文字，就恢复显示（那些信息有用，不能一起藏掉）。
-    // 做法是挂一个自己的 class + CSS display:none，不动 React 的节点与文字。
+    // ── 4) 去掉过程卡里重复的「思考中」 ───────────────────────────────────
+    // 过程卡 head 有两行：
+    //   第一行 .chat-proc-line.chat-proc-label → .chat-proc-state（状态词，已改成「思考中」）
+    //   第二行 .chat-proc-line.chat-proc-current → .chat-proc-current-text（当前步骤）
+    // 思考阶段两行都是「思考中」，同一个词出现两次。
+    //
+    // **不能整行隐藏**：原来把第二行 display:none 掉，思考时卡片矮一行、工具调用一来
+    // 第二行又冒出来，视觉上就是「突然多出一行」——卡片高度来回跳。
+    // 现在的做法是只隐藏**第一行里那个重复的状态词文字**（图标/用时都留着，行高不变），
+    // 于是：
+    //   · 思考阶段：第一行的「思考中」隐去，第二行的「思考中」可见 → 只出现一次，高度不变
+    //   · 工具阶段：第一行「思考中」恢复，第二行变成「运行命令」→ 两行共存，高度也不变
+    // 挂自己的 class + CSS display:none，不动 React 的节点与文字。
     var CUR_LINE = '.chat-proc-current';
     var CUR_TEXT = '.chat-proc-current-text';
     var DUP = 'dm-proc-dup';
 
     function dedupeProcCurrent() {
-      var states = document.querySelectorAll(PROC_STATE);
-      for (var i = 0; i < states.length; i++) {
-        var state = states[i];
+      var heads = document.querySelectorAll('.chat-proc-head');
+      for (var i = 0; i < heads.length; i++) {
+        var head = heads[i];
+        var state = head.querySelector(PROC_STATE);
+        var cur = head.querySelector(CUR_LINE);
+        if (!state || !cur) continue;
+        var curText = trim((cur.querySelector(CUR_TEXT) || cur).textContent || '');
         var stateText = trim(state.textContent || '');
-        if (stateText !== TO) continue;
-        var head = state.parentNode;
-        while (head && head.nodeType === 1 && !head.classList.contains('chat-proc-head')) {
-          head = head.parentNode;
-        }
-        var scope = head && head.nodeType === 1 ? head : document;
-        var lines = scope.querySelectorAll(CUR_LINE);
-        for (var k = 0; k < lines.length; k++) {
-          var cur = lines[k];
-          var curText = cur.querySelector(CUR_TEXT) || cur;
-          var same = trim(curText.textContent || '') === stateText;
-          if (same) {
-            if (!cur.classList.contains(DUP)) cur.classList.add(DUP);
-          } else if (cur.classList.contains(DUP)) {
-            cur.classList.remove(DUP);
-          }
+        var same = stateText === TO && curText === TO;
+        if (same) {
+          if (!state.classList.contains(DUP)) state.classList.add(DUP);
+        } else if (state.classList.contains(DUP)) {
+          state.classList.remove(DUP);
         }
       }
     }
