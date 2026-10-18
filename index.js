@@ -4145,7 +4145,11 @@ const SEND_DECODE_GUARD_HTML = `<script>
     //     宿主会把消息排进队列），所以补发一个真实的 Enter 键盘事件。
     // 旧实现只有「点按钮」一条路：排队发送被拦下后 sendButton() 恒为 null，于是每次
     // 都在这里静默放弃 —— 这一下回车凭空消失，文字和图片都留在输入框里。
-    function replaySend() {
+    function replaySend(origin) {
+      // 输入框必须是当初被拦下的那个节点：用户在这几百毫秒里切走会话时 React 会换掉
+      // 整个 composer，这时重放会把「上一句」发到新会话里去 —— 宁可不发。
+      var ta = chatInput();
+      if (origin !== undefined && ta !== origin) return;
       replaying = true;
       try {
         var btn = sendButton();
@@ -4153,7 +4157,6 @@ const SEND_DECODE_GUARD_HTML = `<script>
           btn.click();
           return;
         }
-        var ta = chatInput();
         if (ta === null) return;
         var ev;
         try {
@@ -4177,16 +4180,18 @@ const SEND_DECODE_GUARD_HTML = `<script>
 
     function holdAndSend() {
       if (waiting) return;
+      var origin = chatInput();
+      if (origin === null) return;
       waiting = true;
       var started = Date.now();
       var hintTimer = setTimeout(function () {
         if (waiting) showHint();
       }, HINT_AFTER_MS);
       var tick = function () {
-        // 收手条件只有一个：输入框整个不见了（切走会话/退出聊天页）。**不能**用
+        // 收手条件只有一个：输入框没了或被换掉（切走会话/退出聊天页）。**不能**用
         // 「发送按钮不在」当收手条件 —— Agent 在跑时它本来就是「停止」键，而排队
         // 发送走的正是回车，收手就等于把这次发送吞掉。
-        if (chatInput() === null) {
+        if (chatInput() !== origin) {
           waiting = false;
           clearTimeout(hintTimer);
           hideHint();
@@ -4200,7 +4205,7 @@ const SEND_DECODE_GUARD_HTML = `<script>
         clearTimeout(hintTimer);
         hideHint();
         // 重放前重新查一次：等待期间 React 可能已经换过节点 / 换过发送态。
-        replaySend();
+        replaySend(origin);
       };
       setTimeout(tick, 80);
     }
