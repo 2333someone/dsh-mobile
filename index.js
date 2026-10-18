@@ -2828,20 +2828,33 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
   var toastTimer = 0;
 
   // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id（手机页路由不带 query）。
+  // 顺带盯 session.prompt：**发第一条消息的请求一发出就收起按钮** —— 不依赖 bundle
+  // 之后是否真的把消息节点渲染出来（手机端实测偶发：消息已落盘、列表却不刷新）。
   var origFetch = window.fetch;
   if (typeof origFetch === 'function') {
     window.fetch = function (input, init) {
       try {
         var url = typeof input === 'string' ? input : (input && input.url) || '';
         if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+          var method = url.slice(url.indexOf('/m/api/') + 7).split('?')[0];
           var body = JSON.parse(init.body);
-          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
-            lastSessionId = body.payload.sessionId;
+          var payload = body && body.payload;
+          if (payload && typeof payload.sessionId === 'string' && payload.sessionId) {
+            lastSessionId = payload.sessionId;
+            if (method === 'session.prompt') markStarted(payload.sessionId);
           }
         }
       } catch (e) {}
       return origFetch.apply(this, arguments);
     };
+  }
+
+  // 一旦确认这个会话「已经不是第一条消息之前」，就锁死隐藏；换会话自动失效。
+  function markStarted(sid) {
+    var id = sid || currentSession();
+    if (id !== '') startedSession = id;
+    btn.classList.add('dm-icon-hidden');
+    btn.setAttribute('aria-hidden', 'true');
   }
 
   function currentSession() {
@@ -2989,12 +3002,7 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
     if (typeof res.value.current === 'string' && res.value.current !== '') currentPreset = res.value.current;
     // 宿主用 turnBoundary 投影算出来的权威判据：blank === false 说明已经开过
     // 轮次，立刻收起按钮，不再依赖聊天 DOM 是否已经渲染出消息节点。
-    if (res.value.blank === false) {
-      var sid = currentSession();
-      if (sid !== '') startedSession = sid;
-      btn.classList.add('dm-icon-hidden');
-      btn.setAttribute('aria-hidden', 'true');
-    }
+    if (res.value.blank === false) markStarted();
     render();
   }
 
