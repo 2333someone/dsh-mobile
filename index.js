@@ -5824,8 +5824,14 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     }
     var html = '';
     html += sectionHtml('内置插件配置', '共 ' + basic.length + ' 个', basic.map(function (item) {
-      var title = localized(item.meta && item.meta.title) || shortName(item.moduleName);
-      var description = localized(item.meta && item.meta.description);
+      // 桌面这四行的标题/说明来自页面自己的文案（子智能体 / 网页搜索 / 终端），
+      // 不是 client 包的 meta.title（「…设置」）；宿主已把两者一起下发。
+      var title = item.configPage && item.configPageTitle
+        ? item.configPageTitle
+        : (localized(item.meta && item.meta.title) || shortName(item.moduleName));
+      var description = item.configPage && item.configPageDescription
+        ? item.configPageDescription
+        : localized(item.meta && item.meta.description);
       // 有真实配置页的行（子智能体 / 网页搜索 / 终端）直接进配置页；
       // 其余行仍走原来的 entry 详情（宿主没给可写命名空间时就只能只读展示）。
       var openAttr = item.configPage
@@ -5892,7 +5898,9 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
   }
 
   function renderEntryDetail(body, item) {
-    var title = localized(item.meta && item.meta.title) || shortName(item.moduleName);
+    var title = item.configPage && item.configPageTitle
+      ? item.configPageTitle
+      : (localized(item.meta && item.meta.title) || shortName(item.moduleName));
     var description = localized(item.meta && item.meta.description);
     var running = item.enabled === true;
     var readOnly = typeof item.readOnlyReason === 'string' && item.readOnlyReason !== '';
@@ -6526,8 +6534,13 @@ const BUILTIN_CONFIG_HTML = `<script>
     if (payload.description) html += '<p class="dm-cfg-desc">' + esc(payload.description) + '</p>';
     if (payload.key === 'web-search') {
       html += switchHtml() + apiKeyHtml();
-      var activeNs = payload.webSearch && payload.webSearch.activeNs ? payload.webSearch.activeNs : null;
-      var active = activeNs ? sectionOf(activeNs) : null;
+      // 当前生效的接口段由「暂存的开关位置」决定，而不是宿主加载时的 activeNs ——
+      // 用户刚切换开关时 payload 还是旧模式，用 activeNs 会把字段留在另一组。
+      var active = null;
+      for (var a = 0; a < sections.length; a++) {
+        if (sections[a].kind === stagedMode) { active = sections[a]; break; }
+      }
+      if (!active && payload.webSearch && payload.webSearch.activeNs) active = sectionOf(payload.webSearch.activeNs);
       if (active) {
         html += '<div class="dm-cfg-section">' +
           '<h2 class="dm-cfg-sectionTitle">' + (stagedMode === 'api' ? 'Web 搜索 / 抓取 API' : 'DeepSeek Messages') + '</h2>';
@@ -6585,10 +6598,20 @@ const BUILTIN_CONFIG_HTML = `<script>
     function bucket(ns) {
       if (!byNs[ns]) {
         var section = sectionOf(ns);
-        byNs[ns] = { ns: ns, revision: section ? section.revision : null, sets: [], unsets: [] };
+        // expect：客户端读到的原始值。宿主写前逐个比对它来做并发保护 ——
+        // pwsh-sandbox 这类含 !!js 的 entry 的 revision 会在宿主自己的 reconcile 里
+        // 每写一次 +2，无法当并发令牌用（详见宿主端 mobile.builtinConfig.save 注释）。
+        byNs[ns] = { ns: ns, expect: {}, sets: [], unsets: [] };
         result.ops.push(byNs[ns]);
       }
       return byNs[ns];
+    }
+    function remember(target, key, value) {
+      target.expect[key] = value === undefined ? null : value;
+    }
+    function markField(target, field) {
+      // 字段从 payload 来，field.value 就是这一页读到的宿主值。
+      remember(target, field.key, field.value);
     }
 
     var sections = Array.isArray(payload.sections) ? payload.sections : [];
@@ -6602,18 +6625,21 @@ const BUILTIN_CONFIG_HTML = `<script>
         var keyText = dataKey(section.ns, field.key);
         var target = bucket(section.ns);
         if (resetFields[keyText]) {
-          var resetParsed = parseField(field, field.base == null ? '' : String(field.base));
-          if (resetParsed.kind === 'set') target.sets.push({ path: [field.key], value: resetParsed.value });
-          else target.unsets.push({ path: [field.key] });
+          // 「恢复默认」= 删除 override（不是把默认值写进 profile）。
+          // settings.mutate 的 unset 会回落到继承层值，configEditor.edit 再把「与继承层
+          // 相同」的字段从 patch 行里删掉 —— 与桌面 resetField 同一语义。
+          markField(target, field);
+          target.unsets.push({ path: [field.key] });
           continue;
         }
         var parsed = parseField(field, inputText(section.ns, field.key));
         if (parsed.kind === 'invalid') { result.invalid = parsed.message; return result; }
         if (parsed.kind === 'unset') {
-          if (field.overridden) target.unsets.push({ path: [field.key] });
+          if (field.overridden) { markField(target, field); target.unsets.push({ path: [field.key] }); }
           continue;
         }
         if (parsed.kind === 'set' && !sameValue(parsed.value, field.value)) {
+          markField(target, field);
           target.sets.push({ path: [field.key], value: parsed.value });
         }
       }
@@ -6639,8 +6665,12 @@ const BUILTIN_CONFIG_HTML = `<script>
       var enabledDirty = enabledField ? enabledNow !== (enabledField.value === true) : false;
       if (modelsDirty || enabledDirty) {
         var modelTarget = bucket('subagent-model-selection-settings');
-        if (enabledDirty) modelTarget.sets.push({ path: ['enabled'], value: enabledNow });
+        if (enabledDirty) {
+          remember(modelTarget, 'enabled', enabledField ? enabledField.value : null);
+          modelTarget.sets.push({ path: ['enabled'], value: enabledNow });
+        }
         if (modelsDirty) {
+          remember(modelTarget, 'allowedModels', allowedField ? allowedField.value : []);
           if (desired.length === 0 && !enabledNow) modelTarget.unsets.push({ path: ['allowedModels'] });
           else modelTarget.sets.push({ path: ['allowedModels'], value: desired });
         }
@@ -6656,6 +6686,8 @@ const BUILTIN_CONFIG_HTML = `<script>
         var names = ['searchProvider', 'fetchProvider'];
         for (var f = 0; f < names.length; f++) {
           var name = names[f];
+          var webField = fieldOf(info.ns, name);
+          remember(webTarget, name, webField ? webField.value : null);
           if (info.base && info.base[name] === target[name]) webTarget.unsets.push({ path: [name] });
           else webTarget.sets.push({ path: [name], value: target[name] });
         }
@@ -6782,15 +6814,66 @@ const BUILTIN_CONFIG_HTML = `<script>
     });
   }
 
+  // 写配置会触发 Loader 应用：本插件的 HTTP server 可能在写入落盘后立刻被重建，
+  // 于是这次请求的连接被断开（fetch 报 network error），但宿主其实已经写入。
+  // 所以连接断了不能直接判失败：重取宿主状态，按「目标值是否真的落地」判定。
+  function refetchPage(key, attempt) {
+    var tries = attempt || 0;
+    return rpc('mobile.builtinConfig.get', { page: key }).then(function (result) {
+      if (result && result.ok === true) return result.value;
+      return null;
+    }).catch(function () {
+      if (tries >= 9) return null;
+      return new Promise(function (resolve) { setTimeout(resolve, 700); }).then(function () {
+        return refetchPage(key, tries + 1);
+      });
+    });
+  }
+
+  function pageSection(pageData, ns) {
+    var list = pageData && Array.isArray(pageData.sections) ? pageData.sections : [];
+    for (var i = 0; i < list.length; i++) if (list[i].ns === ns) return list[i];
+    return null;
+  }
+
+  function pageField(pageData, ns, key) {
+    var section = pageSection(pageData, ns);
+    var fields = section && Array.isArray(section.fields) ? section.fields : [];
+    for (var i = 0; i < fields.length; i++) if (fields[i].key === key) return fields[i];
+    return null;
+  }
+
+  function intentLanded(pageData, ops, apiKey) {
+    for (var i = 0; i < ops.length; i++) {
+      var plan = ops[i];
+      var section = pageSection(pageData, plan.ns);
+      if (!section) return false;
+      for (var j = 0; j < plan.sets.length; j++) {
+        var field = pageField(pageData, plan.ns, plan.sets[j].path[0]);
+        if (!field || JSON.stringify(field.value) !== JSON.stringify(plan.sets[j].value)) return false;
+      }
+      for (var k = 0; k < plan.unsets.length; k++) {
+        var unsetField = pageField(pageData, plan.ns, plan.unsets[k].path[0]);
+        if (!unsetField || unsetField.overridden !== false) return false;
+      }
+    }
+    if (apiKey) {
+      var info = pageData && pageData.webSearch ? pageData.webSearch.apiKey : null;
+      if (!info || info.configured !== true) return false;
+    }
+    return true;
+  }
+
   function save() {
     if (saving || !payload) return;
     var collected = collect();
     if (collected.invalid) { setStatus('err', collected.invalid); return; }
     if (collected.ops.length === 0 && collected.apiKey === null) return;
+    var pageKey = payload.key;
     saving = true;
     setStatus('info', '保存中…（写入会走宿主 Loader 应用，插件可能短暂重载）');
     refreshDirty();
-    var body = { page: payload.key, sections: collected.ops };
+    var body = { page: pageKey, sections: collected.ops };
     if (collected.apiKey) body.apiKey = collected.apiKey;
     rpc('mobile.builtinConfig.save', body).then(function (result) {
       saving = false;
@@ -6818,10 +6901,23 @@ const BUILTIN_CONFIG_HTML = `<script>
         return;
       }
       setStatus('ok', '已保存并应用到宿主（回读已确认）。');
-    }).catch(function (error) {
-      saving = false;
-      refreshDirty();
-      setStatus('err', '保存失败：' + ((error && error.message) || String(error)) + '。若是插件重载导致连接中断，请刷新后重试。');
+    }).catch(function () {
+      // 连接被重载打断：以宿主回读为准，而不是把「网络错误」当失败。
+      refetchPage(pageKey).then(function (fresh) {
+        saving = false;
+        if (!fresh) {
+          refreshDirty();
+          setStatus('err', '保存结果未知：写入时连接中断（插件重载），且暂时读不到宿主状态。请稍后点右上角刷新确认。');
+          return;
+        }
+        applyPayload(fresh);
+        render();
+        if (intentLanded(fresh, collected.ops, collected.apiKey)) {
+          setStatus('ok', '已保存并应用到宿主（写入时插件重载、连接中断一次；回读已确认）。');
+          return;
+        }
+        setStatus('err', '保存未落地：宿主在写入时重载、连接中断，回读仍看不到新值。请重试。');
+      });
     });
   }
 
@@ -8846,8 +8942,13 @@ export function apply(ctx, config) {
           ops.push({ op: 'unset', path })
         }
         if (ops.length === 0) continue
-        const revision = Number.isSafeInteger(section.revision) ? section.revision : undefined
-        plans.push({ ns, ops, revision, order: page.sections.findIndex((item) => builtinResolveNs(item, rows) === ns) })
+        // 乐观并发检查用「客户端读到的字段值」而不是 revision —— 原因见下面写循环前的注释。
+        const expect = {}
+        const rawExpect = section.expect !== null && typeof section.expect === 'object' ? section.expect : {}
+        for (const key of Object.keys(rawExpect)) {
+          if (builtinFieldDef(def, key)) expect[key] = rawExpect[key]
+        }
+        plans.push({ ns, ops, expect, order: page.sections.findIndex((item) => builtinResolveNs(item, rows) === ns) })
       }
       plans.sort((left, right) => left.order - right.order)
 
@@ -8858,10 +8959,50 @@ export function apply(ctx, config) {
       }
 
       const applied = []
+      // 并发保护不用 settings.mutate 的 expectedRevision，而是自己比对「客户端读到的值」：
+      //   宿主对含 !!js 的 entry（如 pwsh-sandbox 的 disabled: !!js ...）在
+      //   configEditor.edit() 自己的 pre-reconcile 阶段就会让该 ns 的 revision +2，
+      //   于是任何带 revision 的写入都必然抛 SETTINGS_CONFLICT（实测 expected 136 /
+      //   now 138，连续三次都一样）——revision 在这类 entry 上根本不可用作并发令牌。
+      //   这里改成写前逐个字段比对：客户端读到的值若已被别处改动就拒绝写入并把
+      //   宿主当前值带回；语义（不覆盖别人的修改）不变，且对这类 entry 稳定。
+      const beforeWrite = await builtinConfigPayload(page)
+      for (const plan of plans) {
+        const section = Array.isArray(beforeWrite.sections) ? beforeWrite.sections.find((item) => item.ns === plan.ns) : undefined
+        if (!section) {
+          return {
+            ok: false,
+            error: { code: 'settings_write_failed', message: `宿主不再提供配置命名空间 ${plan.ns}`, details: { ns: plan.ns, applied } },
+            value: { page: beforeWrite },
+          }
+        }
+        for (const op of plan.ops) {
+          const key = op.path[0]
+          if (!Object.prototype.hasOwnProperty.call(plan.expect, key)) continue
+          const field = section.fields.find((item) => item.key === key)
+          const currentValue = field ? field.value : null
+          if (JSON.stringify(currentValue === undefined ? null : currentValue) !== JSON.stringify(plan.expect[key] === undefined ? null : plan.expect[key])) {
+            const label = field && field.label ? field.label : key
+            return {
+              ok: false,
+              error: {
+                code: 'settings_conflict',
+                message: `「${label}」已在其他位置被改成 ${JSON.stringify(currentValue)}（你读到的是 ${JSON.stringify(plan.expect[key])}），本次没有覆盖；表单已按宿主最新值刷新。`,
+                details: { ns: plan.ns, path: op.path, expected: plan.expect[key], actual: currentValue, applied },
+              },
+              value: { page: beforeWrite },
+            }
+          }
+        }
+      }
       for (const plan of plans) {
         try {
-          // 带 revision：宿主若发现别处已改过就抛 SETTINGS_CONFLICT，我们绝不静默覆盖。
-          await settings.mutate(plan.ns, plan.ops, plan.revision)
+          // 必须走 callOutsideHmr：本插件的 HTTP handler 可能仍带着上一次 HMR reload
+          // 留下的 AsyncLocalStorage 标记，而 configEditor.edit() 内部会
+          // hmr.runExclusive(...)，嵌套会被宿主直接拒绝（"HMR transactions cannot be
+          // nested"）。pluginManager 启停那边踩过同一个坑，这里用同一个出口。
+          // 不带 expectedRevision：并发保护已在上面的字段级比对里做完。
+          await callOutsideHmr(() => settings.mutate(plan.ns, plan.ops))
           applied.push({ ns: plan.ns, ok: true })
         } catch (err) {
           const conflict = err !== undefined && err !== null && err.code === 'SETTINGS_CONFLICT'
@@ -8900,7 +9041,7 @@ export function apply(ctx, config) {
           return serviceUnavailable('credentials', '宿主的凭据服务未启用，无法保存 API Key')
         }
         try {
-          await credentials.set(expectedRef, payload.apiKey.value)
+          await callOutsideHmr(() => credentials.set(expectedRef, payload.apiKey.value))
           apiKeyApplied = { ref: expectedRef }
         } catch (err) {
           return {
@@ -9525,21 +9666,28 @@ export function apply(ctx, config) {
         ]
         // 「内置插件配置」里各行的显示顺序（桌面插件页 basic 分组的视觉顺序）。
         // Agent 循环按用户要求不做（配置页与列表都不出现），这里不再保留它的排序位。
+        // 注意：listPlugins 的 moduleName 是 scoped 包名（@deepseek-ai/dsh-client-ui-…），
+        // 所以下面统一按「最后一段包名」匹配，别写 endsWith('/ui-settings-…')（永远 false）。
         const BASIC_ORDER = [
-          'ui-settings-subagent',
-          'ui-settings-web-search',
-          'ui-settings-shell',
+          'dsh-client-ui-settings-subagent',
+          'dsh-client-ui-settings-web-search',
+          'dsh-client-ui-settings-shell',
         ]
-        // moduleName 后缀 → 手机端内置配置页的 page key。
+        // 最后一段包名 → 手机端内置配置页的 page key。
         // 这张表是「哪几行能打开真实配置页」的唯一出处：值必须与
         // BUILTIN_CONFIG_PAGES 的 key 对齐，且宿主确实 serve 了对应 ns 才算可配置。
         const BASIC_CONFIG_PAGE = {
-          'ui-settings-subagent': 'subagent',
-          'ui-settings-web-search': 'web-search',
-          'ui-settings-shell': 'shell',
+          'dsh-client-ui-settings-subagent': 'subagent',
+          'dsh-client-ui-settings-web-search': 'web-search',
+          'dsh-client-ui-settings-shell': 'shell',
         }
         // 用户明确要求：Agent 循环页不做，列表里也不要出现。
-        const BASIC_HIDDEN = ['ui-settings-agent-loop']
+        const BASIC_HIDDEN = ['dsh-client-ui-settings-agent-loop']
+        const moduleSegment = (moduleName) => {
+          const text = typeof moduleName === 'string' ? moduleName : ''
+          const cut = text.lastIndexOf('/')
+          return cut < 0 ? text : text.slice(cut + 1)
+        }
 
         // meta.title/description 有两种真实形态（asar: dsh-app-boot readPluginMeta）：
         //   · 字符串（包名兜底）；· 本地化对象 { zh, en }（包自带 locale 的 meta.title）。
@@ -9622,13 +9770,16 @@ export function apply(ctx, config) {
             return description && typeof description === 'object' && typeof description.en === 'string' && description.en.includes("web client's Plugins page")
           })
           .filter((entry) => {
-            const moduleName = typeof entry.moduleName === 'string' ? entry.moduleName : ''
-            return !BASIC_HIDDEN.some((name) => moduleName.endsWith('/' + name))
+            const segment = moduleSegment(entry && entry.moduleName)
+            return !BASIC_HIDDEN.includes(segment)
           })
           .map((entry) => {
-            const moduleName = typeof entry.moduleName === 'string' ? entry.moduleName : ''
-            const suffix = Object.keys(BASIC_CONFIG_PAGE).find((name) => moduleName.endsWith('/' + name))
-            const pageKey = suffix === undefined ? null : BASIC_CONFIG_PAGE[suffix]
+            const segment = moduleSegment(entry && entry.moduleName)
+            const pageKey = Object.prototype.hasOwnProperty.call(BASIC_CONFIG_PAGE, segment) ? BASIC_CONFIG_PAGE[segment] : null
+            const configurable = pageKey !== null && builtinConfigPageAvailable(pageKey)
+            const configPage = configurable ? builtinPageFor(pageKey) : null
+            const configPageTitle = configPage ? configPage.title : null
+            const configPageDescription = configPage ? configPage.description : null
             return {
               entryId: entry.entryId,
               moduleName: entry.moduleName,
@@ -9636,12 +9787,16 @@ export function apply(ctx, config) {
               fiberPhase: typeof entry.fiberPhase === 'string' ? entry.fiberPhase : null,
               readOnlyReason: typeof entry.readOnlyReason === 'string' ? entry.readOnlyReason : null,
               meta: metaOf(entry.meta),
-              configPage: pageKey !== null && builtinConfigPageAvailable(pageKey) ? pageKey : null,
+              configPage: configurable ? pageKey : null,
+              // 桌面插件页这四行的标题/说明取页面自己的文案（子智能体 / 网页搜索 / 终端），
+              // 不是 client 包的 meta.title（那是「…设置」）。这里按桌面取齐。
+              configPageTitle,
+              configPageDescription,
             }
           })
           .sort((a, b) => {
             const rankOf = (item) => {
-              const index = BASIC_ORDER.findIndex((name) => item.moduleName.endsWith('/' + name))
+              const index = BASIC_ORDER.indexOf(moduleSegment(item.moduleName))
               return index < 0 ? BASIC_ORDER.length : index
             }
             return rankOf(a) - rankOf(b)
