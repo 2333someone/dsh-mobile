@@ -3058,24 +3058,25 @@ html.dm-host-page-open body {
   line-height: 22px !important;
 }
 
-/* ── 会话行「删除」：胶囊化、内缩、藏在行下面 ─────────────────────────────
+/* ── 会话行「删除」：横向胶囊、内缩、藏在行下面 ───────────────────────────
    bundle 的 .mobile-row-swipe-action 是 top/bottom/right 全贴边的直角红块（80px），
    .mobile-row-swipe 虽然 overflow:hidden，但卡片自身圆角被归零，滑开时红色会
    顶到行的上下边缘、并在圆角处漏出细红边。
-   这里把删除按钮做成**内缩的胶囊**：上下右各留 8px、整圆角、字号收小，
-   同时把滑开位移从 80px 调到 76px（8 右缩 + 68 宽），保证按钮完整露出、
-   且红色不再接触行的上下边缘。 */
+   这里把删除按钮做成**内缩的横向胶囊**：上下右各留 8px、整圆角、字号收小。
+   行高约 70px → 按钮高约 54px；宽度取 92px（≈1.7:1），明显是横胶囊而不是
+   之前的 68×54 近圆形。滑开位移同步调到 100px（8 右缩 + 92 宽），保证按钮
+   完整露出、且红色不接触行的上下边缘。 */
 .mobile-row-swipe-action {
   top: 8px !important;
   bottom: 8px !important;
   right: 8px !important;
-  width: 68px !important;
-  padding: 0 12px !important;
+  width: 92px !important;
+  padding: 0 14px !important;
   border-radius: 999px !important;
   font-size: 13px !important;
 }
 .mobile-row-swipe-inner.swiped {
-  transform: translateX(-76px) !important;
+  transform: translateX(-100px) !important;
 }
 
 /* ── 设置页范围徽标：只压深前景色，保证 10px 小字可读 ─────────────────────
