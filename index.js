@@ -17,8 +17,8 @@
 import { createServer } from 'node:http'
 import { randomBytes, randomInt } from 'node:crypto'
 import { homedir, networkInterfaces } from 'node:os'
-import { join, basename } from 'node:path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { join, basename, resolve as resolvePath, relative as relativePath, isAbsolute as isAbsolutePath, extname } from 'node:path'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-mobile'
@@ -5790,6 +5790,36 @@ export function apply(ctx, config) {
     }
   }
 
+  /** 会话创建时写死的 cwd（Session.header.cwd）；手机端读本地文件要按它解析。 */
+  function sessionCwd(sessionId) {
+    const session = sessionById(sessionId)
+    const header = session && session.header
+    return header && typeof header.cwd === 'string' ? header.cwd : ''
+  }
+
+  /**
+   * 手机端本地图片预览允许的扩展名 → media type。
+   *
+   * bundle 的 markdown 渲染器把 `![](路径)` 落成
+   * `<img class="md-local-img" data-local-src="路径">`，再由 local-images 逻辑调
+   * `mobile.readFile` 换 data URL。以前这个 RPC 是个 unavailable 桩，聊天里的
+   * 本地图片于是全部停在 failed 态（红虚线框 + alt），即用户看到的
+   * 「图片发送失败」。这里只放开图片，且只读会话工作区内的文件。
+   */
+  const PREVIEW_IMAGE_MIME = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.avif': 'image/avif',
+    '.ico': 'image/x-icon',
+    '.svg': 'image/svg+xml',
+  }
+  // base64 会再胖 1/3：8MB 原图 ≈ 11MB JSON，手机上再大就卡了。
+  const PREVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
   /**
    * 四个 Agent 预设的中文名与一句话说明。
    *
@@ -6475,7 +6505,73 @@ export function apply(ctx, config) {
         return { ok: true, value: { mediaType, dataUrl: `data:${mediaType};base64,${data}` } }
       }
       case 'mobile.readFile': {
-        return { ok: false, error: { code: 'unavailable', message: '文件预览暂未开放' } }
+        // 手机端 markdown 里的本地图片（`![](相对路径)`）走这里：
+        // bundle 只把路径写进 <img data-local-src>，随后用 mobile.readFile
+        // 换 data URL。相对路径按会话 cwd 解析，realpath 之后必须仍在工作区
+        // 内（挡 ../ 与符号链接逃逸），并且只接受图片、有大小上限。
+        const requested = typeof payload?.path === 'string' ? payload.path.trim() : ''
+        const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+        if (requested === '') {
+          return { ok: false, error: { code: 'invalid-request', message: '缺少文件路径' } }
+        }
+        const cwd = sessionCwd(sessionId)
+        let rootDir = cwd
+        if (rootDir === '' && sessionId !== '') {
+          // 不在活会话表里（历史会话被恢复/未打开）：退回会话列表里那条记录的 cwd。
+          try {
+            const { items = [] } = await sc().list({}, new AbortController().signal)
+            const hit = items.find((it) => it && it.sessionId === sessionId)
+            if (hit && typeof hit.cwd === 'string') rootDir = hit.cwd
+          } catch {}
+        }
+        if (rootDir === '') {
+          return { ok: false, error: { code: 'unavailable', message: '无法确定会话工作区' } }
+        }
+        let realRoot
+        let realPath
+        try {
+          realRoot = realpathSync(rootDir)
+          realPath = realpathSync(resolvePath(realRoot, requested))
+        } catch {
+          return { ok: false, error: { code: 'not-found', message: '文件不存在' } }
+        }
+        const rel = relativePath(realRoot, realPath)
+        const inside = rel === '' || (!isAbsolutePath(rel) && rel.split(/[\\/]/)[0] !== '..')
+        if (!inside) {
+          return { ok: false, error: { code: 'forbidden', message: '只能读取工作区内的文件' } }
+        }
+        const mediaType = PREVIEW_IMAGE_MIME[extname(realPath).toLowerCase()]
+        if (mediaType === undefined) {
+          return { ok: false, error: { code: 'unsupported', message: '只支持图片预览' } }
+        }
+        let stat
+        try {
+          stat = statSync(realPath)
+        } catch {
+          return { ok: false, error: { code: 'not-found', message: '文件不存在' } }
+        }
+        if (!stat.isFile()) {
+          return { ok: false, error: { code: 'invalid-request', message: '不是文件' } }
+        }
+        if (stat.size > PREVIEW_IMAGE_MAX_BYTES) {
+          return { ok: false, error: { code: 'too-large', message: '图片太大（上限 8MB）' } }
+        }
+        let base64
+        try {
+          base64 = readFileSync(realPath).toString('base64')
+        } catch {
+          return { ok: false, error: { code: 'internal', message: '图片读取失败' } }
+        }
+        return {
+          ok: true,
+          value: {
+            kind: 'image',
+            mediaType,
+            dataUrl: `data:${mediaType};base64,${base64}`,
+            name: basename(realPath),
+            path: realPath,
+          },
+        }
       }
       case 'mobile.listDirectory': {
         //
