@@ -7750,7 +7750,13 @@ export function apply(ctx, config) {
     if (path === MOBILE_ROOT) return sendHtml(res, 200, mobilePageHtml())
     // 只读自检：不需要登录/配对，任何能访问到本插件的人都能打开。
     if (path === PUSH_CHECK_URL) return sendHtml(res, 200, pushCheckPageHtml())
-    if (path === BUNDLE_URL) return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'))
+    if (path === BUNDLE_URL) {
+      // bundle 会随插件更新（例如把设置行内建进去）。URL 固定为 /m/mobile.js，
+      // 不带 no-store 的话浏览器会按启发式缓存旧模块，刷新也拿不到新内容——
+      // 表现就是"改了 bundle、也重载了插件，手机上还是旧界面"。
+      res.setHeader('Cache-Control', 'no-store')
+      return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'))
+    }
     if (path === MANIFEST_URL) return sendText(res, 200, 'application/manifest+json', manifestJson())
     if (path === ICON_SVG_URL) return sendBuffer(res, 200, 'image/svg+xml', asset('icon.svg'))
     if (path === ICON_192_URL) return sendBuffer(res, 200, 'image/png', asset('icon-192.png'))
