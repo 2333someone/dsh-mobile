@@ -5537,7 +5537,7 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
 const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="插件" title="插件"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M7.84457 5.06199C11.6605 4.93876 14.7962 6.14848 14.8484 7.76397C14.8875 8.97461 13.1838 10.0696 10.7215 10.5942"/><path d="M5.12742 8.07731C5.00419 4.26138 6.21391 1.12568 7.8294 1.07351C9.04004 1.03441 10.135 2.73808 10.6596 5.20037"/><path d="M8.02457 10.6802C4.20865 10.8034 1.07294 9.5937 1.02077 7.97821C0.981678 6.76758 2.68535 5.67262 5.14763 5.14798"/><path d="M10.7476 7.89535C10.8708 11.7113 9.66109 14.847 8.0456 14.8991C6.83496 14.9382 5.74 13.2346 5.21536 10.7723"/></svg></button><button id="dm-automation-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="自动化" title="自动化"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M8 14C11.3137 14 14 11.3137 14 8C14 4.68629 11.3137 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14Z"/><path d="M8 4.31V8.46L11 10.08"/></svg></button>
 <div id="dm-host-pages">
 <section id="dm-page-plugins" class="dm-page" hidden aria-label="插件">
-<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="plugins"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新插件" data-dm-refresh="plugins"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button></header>
+<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="plugins"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新插件" data-dm-refresh="plugins"><svg class="dm-page-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.49 8.66A8.2 8.2 0 1 1 11.71 3.80"/><path d="M16.31 3.64L11.64 1.56L11.79 6.05Z" fill="currentColor" stroke="currentColor" stroke-width="0.55" stroke-linejoin="round"/></svg></button></header>
 <div class="dm-page-body" data-dm-body="plugins"><p class="dm-page-state">加载中…</p></div>
 </section>
 <section id="dm-page-plugin-detail" class="dm-page dm-page-detail" hidden aria-label="插件详情">
@@ -5553,6 +5553,10 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
 </div>
 <div class="dm-auto-list" data-dm-auto-list="1"><p class="dm-page-state">加载中…</p></div>
 </div>
+</section>
+<section id="dm-page-cfg" class="dm-page dm-page-cfg" hidden aria-label="内置插件配置">
+<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回插件列表" data-dm-cfg-back="1"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title" data-dm-cfg-title>内置插件配置</h1><button class="dm-page-iconbtn" type="button" aria-label="重新读取配置" data-dm-cfg-refresh="1"><svg class="dm-page-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.49 8.66A8.2 8.2 0 1 1 11.71 3.80"/><path d="M16.31 3.64L11.64 1.56L11.79 6.05Z" fill="currentColor" stroke="currentColor" stroke-width="0.55" stroke-linejoin="round"/></svg></button></header>
+<div class="dm-page-body" data-dm-cfg-body><p class="dm-page-state">加载中…</p></div>
 </section>
 </div>
 <div class="dm-toast" id="dm-toast" role="status" aria-live="polite" hidden></div>
@@ -5719,6 +5723,19 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
   });
 
   // ── 插件：数据加载 ──────────────────────────────────────────────────────
+  // 刷新反馈：请求在飞时让右上角图标转一圈（只对带 data-dm-refresh 的页生效）。
+  // 转的是 <svg> 本身，transform-origin 默认就在它的 20×20 盒子中心。
+  function setPageRefreshing(kind, on) {
+    var btn = document.querySelector('[data-dm-refresh="' + kind + '"]');
+    if (!btn) return;
+    if (on) {
+      btn.classList.add('dm-spinning');
+      btn.setAttribute('aria-busy', 'true');
+    } else {
+      btn.classList.remove('dm-spinning');
+      btn.removeAttribute('aria-busy');
+    }
+  }
   function loadPage(kind) {
     var cfg = PAGES[kind];
     var body = pageBody(kind);
@@ -5739,8 +5756,10 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     }
     var my = ++seq;
     loading[kind] = my;
+    setPageRefreshing(kind, true);
     rpc(cfg.method).then(function (result) {
       if (loading[kind] !== my) return;
+      setPageRefreshing(kind, false);
       if (!result || result.ok !== true) {
         renderPageError(kind, result && result.error ? result.error : { code: 'unknown', message: '宿主返回了无法识别的结果' });
         return;
@@ -5749,6 +5768,7 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
       else { autoValue = result.value || {}; renderAutomations(); }
     }).catch(function (error) {
       if (loading[kind] !== my) return;
+      setPageRefreshing(kind, false);
       renderPageError(kind, { code: 'network_error', message: (error && error.message) || String(error) });
     });
   }
@@ -5806,9 +5826,15 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     html += sectionHtml('内置插件配置', '共 ' + basic.length + ' 个', basic.map(function (item) {
       var title = localized(item.meta && item.meta.title) || shortName(item.moduleName);
       var description = localized(item.meta && item.meta.description);
-      return '<div class="dm-card" data-open-entry="' + esc(item.entryId) + '" role="button" tabindex="0">' +
+      // 有真实配置页的行（子智能体 / 网页搜索 / 终端）直接进配置页；
+      // 其余行仍走原来的 entry 详情（宿主没给可写命名空间时就只能只读展示）。
+      var openAttr = item.configPage
+        ? 'data-dm-cfg-open="' + esc(item.configPage) + '"'
+        : 'data-open-entry="' + esc(item.entryId) + '"';
+      var badge = item.configPage ? '<span class="dm-badge-config">可配置</span>' : '';
+      return '<div class="dm-card" ' + openAttr + ' role="button" tabindex="0">' +
         iconHtml(item.meta && item.meta.icon, title) +
-        '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span></div>' +
+        '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span>' + badge + '</div>' +
         (description ? '<div class="dm-card-desc">' + esc(description) + '</div>' : '') +
         '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
         '<span class="dm-chevron" aria-hidden="true">›</span></div>';
@@ -5877,7 +5903,13 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
       '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
       '<div class="dm-card-side">' + toggle + '</div></div>';
     if (description) html += '<p class="dm-detail-desc">' + esc(description) + '</p>';
-    html += '<div class="dm-detail-note">这是内置插件的桌面端配置入口。手机端只读展示，配置请在桌面端修改。</div>';
+    if (item.configPage) {
+      // 有真实配置页：详情里也给一个入口按钮（点行同样直达）。
+      html += '<button class="dm-detail-primary" type="button" data-dm-cfg-open="' + esc(item.configPage) + '">打开配置</button>' +
+        '<div class="dm-detail-note">字段与桌面端同名页面一致：值读宿主 settings，保存写 profile 的 cordis.patch.yml 并走正常 Loader 应用。</div>';
+    } else {
+      html += '<div class="dm-detail-note">这是内置插件的桌面端配置入口。手机端只读展示，配置请在桌面端修改。</div>';
+    }
     html += '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">来源信息</span></div>' +
       '<dl class="dm-detail-dl"><dt>entry id</dt><dd>' + esc(item.entryId) + '</dd><dt>包名</dt><dd>' + esc(item.moduleName) + '</dd><dt>运行状态</dt><dd>' + esc(running ? '运行中' : '已停用') + '</dd>' +
       (readOnly ? '<dt>只读原因</dt><dd>' + esc(item.readOnlyReason) + '</dd>' : '') + '</dl></section>';
@@ -6216,6 +6248,656 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
 })();
 </script>`
 
+// ── 内置插件配置页（插件 → 子智能体 / 网页搜索 / 终端）────────────────────
+// 桌面这三页在宿主侧只用三个服务：@deepseek-ai/dsh-settings（describe/mutate，
+// 内部走 configEditor.edit() → 正常 Loader 应用）、@deepseek-ai/dsh-credentials
+// （API Key 只写不读明文）、@deepseek-ai/dsh-llm（模型候选）。
+// 这里的脚本只做「渲染 / 暂存 / 提交 / 按宿主回读重绘」：
+//   · 初始值、默认值、override 状态全部来自 /m/api/mobile.builtinConfig.get；
+//   · 保存失败时用宿主回传的最新状态整页重绘（= 回滚），并显示宿主原文；
+//   · API Key 只有一个密码输入框，永远不回填、不显示明文，只显示已配置/未配置。
+const BUILTIN_CONFIG_HTML = `<script>
+(function () {
+  'use strict';
+
+  // ── 内置插件配置页（子智能体 / 网页搜索 / 终端）────────────────────────────
+  // 数据全部来自宿主：/m/api/mobile.builtinConfig.* 三个方法内部读
+  // @deepseek-ai/dsh-settings 的 describe()（已脱敏）+ credentials.describe()。
+  // 本脚本只做「渲染 / 暂存 / 提交 / 按宿主回读重绘」，不缓存任何默认值；
+  // 保存失败时用宿主返回的最新状态整页重绘（= 回滚），并显示宿主原文。
+  var PAGE_EL = document.getElementById('dm-page-cfg');
+  if (!PAGE_EL) return;
+  var BODY_EL = PAGE_EL.querySelector('[data-dm-cfg-body]');
+  var TITLE_EL = PAGE_EL.querySelector('[data-dm-cfg-title]');
+
+  var SAVE_IDLE = '保存';
+  var SAVE_BUSY = '保存中…';
+  var MODEL_HINT = '至少选择一个模型。已保存但当前不可用的模型仍会保留，也可以移除。';
+
+  var openKey = null;      // 当前打开的配置页 key
+  var payload = null;      // 宿主导出的页面数据（唯一真值来源）
+  var stagedMode = null;   // 网页搜索：暂存的开关位置 'api' | 'messages'
+  var stagedFields = {};   // ns|key -> 输入框文本（开关切走的那一组也不丢草稿）
+  var stagedModels = null; // 模型 key -> true
+  var stagedEnabled = null;// 模型选择开关的暂存值
+  var resetFields = {};    // ns|key -> true（点了「恢复默认」，保存时发 unset）
+  var saving = false;
+  var status = null;       // { kind: 'ok' | 'err' | 'info', text }
+  var loadNonce = 0;
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  function rpc(method, body) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rpcId: 'dm-cfg-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+        payload: body || {}
+      })
+    }).then(function (res) {
+      return res.json().catch(function () { return null; });
+    }).then(function (json) {
+      if (!json || !json.result) throw new Error('宿主没有返回 RPC 结果（连接可能因插件重载中断）');
+      return json.result;
+    });
+  }
+
+  function dataKey(ns, key) { return String(ns) + '|' + String(key); }
+  function modelKey(route) { return String(route.provider) + '|' + String(route.model); }
+
+  function sectionOf(ns) {
+    if (!payload || !Array.isArray(payload.sections)) return null;
+    for (var i = 0; i < payload.sections.length; i++) {
+      if (payload.sections[i].ns === ns) return payload.sections[i];
+    }
+    return null;
+  }
+
+  function fieldOf(ns, key) {
+    var section = sectionOf(ns);
+    if (!section || !Array.isArray(section.fields)) return null;
+    for (var i = 0; i < section.fields.length; i++) {
+      if (section.fields[i].key === key) return section.fields[i];
+    }
+    return null;
+  }
+
+  function defaultText(field) {
+    if (!field) return '';
+    var value = field.value;
+    if (value === null || value === undefined) return '';
+    return String(value);
+  }
+
+  function inputText(ns, key) {
+    var keyText = dataKey(ns, key);
+    if (Object.prototype.hasOwnProperty.call(stagedFields, keyText)) return stagedFields[keyText];
+    return defaultText(fieldOf(ns, key));
+  }
+
+  function overlayFields() {
+    var inputs = BODY_EL.querySelectorAll('[data-dm-cfg-input]');
+    for (var i = 0; i < inputs.length; i++) {
+      stagedFields[inputs[i].getAttribute('data-dm-cfg-input')] = inputs[i].value;
+    }
+  }
+
+  // ── 类型解析（宿主端 builtinCoerce 是最终裁决；这里只做即时提示）──────────
+  function parseField(field, text) {
+    if (!field) return { kind: 'skip' };
+    var trimmed = String(text == null ? '' : text).trim();
+    if (field.kind === 'int') {
+      if (trimmed === '') return { kind: 'unset' };
+      if (!/^-?(0|[1-9][0-9]*)$/.test(trimmed)) return { kind: 'invalid', message: field.invalid || '请输入整数。' };
+      var num = Number(trimmed);
+      if (!isFinite(num) || Math.floor(num) !== num) return { kind: 'invalid', message: field.invalid || '请输入整数。' };
+      if (typeof field.min === 'number' && num < field.min) return { kind: 'invalid', message: field.invalid || ('不能小于 ' + field.min + '。') };
+      if (typeof field.max === 'number' && num > field.max) return { kind: 'invalid', message: field.invalid || ('不能大于 ' + field.max + '。') };
+      return { kind: 'set', value: num };
+    }
+    if (field.kind === 'text') {
+      if (trimmed === '') return { kind: 'unset' };
+      return { kind: 'set', value: String(text) };
+    }
+    return { kind: 'skip' };
+  }
+
+  function sameValue(left, right) {
+    return JSON.stringify(left === undefined ? null : left) === JSON.stringify(right === undefined ? null : right);
+  }
+
+  // ── 渲染 ────────────────────────────────────────────────────────────────
+  function renderState(text, cls) {
+    BODY_EL.innerHTML = '<div class="dm-page-state ' + (cls || '') + '">' +
+      '<p class="dm-page-stateText">' + esc(text) + '</p>' +
+      '<button class="dm-page-retry" type="button" data-dm-cfg-retry="1">重试</button>' +
+      '</div>';
+  }
+
+  function overrideBadge(field, keyText) {
+    if (!field || !field.overridden) return '';
+    return '<span class="dm-cfg-badge">已覆盖</span>' +
+      '<button class="dm-cfg-reset" type="button" data-dm-cfg-reset="' + esc(keyText) + '">恢复默认</button>';
+  }
+
+  function fieldHtml(section, field) {
+    var keyText = dataKey(section.ns, field.key);
+    var id = 'dm-cfg-' + String(section.ns).replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + String(field.key).replace(/[^a-zA-Z0-9_-]/g, '-');
+    var text = inputText(section.ns, field.key);
+    var reset = resetFields[keyText] === true;
+    return '<div class="dm-cfg-field" data-dm-cfg-field="' + esc(keyText) + '">' +
+      '<div class="dm-cfg-labelRow">' +
+        '<label class="dm-cfg-label" for="' + esc(id) + '">' + esc(field.label) + '</label>' +
+        overrideBadge(field, keyText) +
+      '</div>' +
+      '<input id="' + esc(id) + '" class="dm-cfg-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"' +
+        ' inputmode="' + (field.kind === 'int' ? 'numeric' : 'text') + '"' +
+        ' value="' + esc(text) + '" data-dm-cfg-input="' + esc(keyText) + '">' +
+      (field.hint ? '<p class="dm-cfg-hint">' + esc(field.hint) + '</p>' : '') +
+      (reset ? '<p class="dm-cfg-hint dm-cfg-resetHint">保存后该字段回到继承的默认值（删除 override）。</p>' : '') +
+      '<p class="dm-cfg-invalid" hidden></p>' +
+      '</div>';
+  }
+
+  function switchHtml() {
+    var info = payload.webSearch && payload.webSearch.switch;
+    if (!info) return '';
+    var on = stagedMode === 'api';
+    return '<div class="dm-cfg-field dm-cfg-switchRow">' +
+      '<div class="dm-cfg-labelRow">' +
+        '<span class="dm-cfg-label">' + esc(info.label) + '</span>' +
+        (info.overridden ? '<span class="dm-cfg-badge">已覆盖</span>' : '') +
+        '<label class="dm-cfg-toggle"><input type="checkbox" data-dm-cfg-switch="1"' + (on ? ' checked' : '') + '>' +
+          '<span class="dm-cfg-track" aria-hidden="true"></span></label>' +
+      '</div>' +
+      '<p class="dm-cfg-hint">' + esc(info.hint) +
+        (info.link ? ' <a class="dm-cfg-link" href="' + esc(info.link) + '" target="_blank" rel="noopener noreferrer">' + esc(info.linkLabel || info.link) + '</a>' : '') +
+      '</p>' +
+      '<p class="dm-cfg-hint">切换后基础地址与次数上限会换成对应接口的字段；保存时先写接口参数、最后写开关。</p>' +
+      '</div>';
+  }
+
+  function apiKeyHtml() {
+    var info = payload.webSearch && payload.webSearch.apiKey;
+    if (!info || info.available !== true) {
+      return '<div class="dm-cfg-field">' +
+        '<div class="dm-cfg-labelRow"><span class="dm-cfg-label">API Key</span>' +
+          '<span class="dm-cfg-badge is-off">不可用</span></div>' +
+        '<p class="dm-cfg-hint">宿主的凭据服务不可用，暂时无法读取或写入密钥。</p></div>';
+    }
+    return '<div class="dm-cfg-field">' +
+      '<div class="dm-cfg-labelRow"><span class="dm-cfg-label">API Key</span>' +
+        '<span class="dm-cfg-badge ' + (info.configured ? 'is-on' : 'is-off') + '">' + (info.configured ? '已配置' : '未配置') + '</span></div>' +
+      '<input class="dm-cfg-input" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false"' +
+        ' value="" placeholder="' + (info.configured ? '已配置；留空表示保持当前密钥' : '填写 API Key') + '"' +
+        ' data-dm-cfg-apikey="1"' + (info.writable ? '' : ' disabled') + '>' +
+      '<p class="dm-cfg-hint">只写宿主凭据库（引用 ' + esc(info.ref) + '），不写入设置文件；密钥不会回显，留空表示不修改。</p>' +
+      '</div>';
+  }
+
+  function modelsHtml() {
+    var info = payload.models;
+    var section = sectionOf('subagent-model-selection-settings');
+    if (!info || info.available !== true) {
+      return '<div class="dm-cfg-section"><h2 class="dm-cfg-sectionTitle">模型选择</h2>' +
+        '<p class="dm-cfg-hint">宿主的 llm 服务不可用，无法读取模型清单。</p></div>';
+    }
+    var enabledField = fieldOf('subagent-model-selection-settings', 'enabled');
+    var enabled = stagedEnabled !== null ? stagedEnabled : (enabledField && enabledField.value === true);
+    var selected = stagedModels || {};
+    var groups = Array.isArray(info.groups) ? info.groups : [];
+    var known = {};
+    var html = '';
+    for (var i = 0; i < groups.length; i++) {
+      var group = groups[i] || {};
+      var models = Array.isArray(group.models) ? group.models : [];
+      if (models.length === 0) continue;
+      html += '<div class="dm-cfg-modelGroup"><p class="dm-cfg-provider">' + esc(group.name || group.id) + '</p>';
+      for (var j = 0; j < models.length; j++) {
+        var model = models[j] || {};
+        var keyText = modelKey({ provider: group.id, model: model.id });
+        known[keyText] = true;
+        html += '<label class="dm-cfg-model"><input type="checkbox" data-dm-cfg-model="' + esc(keyText) + '"' +
+          (selected[keyText] ? ' checked' : '') + (enabled ? '' : ' disabled') + '>' +
+          '<span class="dm-cfg-modelText"><span class="dm-cfg-modelName">' + esc(model.name || model.id) + '</span>' +
+          '<span class="dm-cfg-modelRoute">' + esc(group.name || group.id) + ' · ' + esc(group.id) + '/' + esc(model.id) + '</span></span></label>';
+      }
+      html += '</div>';
+    }
+    var missing = [];
+    for (var k in selected) if (selected[k] && !known[k]) missing.push(k);
+    if (missing.length > 0) {
+      html += '<div class="dm-cfg-modelGroup"><p class="dm-cfg-provider">已保存但当前不可用</p>';
+      for (var m = 0; m < missing.length; m++) {
+        var parts = missing[m].split('|');
+        html += '<label class="dm-cfg-model"><input type="checkbox" data-dm-cfg-model="' + esc(missing[m]) + '" checked' +
+          (enabled ? '' : ' disabled') + '>' +
+          '<span class="dm-cfg-modelText"><span class="dm-cfg-modelName">' + esc(parts[1]) + '</span>' +
+          '<span class="dm-cfg-modelRoute">' + esc(parts[0]) + ' · 当前不可用</span></span></label>';
+      }
+      html += '</div>';
+    }
+    if (Array.isArray(info.failures) && info.failures.length > 0) {
+      var names = [];
+      for (var f = 0; f < info.failures.length; f++) {
+        var failure = info.failures[f] || {};
+        names.push(String(failure.name || failure.id || '') + '：' + String(failure.message || '读取失败'));
+      }
+      html += '<p class="dm-cfg-hint dm-cfg-warn">部分模型提供方读取失败（' + esc(names.join('；')) + '）。</p>';
+    }
+    if (html === '') html = '<p class="dm-cfg-hint">当前没有模型提供方公布模型。</p>';
+
+    return '<div class="dm-cfg-section">' +
+      '<h2 class="dm-cfg-sectionTitle">' + esc(section && section.title ? section.title : '模型选择') + '</h2>' +
+      '<div class="dm-cfg-field dm-cfg-switchRow">' +
+        '<div class="dm-cfg-labelRow">' +
+          '<label class="dm-cfg-label" for="dm-cfg-model-enabled">允许 Agent 为子智能体选择模型</label>' +
+          (enabledField && enabledField.overridden ? '<span class="dm-cfg-badge">已覆盖</span>' : '') +
+          '<label class="dm-cfg-toggle"><input id="dm-cfg-model-enabled" type="checkbox" data-dm-cfg-models-on="1"' + (enabled ? ' checked' : '') + '>' +
+            '<span class="dm-cfg-track" aria-hidden="true"></span></label>' +
+        '</div>' +
+        '<p class="dm-cfg-hint">开启后，Agent 可以从下方授权模型中，为每个子智能体选择提供方、模型和推理强度。仅影响新会话。</p>' +
+        (enabled ? '' : '<p class="dm-cfg-hint dm-cfg-offHint">当前关闭：子智能体使用配置的默认模型或继承父 Agent 的模型；已选模型会保留。</p>') +
+      '</div>' +
+      '<div class="dm-cfg-field">' +
+        '<div class="dm-cfg-labelRow"><span class="dm-cfg-label">Agent 可选择的模型</span>' +
+          '<span class="dm-cfg-badge is-off" data-dm-cfg-modelcount="1">已选 ' + countSelected(selected) + ' 个</span></div>' +
+        '<div class="dm-cfg-models">' + html + '</div>' +
+        '<p class="dm-cfg-hint">' + esc(MODEL_HINT) + '</p>' +
+        '<p class="dm-cfg-invalid" data-dm-cfg-modelinvalid="1" hidden></p>' +
+      '</div></div>';
+  }
+
+  function countSelected(selected) {
+    var count = 0;
+    for (var keyText in selected) if (selected[keyText]) count += 1;
+    return count;
+  }
+
+  function render() {
+    if (!payload) return;
+    var html = '';
+    var sections = Array.isArray(payload.sections) ? payload.sections : [];
+    if (payload.description) html += '<p class="dm-cfg-desc">' + esc(payload.description) + '</p>';
+    if (payload.key === 'web-search') {
+      html += switchHtml() + apiKeyHtml();
+      var activeNs = payload.webSearch && payload.webSearch.activeNs ? payload.webSearch.activeNs : null;
+      var active = activeNs ? sectionOf(activeNs) : null;
+      if (active) {
+        html += '<div class="dm-cfg-section">' +
+          '<h2 class="dm-cfg-sectionTitle">' + (stagedMode === 'api' ? 'Web 搜索 / 抓取 API' : 'DeepSeek Messages') + '</h2>';
+        for (var i = 0; i < active.fields.length; i++) {
+          if (active.fields[i].hidden) continue;
+          html += fieldHtml(active, active.fields[i]);
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="dm-cfg-section"><p class="dm-cfg-hint">宿主没有提供所选接口的配置段。</p></div>';
+      }
+    } else {
+      for (var j = 0; j < sections.length; j++) {
+        var section = sections[j];
+        if (payload.key === 'subagent' && section.ns === 'subagent-model-selection-settings') continue;
+        var visible = [];
+        for (var k = 0; k < section.fields.length; k++) if (!section.fields[k].hidden) visible.push(section.fields[k]);
+        if (visible.length === 0) continue;
+        html += '<div class="dm-cfg-section">';
+        if (section.title) html += '<h2 class="dm-cfg-sectionTitle">' + esc(section.title) + '</h2>';
+        for (var n = 0; n < visible.length; n++) html += fieldHtml(section, visible[n]);
+        html += '</div>';
+      }
+      if (payload.key === 'subagent') html += modelsHtml();
+    }
+    html += '<p class="dm-cfg-footnote">保存会写入 profile 的 cordis.patch.yml，并走宿主正常 Loader 路径应用；' +
+      '插件可能因此重载，本页会在保存后重新读取宿主状态。</p>';
+    html += '<div class="dm-cfg-footer">' +
+      '<button class="dm-cfg-save" type="button" data-dm-cfg-save="1" disabled>' + SAVE_IDLE + '</button>' +
+      '<p class="dm-cfg-status" data-dm-cfg-status="1"></p>' +
+      '</div>';
+    BODY_EL.innerHTML = html;
+    renderStatus();
+    refreshDirty();
+  }
+
+  function renderStatus() {
+    var el = BODY_EL.querySelector('[data-dm-cfg-status]');
+    if (!el) return;
+    if (!status) { el.textContent = ''; el.className = 'dm-cfg-status'; return; }
+    el.textContent = status.text;
+    el.className = 'dm-cfg-status is-' + status.kind;
+  }
+
+  function setStatus(kind, text) {
+    status = text ? { kind: kind, text: text } : null;
+    renderStatus();
+  }
+
+  // ── 收集改动：返回 { ops, apiKey, invalid } ─────────────────────────────
+  function collect() {
+    var result = { ops: [], apiKey: null, invalid: null };
+    if (!payload) return result;
+    var byNs = {};
+    function bucket(ns) {
+      if (!byNs[ns]) {
+        var section = sectionOf(ns);
+        byNs[ns] = { ns: ns, revision: section ? section.revision : null, sets: [], unsets: [] };
+        result.ops.push(byNs[ns]);
+      }
+      return byNs[ns];
+    }
+
+    var sections = Array.isArray(payload.sections) ? payload.sections : [];
+    for (var i = 0; i < sections.length; i++) {
+      var section = sections[i];
+      if (payload.key === 'web-search' && section.ns === 'web') continue;              // 开关单独处理
+      if (payload.key === 'subagent' && section.ns === 'subagent-model-selection-settings') continue; // 模型单独处理
+      for (var j = 0; j < section.fields.length; j++) {
+        var field = section.fields[j];
+        if (field.hidden) continue;
+        var keyText = dataKey(section.ns, field.key);
+        var target = bucket(section.ns);
+        if (resetFields[keyText]) {
+          var resetParsed = parseField(field, field.base == null ? '' : String(field.base));
+          if (resetParsed.kind === 'set') target.sets.push({ path: [field.key], value: resetParsed.value });
+          else target.unsets.push({ path: [field.key] });
+          continue;
+        }
+        var parsed = parseField(field, inputText(section.ns, field.key));
+        if (parsed.kind === 'invalid') { result.invalid = parsed.message; return result; }
+        if (parsed.kind === 'unset') {
+          if (field.overridden) target.unsets.push({ path: [field.key] });
+          continue;
+        }
+        if (parsed.kind === 'set' && !sameValue(parsed.value, field.value)) {
+          target.sets.push({ path: [field.key], value: parsed.value });
+        }
+      }
+    }
+
+    if (payload.key === 'subagent') {
+      var sel = stagedModels || {};
+      var allowedField = fieldOf('subagent-model-selection-settings', 'allowedModels');
+      var stored = allowedField && Array.isArray(allowedField.value) ? allowedField.value : [];
+      var baseline = {};
+      for (var s = 0; s < stored.length; s++) baseline[modelKey(stored[s])] = true;
+      var desired = [];
+      for (var modelId in sel) {
+        if (!sel[modelId]) continue;
+        var parts = modelId.split('|');
+        desired.push({ provider: parts[0], model: parts.slice(1).join('|') });
+      }
+      var enabledField = fieldOf('subagent-model-selection-settings', 'enabled');
+      var enabledNow = !!(stagedEnabled !== null ? stagedEnabled : (enabledField && enabledField.value === true));
+      if (enabledNow && desired.length === 0) { result.invalid = '保存前请至少选择一个模型。'; return result; }
+      var modelsDirty = Object.keys(sel).length !== Object.keys(baseline).length ||
+        Object.keys(sel).some(function (key) { return !baseline[key]; });
+      var enabledDirty = enabledField ? enabledNow !== (enabledField.value === true) : false;
+      if (modelsDirty || enabledDirty) {
+        var modelTarget = bucket('subagent-model-selection-settings');
+        if (enabledDirty) modelTarget.sets.push({ path: ['enabled'], value: enabledNow });
+        if (modelsDirty) {
+          if (desired.length === 0 && !enabledNow) modelTarget.unsets.push({ path: ['allowedModels'] });
+          else modelTarget.sets.push({ path: ['allowedModels'], value: desired });
+        }
+      }
+    }
+
+    if (payload.key === 'web-search' && payload.webSearch && payload.webSearch.switch) {
+      var info = payload.webSearch.switch;
+      var wantApi = stagedMode === 'api';
+      if (wantApi !== (payload.webSearch.mode === 'api')) {
+        var webTarget = bucket(info.ns);
+        var target = wantApi ? info.on : info.off;
+        var names = ['searchProvider', 'fetchProvider'];
+        for (var f = 0; f < names.length; f++) {
+          var name = names[f];
+          if (info.base && info.base[name] === target[name]) webTarget.unsets.push({ path: [name] });
+          else webTarget.sets.push({ path: [name], value: target[name] });
+        }
+      }
+    }
+
+    var kept = [];
+    for (var o = 0; o < result.ops.length; o++) {
+      if (result.ops[o].sets.length > 0 || result.ops[o].unsets.length > 0) kept.push(result.ops[o]);
+    }
+    result.ops = kept;
+
+    var keyInput = BODY_EL.querySelector('[data-dm-cfg-apikey]');
+    if (keyInput && keyInput.value !== '' && payload.webSearch && payload.webSearch.apiKey && payload.webSearch.apiKey.available) {
+      result.apiKey = { ref: payload.webSearch.apiKey.ref, value: keyInput.value };
+    }
+    return result;
+  }
+
+  function refreshDirty() {
+    if (!payload) return;
+    var button = BODY_EL.querySelector('[data-dm-cfg-save]');
+    if (!button) return;
+    var collected = collect();
+    var dirty = collected.ops.length > 0 || collected.apiKey !== null;
+    button.disabled = saving || collected.invalid !== null || !dirty;
+    button.textContent = saving ? SAVE_BUSY : SAVE_IDLE;
+
+    var sections = Array.isArray(payload.sections) ? payload.sections : [];
+    for (var i = 0; i < sections.length; i++) {
+      var section = sections[i];
+      for (var j = 0; j < section.fields.length; j++) {
+        var field = section.fields[j];
+        if (field.hidden) continue;
+        var keyText = dataKey(section.ns, field.key);
+        var wraps = BODY_EL.querySelectorAll('[data-dm-cfg-field]');
+        var wrap = null;
+        for (var w = 0; w < wraps.length; w++) {
+          if (wraps[w].getAttribute('data-dm-cfg-field') === keyText) { wrap = wraps[w]; break; }
+        }
+        if (!wrap) continue;
+        var box = wrap.querySelector('.dm-cfg-invalid');
+        if (!box) continue;
+        var parsed = resetFields[keyText] ? { kind: 'ok' } : parseField(field, inputText(section.ns, field.key));
+        if (parsed.kind === 'invalid') { box.textContent = parsed.message; box.hidden = false; wrap.classList.add('is-invalid'); }
+        else { box.textContent = ''; box.hidden = true; wrap.classList.remove('is-invalid'); }
+      }
+    }
+    var modelBox = BODY_EL.querySelector('[data-dm-cfg-modelinvalid]');
+    if (modelBox) {
+      if (collected.invalid === '保存前请至少选择一个模型。') { modelBox.textContent = collected.invalid; modelBox.hidden = false; }
+      else { modelBox.textContent = ''; modelBox.hidden = true; }
+    }
+  }
+
+  // ── 打开 / 加载 / 关闭 / 保存 ───────────────────────────────────────────
+  function resetStaging() {
+    stagedMode = null;
+    stagedFields = {};
+    stagedModels = null;
+    stagedEnabled = null;
+    resetFields = {};
+    status = null;
+  }
+
+  function applyPayload(next) {
+    payload = next;
+    stagedFields = {};
+    resetFields = {};
+    if (payload && payload.key === 'web-search' && payload.webSearch) {
+      stagedMode = payload.webSearch.mode === 'api' ? 'api' : 'messages';
+    } else {
+      stagedMode = null;
+    }
+    if (payload && payload.key === 'subagent') {
+      var allowed = fieldOf('subagent-model-selection-settings', 'allowedModels');
+      var stored = allowed && Array.isArray(allowed.value) ? allowed.value : [];
+      stagedModels = {};
+      for (var i = 0; i < stored.length; i++) stagedModels[modelKey(stored[i])] = true;
+      var enabled = fieldOf('subagent-model-selection-settings', 'enabled');
+      stagedEnabled = enabled ? enabled.value === true : false;
+    } else {
+      stagedModels = null;
+      stagedEnabled = null;
+    }
+    if (TITLE_EL) TITLE_EL.textContent = payload && payload.title ? payload.title : '内置插件配置';
+  }
+
+  function open(key) {
+    if (!key) return;
+    if (openKey === key) { load(key); return; }
+    openKey = key;
+    payload = null;
+    resetStaging();
+    PAGE_EL.hidden = false;
+    try { history.pushState({ dmBuiltinConfig: key }, '', '#/dm-config/' + key); } catch (e) {}
+    if (TITLE_EL) TITLE_EL.textContent = '加载中…';
+    renderState('加载中…', 'dm-page-loading');
+    load(key);
+  }
+
+  function close(fromPop) {
+    if (openKey === null) return;
+    openKey = null;
+    payload = null;
+    resetStaging();
+    PAGE_EL.hidden = true;
+    if (!fromPop) { try { history.back(); } catch (e) {} }
+  }
+
+  function load(key) {
+    var nonce = ++loadNonce;
+    rpc('mobile.builtinConfig.get', { page: key }).then(function (result) {
+      if (nonce !== loadNonce || openKey !== key) return;
+      if (!result || result.ok !== true) {
+        renderState('读取失败：' + ((result && result.error && result.error.message) || '宿主没有返回有效数据'), 'dm-page-error');
+        return;
+      }
+      applyPayload(result.value);
+      render();
+    }).catch(function (error) {
+      if (nonce !== loadNonce || openKey !== key) return;
+      renderState('读取失败：' + ((error && error.message) || String(error)), 'dm-page-error');
+    });
+  }
+
+  function save() {
+    if (saving || !payload) return;
+    var collected = collect();
+    if (collected.invalid) { setStatus('err', collected.invalid); return; }
+    if (collected.ops.length === 0 && collected.apiKey === null) return;
+    saving = true;
+    setStatus('info', '保存中…（写入会走宿主 Loader 应用，插件可能短暂重载）');
+    refreshDirty();
+    var body = { page: payload.key, sections: collected.ops };
+    if (collected.apiKey) body.apiKey = collected.apiKey;
+    rpc('mobile.builtinConfig.save', body).then(function (result) {
+      saving = false;
+      if (!result || result.ok !== true) {
+        var error = (result && result.error) || { code: 'unknown', message: '宿主没有返回保存结果' };
+        // 失败回滚：宿主把最新状态放在 value.page，按它整页重绘；草稿丢弃。
+        if (result && result.value && result.value.page) {
+          applyPayload(result.value.page);
+          render();
+        } else {
+          refreshDirty();
+        }
+        if (error.code === 'settings_conflict') {
+          setStatus('err', '设置已在其他位置更新，本次没有覆盖，表单已按宿主最新值回滚：' + error.message);
+        } else {
+          setStatus('err', '保存失败（表单已按宿主最新值回滚）：' + error.message);
+        }
+        return;
+      }
+      applyPayload(result.value.page);
+      render();
+      if (Array.isArray(result.value.mismatches) && result.value.mismatches.length > 0) {
+        var names = result.value.mismatches.map(function (item) { return (item.path && item.path.join('.')) || item.ns; });
+        setStatus('err', '已提交，但宿主回读不一致（' + names.join('、') + '）：可能被上层配置覆盖。');
+        return;
+      }
+      setStatus('ok', '已保存并应用到宿主（回读已确认）。');
+    }).catch(function (error) {
+      saving = false;
+      refreshDirty();
+      setStatus('err', '保存失败：' + ((error && error.message) || String(error)) + '。若是插件重载导致连接中断，请刷新后重试。');
+    });
+  }
+
+  // ── 事件（全部委托，重绘后无需重绑）──────────────────────────────────
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    var opener = target.closest('[data-dm-cfg-open]');
+    if (opener) { event.preventDefault(); open(opener.getAttribute('data-dm-cfg-open')); return; }
+    if (target.closest('[data-dm-cfg-back]')) { event.preventDefault(); close(false); return; }
+    if (target.closest('[data-dm-cfg-refresh]')) {
+      event.preventDefault();
+      if (openKey) { renderState('刷新中…', 'dm-page-loading'); load(openKey); }
+      return;
+    }
+    var reset = target.closest('[data-dm-cfg-reset]');
+    if (reset) {
+      event.preventDefault();
+      overlayFields();
+      var resetKey = reset.getAttribute('data-dm-cfg-reset');
+      if (resetFields[resetKey]) delete resetFields[resetKey];
+      else resetFields[resetKey] = true;
+      render();
+      return;
+    }
+    if (target.closest('[data-dm-cfg-save]')) { event.preventDefault(); save(); return; }
+    if (target.closest('[data-dm-cfg-retry]')) { event.preventDefault(); if (openKey) load(openKey); }
+  });
+
+  document.addEventListener('input', function (event) {
+    var target = event.target;
+    if (!target || !target.getAttribute) return;
+    if (target.getAttribute('data-dm-cfg-input') !== null) {
+      var keyText = target.getAttribute('data-dm-cfg-input');
+      stagedFields[keyText] = target.value;
+      if (resetFields[keyText]) delete resetFields[keyText];
+      refreshDirty();
+      return;
+    }
+    if (target.getAttribute('data-dm-cfg-apikey') !== null) refreshDirty();
+  });
+
+  document.addEventListener('change', function (event) {
+    var target = event.target;
+    if (!target || !target.getAttribute) return;
+    if (target.getAttribute('data-dm-cfg-switch') !== null) {
+      overlayFields();
+      stagedMode = target.checked ? 'api' : 'messages';
+      render();
+      return;
+    }
+    if (target.getAttribute('data-dm-cfg-models-on') !== null) {
+      overlayFields();
+      stagedEnabled = target.checked;
+      render();
+      return;
+    }
+    if (target.getAttribute('data-dm-cfg-model') !== null) {
+      var keyText = target.getAttribute('data-dm-cfg-model');
+      if (!stagedModels) stagedModels = {};
+      if (target.checked) stagedModels[keyText] = true;
+      else delete stagedModels[keyText];
+      render();
+    }
+  });
+
+  window.addEventListener('popstate', function (event) {
+    var stateValue = event && event.state;
+    if (openKey !== null && (!stateValue || stateValue.dmBuiltinConfig !== openKey)) close(true);
+  });
+
+  // 插件页的行也可以直接调这个入口（两条路都通）
+  window.__dmOpenBuiltinConfig = open;
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -6259,6 +6941,7 @@ function mobilePageHtml() {
     ICON_OPTICAL_ALIGN_HTML,
     USAGE_INLINE_HTML,
     HOST_PAGES_HTML,
+    BUILTIN_CONFIG_HTML,
     COMMAND_PANEL_HTML,
     DEVICE_INFO_HTML,
     NOTIFY_LAYOUT_HTML,
@@ -7615,6 +8298,598 @@ export function apply(ctx, config) {
     }
   }
 
+  // ══ 内置插件配置（子智能体 / 网页搜索 / 终端）══════════════════════════════
+  // 桌面「插件 → 内置插件配置」那三页（asar: @deepseek-ai/dsh-client-ui-settings-
+  // subagent / -web-search / -shell 的 client.js）在宿主侧只用三个服务：
+  //
+  //   · @deepseek-ai/dsh-settings —— describe({redactSecrets:true}) 读；
+  //     mutate(ns, ops, expectedRevision) 写。它内部调用 configEditor.edit()，
+  //     所以写入与桌面完全同路：校验 volatile 字段 → 改 profile 的 cordis.patch.yml
+  //     → 走正常 Loader reconcile 应用（asar: dsh-settings/lib/index.js:413/488/501、
+  //     dsh-config-editor/lib/index.js:edit）。secret（API Key）由 describe 剔除。
+  //   · @deepseek-ai/dsh-credentials —— API Key 只走 describe/set，回显只有
+  //     {configured, writable}，明文永不进入 RPC 响应。
+  //   · @deepseek-ai/dsh-llm —— 子智能体「可配置模型」候选（桌面 remote.session.
+  //     modelCatalog 是同一 llm 注册表的投影，这里直接读注册表，少一层）。
+  //
+  // 每个 section 的 ns 就是 profile patch 的 entry id（= settings.describe().ns =
+  // configEditor.configuration()[].entry.options.id）。字段白名单同时是写入校验：
+  // 只接受这里声明过的 key，拒绝任意 config 注入。
+  const BUILTIN_CONFIG_PAGES = [
+    {
+      key: 'subagent',
+      title: '子智能体',
+      description: '设置子智能体的递归层级、数量和模型。',
+      requires: ['subagent'],
+      sections: [
+        {
+          ns: 'subagent',
+          title: '运行限制',
+          fields: [
+            {
+              key: 'maxDepth',
+              kind: 'int',
+              min: 0,
+              label: '最大递归深度',
+              hint: '限制 Agent 创建子智能体的递归层级：0 = 禁用子智能体，1 = 仅允许主 Agent 创建子智能体。',
+              invalid: '请输入不小于 0 的整数。',
+            },
+            {
+              key: 'maxActiveSubagents',
+              kind: 'int',
+              min: 1,
+              label: '子智能体并行数量上限',
+              hint: '同一主 Agent 下，所有递归层级同时存活的子智能体总数，主 Agent 不计入。达到上限时，新的启动请求会被拒绝。',
+              invalid: '请输入不小于 1 的整数。',
+            },
+          ],
+        },
+        {
+          ns: 'subagent-model-selection-settings',
+          title: '模型选择',
+          fields: [
+            {
+              key: 'enabled',
+              kind: 'bool',
+              label: '允许 Agent 为子智能体选择模型',
+              hint: '开启后，Agent 可以从授权模型中，为每个子智能体选择提供方、模型和推理强度。仅影响新会话。',
+            },
+            {
+              key: 'allowedModels',
+              kind: 'models',
+              label: 'Agent 可选择的模型',
+              hint: '至少选择一个模型。已保存但当前不可用的模型仍会保留，也可以移除。',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      key: 'web-search',
+      title: '网页搜索',
+      description: '设置 DeepSeek 的搜索提供方。',
+      requires: ['web-search-deepseek'],
+      sections: [
+        // 顺序即写入顺序：与桌面 save() 一致 —— 先写两个 provider section，
+        // 最后写 web 的 provider 选择，这样开关落地时它引用的端点已经生效。
+        {
+          ns: 'web-search-deepseek',
+          kind: 'messages',
+          title: null,
+          fields: [
+            {
+              key: 'baseURL',
+              kind: 'text',
+              role: 'endpoint',
+              label: 'Messages API 基础地址',
+              hint: '填写含 API 前缀的地址，例如 https://api.deepseek.com/anthropic/v1；程序追加 /messages，留空恢复默认。',
+            },
+            {
+              key: 'maxUses',
+              kind: 'int',
+              min: 1,
+              role: 'limit',
+              label: '单次请求最多搜索次数',
+              hint: '辅助模型在一次 Messages 请求内最多可执行的搜索次数，仅适用于 Messages API。',
+              invalid: '请输入不小于 1 的整数。',
+            },
+          ],
+        },
+        {
+          ns: 'web-deepseek-api',
+          kind: 'api',
+          title: null,
+          fields: [
+            {
+              key: 'baseURL',
+              kind: 'text',
+              role: 'endpoint',
+              label: 'Search / Fetch API 基础地址',
+              hint: '填写含 API 前缀的地址，例如 https://api.deepseek.com/v1/tools；程序追加 /search 或 /fetch，留空恢复默认。',
+            },
+            {
+              key: 'count',
+              kind: 'int',
+              min: 1,
+              max: 50,
+              role: 'limit',
+              label: '每次搜索结果数',
+              hint: '每个查询返回的结果条数，须为 1–50 的整数，默认 10；不控制搜索调用次数。',
+              invalid: '请填 1–50 的整数；留空表示使用默认值。',
+            },
+          ],
+        },
+        {
+          ns: 'web',
+          title: null,
+          switch: {
+            label: '启用新版 Web 搜索 API',
+            hint: '默认关闭，搜索通过 DeepSeek Messages 完成。新版 Web 搜索 API 功能与计费详见',
+            link: 'https://api-docs.deepseek.com/zh-cn/guides/search',
+            linkLabel: '网页搜索与抓取指南',
+            on: { searchProvider: 'deepseek-search-api', fetchProvider: 'deepseek-fetch-api' },
+            off: { searchProvider: 'deepseek-official', fetchProvider: 'http' },
+          },
+          fields: [
+            { key: 'searchProvider', kind: 'provider', hidden: true },
+            { key: 'fetchProvider', kind: 'provider', hidden: true },
+          ],
+        },
+      ],
+    },
+    {
+      key: 'shell',
+      title: '终端',
+      description: '限制每条命令最多能跑多久、最多输出多少内容。',
+      requiresOneOf: ['pwsh-sandbox', 'bash-sandbox'],
+      sections: [
+        {
+          ns: null,
+          nsCandidates: ['pwsh-sandbox', 'bash-sandbox'],
+          title: null,
+          fields: [
+            {
+              key: 'timeoutMs',
+              kind: 'int',
+              min: 1,
+              label: '命令超时（毫秒）',
+              hint: '单条命令允许运行多久，超时即终止。',
+              invalid: '请输入不小于 1 的整数。',
+            },
+            {
+              key: 'maxOutputBytes',
+              kind: 'int',
+              min: 1,
+              label: '单流输出上限（字节）',
+              hint: '超出部分会转存到临时文件，而不是被丢弃。',
+              invalid: '请输入不小于 1 的整数。',
+            },
+          ],
+        },
+      ],
+    },
+  ]
+
+  const BUILTIN_DEFAULT_API_KEY_REF = 'DEEPSEEK_API_KEY'
+
+  /** 读宿主 settings 的 describe()（强制脱敏），按 ns 建索引；服务缺失或读取失败时返回 null。 */
+  function builtinSettingsRows() {
+    const settings = hostService('settings')
+    if (!settings || typeof settings.describe !== 'function') return null
+    let list
+    try {
+      // redactSecrets 必传：secret 字段（API Key）留在宿主进程里，绝不下发到手机。
+      list = settings.describe({ redactSecrets: true })
+    } catch {
+      // Loader 正在 reconcile 时 configuration() 可能短暂不可读，交给调用方给明确错误。
+      return null
+    }
+    const rows = new Map()
+    if (Array.isArray(list)) {
+      for (const row of list) {
+        if (row && typeof row.ns === 'string' && row.ns !== '') rows.set(row.ns, row)
+      }
+    }
+    return rows
+  }
+
+  /** 页面定义按 key 查；未知 key 返回 null。 */
+  function builtinPageFor(key) {
+    return BUILTIN_CONFIG_PAGES.find((page) => page.key === key) || null
+  }
+
+  /** 该配置页此刻是否真的可配置（= 宿主 serve 了它需要的 settings ns）。 */
+  function builtinConfigPageAvailable(key) {
+    const page = builtinPageFor(key)
+    if (!page) return false
+    const rows = builtinSettingsRows()
+    if (!rows) return false
+    return builtinPageAvailable(page, rows)
+  }
+
+  /** 终端的 ns 是运行时探测的：Windows 上是 pwsh-sandbox，POSIX 上是 bash-sandbox。 */
+  function builtinResolveNs(section, rows) {
+    if (typeof section.ns === 'string' && section.ns !== '') return section.ns
+    const candidates = Array.isArray(section.nsCandidates) ? section.nsCandidates : []
+    for (const ns of candidates) if (rows.has(ns)) return ns
+    return null
+  }
+
+  function builtinPageAvailable(page, rows) {
+    const required = Array.isArray(page.requires) ? page.requires : []
+    for (const ns of required) if (!rows.has(ns)) return false
+    const anyOf = Array.isArray(page.requiresOneOf) ? page.requiresOneOf : []
+    if (anyOf.length > 0) {
+      let found = false
+      for (const ns of anyOf) if (rows.has(ns)) found = true
+      if (!found) return false
+    }
+    return true
+  }
+
+  function builtinOwn(value, key) {
+    return value !== null && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key)
+  }
+
+  /** 一个 section → 手机端表单模型（值来自宿主 describe().value/base/user）。 */
+  function builtinSectionPayload(section, rows) {
+    const ns = builtinResolveNs(section, rows)
+    const row = ns === null ? undefined : rows.get(ns)
+    const value = row && row.value !== null && typeof row.value === 'object' ? row.value : {}
+    const base = row && row.base !== null && typeof row.base === 'object' ? row.base : {}
+    const user = row && row.user !== null && typeof row.user === 'object' ? row.user : {}
+    const fields = section.fields.map((def) => {
+      const field = {
+        key: def.key,
+        kind: def.kind,
+        label: typeof def.label === 'string' ? def.label : def.key,
+        hidden: def.hidden === true,
+        // overridden 决定「已覆盖 / 恢复默认」是否出现：user 是 profile patch 里
+        // 显式写过的字段投影（projectForm 会丢掉没写的 key）。
+        overridden: builtinOwn(user, def.key),
+        value: builtinOwn(value, def.key) ? value[def.key] : null,
+        base: builtinOwn(base, def.key) ? base[def.key] : null,
+      }
+      if (typeof def.role === 'string') field.role = def.role
+      if (typeof def.hint === 'string') field.hint = def.hint
+      if (typeof def.invalid === 'string') field.invalid = def.invalid
+      if (Number.isFinite(def.min)) field.min = def.min
+      if (Number.isFinite(def.max)) field.max = def.max
+      return field
+    })
+    return {
+      ns,
+      title: typeof section.title === 'string' ? section.title : null,
+      kind: typeof section.kind === 'string' ? section.kind : null,
+      available: row !== undefined,
+      revision: row && Number.isSafeInteger(row.revision) ? row.revision : null,
+      fields,
+    }
+  }
+
+  /** 网页搜索的开关：写 `web` 的 searchProvider/fetchProvider（桌面同一语义）。 */
+  function builtinSwitchPayload(page, rows, mode) {
+    const section = page.sections.find((item) => item.switch !== undefined)
+    if (!section) return null
+    const spec = section.switch
+    const row = rows.get(section.ns)
+    const value = row && row.value !== null && typeof row.value === 'object' ? row.value : {}
+    const base = row && row.base !== null && typeof row.base === 'object' ? row.base : {}
+    const user = row && row.user !== null && typeof row.user === 'object' ? row.user : {}
+    return {
+      ns: section.ns,
+      revision: row && Number.isSafeInteger(row.revision) ? row.revision : null,
+      label: spec.label,
+      hint: spec.hint,
+      link: spec.link,
+      linkLabel: spec.linkLabel,
+      value: mode === 'api',
+      overridden: builtinOwn(user, 'searchProvider') || builtinOwn(user, 'fetchProvider'),
+      base: { searchProvider: builtinOwn(base, 'searchProvider') ? base.searchProvider : null, fetchProvider: builtinOwn(base, 'fetchProvider') ? base.fetchProvider : null },
+      on: spec.on,
+      off: spec.off,
+    }
+  }
+
+  /** 所选接口段声明的凭据引用（apiKeyEnv），缺省回落到 DEEPSEEK_API_KEY。 */
+  function builtinApiKeyRef(page, rows, mode) {
+    const section = page.sections.find((item) => item.kind === mode)
+    const row = section ? rows.get(builtinResolveNs(section, rows)) : undefined
+    const value = row && row.value !== null && typeof row.value === 'object' ? row.value : {}
+    const declared = value.apiKeyEnv
+    return typeof declared === 'string' && declared !== '' ? declared : BUILTIN_DEFAULT_API_KEY_REF
+  }
+
+  /** 只回答「配置了没有 / 能不能写」，绝不带明文。 */
+  async function builtinApiKeyInfo(ref) {
+    const credentials = hostService('credentials')
+    if (!credentials || typeof credentials.describe !== 'function') {
+      return { ref, available: false, configured: false, writable: false }
+    }
+    try {
+      const info = await credentials.describe(ref)
+      return {
+        ref,
+        available: true,
+        configured: info !== undefined && info !== null && info.configured === true,
+        writable: info === undefined || info === null || info.writable !== false,
+      }
+    } catch (err) {
+      return {
+        ref,
+        available: false,
+        configured: false,
+        writable: false,
+        message: err && err.message ? String(err.message) : String(err),
+      }
+    }
+  }
+
+  /** 子智能体「可配置模型」候选：直接读宿主 llm 注册表（与桌面 modelCatalog 同源）。 */
+  async function builtinModelCatalog() {
+    const llm = hostService('llm')
+    if (!llm || typeof llm.listProviders !== 'function' || typeof llm.listModels !== 'function') {
+      return { available: false, groups: [], failures: [] }
+    }
+    let providers
+    try {
+      providers = llm.listProviders()
+    } catch (err) {
+      return { available: false, groups: [], failures: [], message: err && err.message ? String(err.message) : String(err) }
+    }
+    const groups = []
+    const failures = []
+    for (const provider of Array.isArray(providers) ? providers : []) {
+      if (!provider || typeof provider.id !== 'string' || provider.id === '') continue
+      const name = typeof provider.name === 'string' && provider.name !== '' ? provider.name : provider.id
+      try {
+        const models = await llm.listModels(provider.id)
+        const items = (Array.isArray(models) ? models : [])
+          .filter((model) => model && typeof model.id === 'string' && model.id !== '')
+          .map((model) => ({ id: model.id, name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id }))
+        if (items.length > 0) groups.push({ id: provider.id, name, models: items })
+      } catch (err) {
+        failures.push({ id: provider.id, name, message: err && err.message ? String(err.message) : String(err) })
+      }
+    }
+    return { available: true, groups, failures }
+  }
+
+  /** 整页快照：三页共用同一构建入口，页面渲染所需数据一次给全。 */
+  async function builtinConfigPayload(page) {
+    const rows = builtinSettingsRows()
+    if (!rows) {
+      return {
+        key: page.key,
+        title: page.title,
+        description: page.description,
+        available: false,
+        reason: '宿主的 settings 服务不可用（profile 未加载 settings 插件）',
+        sections: [],
+      }
+    }
+    const available = builtinPageAvailable(page, rows)
+    const sections = page.sections.map((section) => builtinSectionPayload(section, rows))
+    const payload = {
+      key: page.key,
+      title: page.title,
+      description: page.description,
+      available,
+      sections,
+    }
+    if (page.key === 'web-search') {
+      const web = rows.get('web')
+      const webValue = web && web.value !== null && typeof web.value === 'object' ? web.value : {}
+      const mode = webValue.searchProvider === 'deepseek-search-api' ? 'api' : 'messages'
+      const active = sections.find((section) => section.kind === mode)
+      const ref = builtinApiKeyRef(page, rows, mode)
+      payload.webSearch = {
+        mode,
+        activeNs: active ? active.ns : null,
+        switch: builtinSwitchPayload(page, rows, mode),
+        apiKey: await builtinApiKeyInfo(ref),
+      }
+    }
+    if (page.key === 'subagent') payload.models = await builtinModelCatalog()
+    return payload
+  }
+
+  /** 写入值校验：与客户端的即时校验同规则，宿主在这里是最终裁决。 */
+  function builtinCoerceField(def, value) {
+    if (def.kind === 'int') {
+      if (typeof value !== 'number' || !Number.isSafeInteger(value)) return { ok: false, message: `${def.label} 需要整数` }
+      if (Number.isFinite(def.min) && value < def.min) return { ok: false, message: `${def.label} 不能小于 ${def.min}` }
+      if (Number.isFinite(def.max) && value > def.max) return { ok: false, message: `${def.label} 不能大于 ${def.max}` }
+      return { ok: true, value }
+    }
+    if (def.kind === 'bool') {
+      return typeof value === 'boolean' ? { ok: true, value } : { ok: false, message: `${def.label} 需要布尔值` }
+    }
+    if (def.kind === 'text' || def.kind === 'provider') {
+      return typeof value === 'string' ? { ok: true, value } : { ok: false, message: `${def.label} 需要文本` }
+    }
+    if (def.kind === 'models') {
+      if (!Array.isArray(value)) return { ok: false, message: '模型清单需要数组' }
+      const routes = []
+      for (const item of value) {
+        if (!item || typeof item.provider !== 'string' || item.provider === '' || typeof item.model !== 'string' || item.model === '') {
+          return { ok: false, message: '模型清单里的每一项都需要 provider 与 model' }
+        }
+        routes.push({ provider: item.provider, model: item.model })
+      }
+      return { ok: true, value: routes }
+    }
+    return { ok: false, message: `未知字段类型 ${String(def.kind)}` }
+  }
+
+  function builtinFieldDef(section, key) {
+    return section.fields.find((def) => def.key === key) || null
+  }
+
+  /** 保存后的回读校验：宿主状态里必须真能看到刚写进去的值。 */
+  function builtinMismatches(fresh, plans) {
+    const out = []
+    if (!fresh || !Array.isArray(fresh.sections)) return out
+    for (const plan of plans) {
+      const section = fresh.sections.find((item) => item.ns === plan.ns)
+      if (!section) {
+        out.push({ ns: plan.ns, path: [], message: '宿主不再提供该配置命名空间' })
+        continue
+      }
+      for (const op of plan.ops) {
+        if (op.op !== 'set') continue
+        const field = section.fields.find((item) => item.key === op.path[0])
+        if (!field) continue
+        if (JSON.stringify(field.value) !== JSON.stringify(op.value)) {
+          out.push({ ns: plan.ns, path: op.path, expected: op.value, actual: field.value })
+        }
+      }
+    }
+    return out
+  }
+
+  // ── RPC：mobile.builtinConfig.pages / get / save ──────────────────────────
+  // 说明：移动端页面（HOST_PAGES_HTML 同款注入）只认这三个方法；数据全部来自
+  // 上面的宿主服务，任何服务缺失都返回明确的 code/message，绝不兜造默认值。
+  const BUILTIN_CONFIG_CASES = {
+    'mobile.builtinConfig.pages': async () => {
+      const rows = builtinSettingsRows()
+      if (!rows) return serviceUnavailable('settings', '宿主的设置服务未启用（profile 未加载 settings 插件），无法读取内置插件配置')
+      const pages = BUILTIN_CONFIG_PAGES
+        .filter((page) => builtinPageAvailable(page, rows))
+        .map((page) => ({ key: page.key, title: page.title, description: page.description }))
+      return { ok: true, value: { pages } }
+    },
+
+    'mobile.builtinConfig.get': async (payload) => {
+      const key = payload && typeof payload.page === 'string' ? payload.page : ''
+      const page = BUILTIN_CONFIG_PAGES.find((item) => item.key === key)
+      if (!page) return { ok: false, error: { code: 'unknown-page', message: `未知的配置页：${key || '(空)'}` } }
+      const rows = builtinSettingsRows()
+      if (!rows) return serviceUnavailable('settings', '宿主的设置服务不可用，无法读取配置')
+      return { ok: true, value: await builtinConfigPayload(page) }
+    },
+
+    'mobile.builtinConfig.save': async (payload) => {
+      const key = payload && typeof payload.page === 'string' ? payload.page : ''
+      const page = BUILTIN_CONFIG_PAGES.find((item) => item.key === key)
+      if (!page) return { ok: false, error: { code: 'unknown-page', message: `未知的配置页：${key || '(空)'}` } }
+      const settings = hostService('settings')
+      if (!settings || typeof settings.mutate !== 'function') {
+        return serviceUnavailable('settings', '宿主的设置服务未启用（profile 未加载 settings 插件），无法保存')
+      }
+      const rows = builtinSettingsRows()
+      if (!rows) return serviceUnavailable('settings', '宿主的设置服务不可用，无法保存')
+
+      // 字段白名单 + 类型校验：只接受本页声明过的 ns/key，拒绝任意 config 注入。
+      const plans = []
+      const submitted = Array.isArray(payload.sections) ? payload.sections : []
+      for (const section of submitted) {
+        const ns = section && typeof section.ns === 'string' ? section.ns : ''
+        const def = page.sections.find((item) => builtinResolveNs(item, rows) === ns)
+        if (!def) return { ok: false, error: { code: 'bad-request', message: `本页不允许写入命名空间 ${ns || '(空)'}` } }
+        const ops = []
+        const sets = Array.isArray(section.sets) ? section.sets : []
+        for (const op of sets) {
+          const path = Array.isArray(op && op.path) ? op.path.map(String) : []
+          if (path.length !== 1) return { ok: false, error: { code: 'bad-request', message: '只接受一层的字段路径' } }
+          const fieldDef = builtinFieldDef(def, path[0])
+          if (!fieldDef) return { ok: false, error: { code: 'bad-request', message: `本页不允许写入字段 ${path.join('.')}` } }
+          const coerced = builtinCoerceField(fieldDef, op && op.value)
+          if (!coerced.ok) return { ok: false, error: { code: 'invalid-value', message: coerced.message } }
+          ops.push({ op: 'set', path, value: coerced.value })
+        }
+        const unsets = Array.isArray(section.unsets) ? section.unsets : []
+        for (const op of unsets) {
+          const path = Array.isArray(op && op.path) ? op.path.map(String) : []
+          if (path.length !== 1) return { ok: false, error: { code: 'bad-request', message: '只接受一层的字段路径' } }
+          if (!builtinFieldDef(def, path[0])) return { ok: false, error: { code: 'bad-request', message: `本页不允许重置字段 ${path.join('.')}` } }
+          ops.push({ op: 'unset', path })
+        }
+        if (ops.length === 0) continue
+        const revision = Number.isSafeInteger(section.revision) ? section.revision : undefined
+        plans.push({ ns, ops, revision, order: page.sections.findIndex((item) => builtinResolveNs(item, rows) === ns) })
+      }
+      plans.sort((left, right) => left.order - right.order)
+
+      const hasApiKey = payload.apiKey !== null && typeof payload.apiKey === 'object'
+        && typeof payload.apiKey.value === 'string' && payload.apiKey.value !== ''
+      if (plans.length === 0 && !hasApiKey) {
+        return { ok: false, error: { code: 'nothing-to-save', message: '没有需要保存的改动' } }
+      }
+
+      const applied = []
+      for (const plan of plans) {
+        try {
+          // 带 revision：宿主若发现别处已改过就抛 SETTINGS_CONFLICT，我们绝不静默覆盖。
+          await settings.mutate(plan.ns, plan.ops, plan.revision)
+          applied.push({ ns: plan.ns, ok: true })
+        } catch (err) {
+          const conflict = err !== undefined && err !== null && err.code === 'SETTINGS_CONFLICT'
+          const message = err && err.message ? String(err.message) : String(err)
+          return {
+            ok: false,
+            error: {
+              code: conflict ? 'settings_conflict' : 'settings_write_failed',
+              message: conflict
+                ? `设置已在其他位置更新（${plan.ns}），本次没有覆盖：${message}`
+                : `宿主拒绝了写入（${plan.ns}）：${message}`,
+              details: { ns: plan.ns, applied },
+            },
+            // 回滚依据：把宿主最新状态带回，客户端按它整页重绘。
+            value: { page: await builtinConfigPayload(page) },
+          }
+        }
+      }
+
+      // API Key：只写凭据库，不进 config；空输入一律视为「不修改」。
+      let apiKeyApplied = null
+      if (hasApiKey) {
+        if (page.key !== 'web-search') {
+          return { ok: false, error: { code: 'bad-request', message: '本页不接受 API Key 写入' } }
+        }
+        const web = rows.get('web')
+        const webValue = web && web.value !== null && typeof web.value === 'object' ? web.value : {}
+        const mode = webValue.searchProvider === 'deepseek-search-api' ? 'api' : 'messages'
+        const expectedRef = builtinApiKeyRef(page, rows, mode)
+        const requestedRef = typeof payload.apiKey.ref === 'string' && payload.apiKey.ref !== '' ? payload.apiKey.ref : expectedRef
+        if (requestedRef !== expectedRef) {
+          return { ok: false, error: { code: 'bad-request', message: 'API Key 只能写入本页声明的凭据引用' } }
+        }
+        const credentials = hostService('credentials')
+        if (!credentials || typeof credentials.set !== 'function') {
+          return serviceUnavailable('credentials', '宿主的凭据服务未启用，无法保存 API Key')
+        }
+        try {
+          await credentials.set(expectedRef, payload.apiKey.value)
+          apiKeyApplied = { ref: expectedRef }
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: 'credential_write_failed',
+              message: `宿主拒绝了 API Key 写入：${err && err.message ? String(err.message) : String(err)}`,
+              details: { applied },
+            },
+            value: { page: await builtinConfigPayload(page) },
+          }
+        }
+      }
+
+      // 回读：保存成功必须能在宿主状态里看到新值（Loader reconcile 之后）。
+      const fresh = await builtinConfigPayload(page)
+      return {
+        ok: true,
+        value: {
+          page: fresh,
+          applied,
+          apiKey: apiKeyApplied,
+          mismatches: builtinMismatches(fresh, plans),
+        },
+      }
+    },
+  }
+
   /**
    * 在 HMR 事务上下文之外执行回调。
    *
@@ -8209,13 +9484,23 @@ export function apply(ctx, config) {
           '@deepseek-ai/dsh-experimental-auto-review',
           '@deepseek-ai/dsh-experimental-inspector-profile',
         ]
-        // 「内置插件配置」四行的显示顺序（桌面插件页 basic 分组的视觉顺序）。
+        // 「内置插件配置」里各行的显示顺序（桌面插件页 basic 分组的视觉顺序）。
+        // Agent 循环按用户要求不做（配置页与列表都不出现），这里不再保留它的排序位。
         const BASIC_ORDER = [
           'ui-settings-subagent',
           'ui-settings-web-search',
-          'ui-settings-agent-loop',
           'ui-settings-shell',
         ]
+        // moduleName 后缀 → 手机端内置配置页的 page key。
+        // 这张表是「哪几行能打开真实配置页」的唯一出处：值必须与
+        // BUILTIN_CONFIG_PAGES 的 key 对齐，且宿主确实 serve 了对应 ns 才算可配置。
+        const BASIC_CONFIG_PAGE = {
+          'ui-settings-subagent': 'subagent',
+          'ui-settings-web-search': 'web-search',
+          'ui-settings-shell': 'shell',
+        }
+        // 用户明确要求：Agent 循环页不做，列表里也不要出现。
+        const BASIC_HIDDEN = ['ui-settings-agent-loop']
 
         // meta.title/description 有两种真实形态（asar: dsh-app-boot readPluginMeta）：
         //   · 字符串（包名兜底）；· 本地化对象 { zh, en }（包自带 locale 的 meta.title）。
@@ -8287,22 +9572,34 @@ export function apply(ctx, config) {
           .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name))
 
         // 内置插件配置：桌面 basic 分组来自 client 的 plugins.row.config 槽位；
-        // 宿主侧没有槽位视图，但这四行在 listPlugins 里的 description 明确写着
+        // 宿主侧没有槽位视图，但这几行在 listPlugins 里的 description 明确写着
         // "on the dsh web client's Plugins page"，用这个真实字段分流（不写死标题）。
+        // configPage 只在宿主真的 serve 了对应 settings ns 时才有值 —— 没有可写的
+        // 命名空间时这一行仍然只能看详情，绝不假装能配置。
         const basic = entries
           .filter((entry) => {
             const meta = entry && entry.meta
             const description = meta && meta.description
             return description && typeof description === 'object' && typeof description.en === 'string' && description.en.includes("web client's Plugins page")
           })
-          .map((entry) => ({
-            entryId: entry.entryId,
-            moduleName: entry.moduleName,
-            enabled: entry.enabled === true,
-            fiberPhase: typeof entry.fiberPhase === 'string' ? entry.fiberPhase : null,
-            readOnlyReason: typeof entry.readOnlyReason === 'string' ? entry.readOnlyReason : null,
-            meta: metaOf(entry.meta),
-          }))
+          .filter((entry) => {
+            const moduleName = typeof entry.moduleName === 'string' ? entry.moduleName : ''
+            return !BASIC_HIDDEN.some((name) => moduleName.endsWith('/' + name))
+          })
+          .map((entry) => {
+            const moduleName = typeof entry.moduleName === 'string' ? entry.moduleName : ''
+            const suffix = Object.keys(BASIC_CONFIG_PAGE).find((name) => moduleName.endsWith('/' + name))
+            const pageKey = suffix === undefined ? null : BASIC_CONFIG_PAGE[suffix]
+            return {
+              entryId: entry.entryId,
+              moduleName: entry.moduleName,
+              enabled: entry.enabled === true,
+              fiberPhase: typeof entry.fiberPhase === 'string' ? entry.fiberPhase : null,
+              readOnlyReason: typeof entry.readOnlyReason === 'string' ? entry.readOnlyReason : null,
+              meta: metaOf(entry.meta),
+              configPage: pageKey !== null && builtinConfigPageAvailable(pageKey) ? pageKey : null,
+            }
+          })
           .sort((a, b) => {
             const rankOf = (item) => {
               const index = BASIC_ORDER.findIndex((name) => item.moduleName.endsWith('/' + name))
@@ -8457,6 +9754,22 @@ export function apply(ctx, config) {
             source: 'schedule.catalog()',
           },
         }
+      }
+
+      // ── 内置插件配置：子智能体 / 网页搜索 / 终端 ───────────────────────────
+      // 三个方法共用同一套宿主语义（见 BUILTIN_CONFIG_PAGES 上方的注释）：
+      //   · pages —— 哪几页此刻真的可配置（宿主 serve 了对应 settings ns）；
+      //   · get   —— 一页的全部字段值 / 继承值 / override 状态（secret 已脱敏）；
+      //   · save  —— 字段白名单校验 → settings.mutate(ns, ops, revision) → 回读校验。
+      // 写入失败（含 revision 冲突）时把宿主最新状态一起带回，客户端据此整页回滚。
+      case 'mobile.builtinConfig.pages':
+      case 'mobile.builtinConfig.get':
+      case 'mobile.builtinConfig.save': {
+        const handle = BUILTIN_CONFIG_CASES[method]
+        if (typeof handle !== 'function') {
+          return { ok: false, error: { code: 'unknown-method', message: `未知的内置插件配置方法：${method}` } }
+        }
+        return handle(payload)
       }
 
       case 'mobile.permissions.get': {

@@ -2218,6 +2218,27 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
 .dm-page-iconbtn:active {
   background: var(--bg-elevated, #f1f1f4);
 }
+/* 右上角刷新：圆形箭头本身负责静态观感，请求在飞时整枚图标匀速转一圈，
+   让「点了有反应」这件事一眼可见（减少连点）。 */
+.dm-page-refresh-icon {
+  transform-origin: 50% 50%;
+}
+.dm-page-iconbtn.dm-spinning .dm-page-refresh-icon {
+  animation: dm-page-refresh-spin 0.9s linear infinite;
+}
+@keyframes dm-page-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dm-page-iconbtn.dm-spinning .dm-page-refresh-icon {
+    animation: none;
+  }
+}
 .dm-page-body {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -2398,3 +2419,355 @@ html.dm-host-page-open body {
 .dm-danger-btn { border: 1px solid rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.08); color: #d92d20; border-radius: 10px; padding: 8px 14px; font-size: 14px; }
 .dm-danger-btn:disabled, .dm-danger-btn[aria-disabled="true"] { opacity: 0.6; }
 .dm-detail-actions-note { font-size: 11px; color: var(--text-quaternary, #9a9aaa); }
+
+/* ── 统一思考过程/工具行图标尺寸并放大一号 ────────────────────────────────
+   这些行的字号不一致（步骤行 11px、当前步骤行 13px、唤醒卡 13px），
+   而 .dm-icon 是 1em —— 于是同一套图标在不同行里大小不同。
+   这里把这些图标容器的 font-size 固定成 15px（原来是 11~13px，偏小），
+   让 1em 恒等于 15px：既统一大小，又整体放大。
+   容器保持方形 + 居中，避免放大后基线偏移。 */
+.chat-step-icon,
+.chat-think-icon,
+.chat-disclosure-icon,
+.chat-trigger-icon {
+  font-size: 15px !important;
+  line-height: 1 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: none;
+}
+/* 图标本体：统一 1em(=15px)，并禁掉可能存在的更小覆盖 */
+.chat-step-icon > svg,
+.chat-step-icon > .dm-icon,
+.chat-think-icon > svg,
+.chat-think-icon > .dm-icon,
+.chat-disclosure-icon > svg,
+.chat-disclosure-icon > .dm-icon,
+.chat-trigger-icon > svg,
+.chat-trigger-icon > .dm-icon {
+  width: 1em !important;
+  height: 1em !important;
+  vertical-align: middle !important;
+}
+
+/* 上面按 font-size 统一后，仍有两处写死了盒子尺寸（.chat-think-icon 14px、
+   .chat-trigger-icon 1.15em），会把 15px 的图标再框小/框大。
+   这里把四个图标容器统一成 16×16 的方形盒，图标本体 1em(15px) 居中。 */
+.chat-step-icon,
+.chat-think-icon,
+.chat-disclosure-icon,
+.chat-trigger-icon {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* ── 内置插件配置页（插件 → 子智能体 / 网页搜索 / 终端）────────────────────
+   ────────────────────────────────────────────────────────────────────────
+   表单样式只用本插件已有的设计 token（与 .dm-page 同一套 --bg-page /
+   --text-primary / --border-subtle），不引入新配色；开关、字段、错误提示、
+   底部保存栏都按 320/360/390 三档窄屏验证过（label 可换行、输入框 100%、
+   保存栏 fixed 在安全区之上）。 */
+.dm-page-cfg {
+  z-index: 78;
+}
+.dm-cfg-desc {
+  margin: 0 2px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-cfg-section {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-radius: 12px;
+  background: var(--bg-surface, #ffffff);
+}
+.dm-cfg-sectionTitle {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-cfg-field {
+  padding: 10px 0;
+}
+.dm-cfg-field + .dm-cfg-field,
+.dm-cfg-field + .dm-cfg-switchRow {
+  border-top: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-cfg-labelRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dm-cfg-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary, #1a1a2e);
+}
+.dm-cfg-badge {
+  flex: none;
+  padding: 4px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  color: #9a5b00;
+  background: rgba(245, 158, 11, 0.16);
+}
+.dm-cfg-badge.is-on {
+  color: #1a7f37;
+  background: rgba(34, 197, 94, 0.12);
+}
+.dm-cfg-badge.is-off {
+  color: var(--text-tertiary, #6a6a7a);
+  background: var(--bg-elevated, #f1f1f4);
+}
+.dm-cfg-reset {
+  flex: none;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--brand-primary, #3b6cf6);
+  font-size: 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-cfg-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, #e6e6ea);
+  border-radius: 10px;
+  background: var(--bg-elevated, #f7f7fa);
+  color: var(--text-primary, #1a1a2e);
+  font-size: 15px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.dm-cfg-input:focus {
+  outline: none;
+  border-color: var(--brand-primary, #3b6cf6);
+  background: var(--bg-surface, #ffffff);
+}
+.dm-cfg-input:disabled {
+  opacity: 0.55;
+}
+.dm-cfg-field.is-invalid .dm-cfg-input {
+  border-color: #d1242f;
+}
+.dm-cfg-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary, #6a6a7a);
+  word-break: break-word;
+}
+.dm-cfg-hint.dm-cfg-warn,
+.dm-cfg-hint.dm-cfg-resetHint {
+  color: #9a5b00;
+}
+.dm-cfg-link {
+  color: var(--brand-primary, #3b6cf6);
+  text-decoration: none;
+}
+.dm-cfg-invalid {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d1242f;
+}
+.dm-cfg-switchRow .dm-cfg-labelRow {
+  align-items: flex-start;
+}
+.dm-cfg-toggle {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+}
+.dm-cfg-toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  z-index: 1;
+}
+.dm-cfg-track {
+  position: relative;
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--bg-elevated, #e6e6ea);
+  transition: background 0.18s ease;
+}
+.dm-cfg-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+  transition: transform 0.18s ease;
+}
+.dm-cfg-toggle input:checked + .dm-cfg-track {
+  background: var(--brand-primary, #3b6cf6);
+}
+.dm-cfg-toggle input:checked + .dm-cfg-track::after {
+  transform: translateX(18px);
+}
+.dm-cfg-toggle input:focus-visible + .dm-cfg-track {
+  outline: 2px solid var(--brand-primary, #3b6cf6);
+  outline-offset: 2px;
+}
+.dm-cfg-models {
+  margin-top: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-radius: 10px;
+  background: var(--bg-page, #f5f5f7);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.dm-cfg-modelGroup + .dm-cfg-modelGroup {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-cfg-provider {
+  margin: 0 0 4px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-cfg-model {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 6px 4px;
+  border-radius: 8px;
+}
+.dm-cfg-model:active {
+  background: var(--bg-elevated, #f1f1f4);
+}
+.dm-cfg-model input {
+  margin: 3px 0 0;
+  flex: none;
+}
+.dm-cfg-modelText {
+  display: block;
+  min-width: 0;
+}
+.dm-cfg-modelName {
+  display: block;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary, #1a1a2e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-cfg-modelRoute {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-tertiary, #6a6a7a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-cfg-footnote {
+  margin: 4px 2px 96px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-cfg-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 79;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-page, #f5f5f7);
+  border-top: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-cfg-save {
+  width: 100%;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--brand-primary, #3b6cf6);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-cfg-save:disabled {
+  background: var(--bg-elevated, #e6e6ea);
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-cfg-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-tertiary, #6a6a7a);
+  word-break: break-word;
+}
+.dm-cfg-status.is-ok {
+  color: #1a7f37;
+}
+.dm-cfg-status.is-err {
+  color: #d1242f;
+}
+.dm-cfg-status.is-info {
+  color: var(--text-secondary, #4a4a5a);
+}
+/* 插件页「内置插件配置」分组里可配置的行：与 dm-card 同构，仅补一个可配置标记。 */
+.dm-badge-config {
+  margin-left: 6px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  color: #1a7f37;
+  background: rgba(34, 197, 94, 0.12);
+}
+/* 插件详情页里「打开配置」按钮（只对该 entry 真有配置页时出现）。 */
+.dm-detail-primary {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 4px 0 12px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--brand-primary, #3b6cf6);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-detail-primary:active {
+  opacity: 0.86;
+}
