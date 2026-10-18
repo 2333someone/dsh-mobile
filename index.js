@@ -3355,11 +3355,17 @@ const SEND_MODE_SETTINGS_HTML = `<script>
   ];
 
   function settingsPage() {
-    // 设置页标志：有搜索框 .settings-search 且标题是「设置」。
+    // 设置页标志。原来只认「搜索框 .settings-search 已渲染」，而它比设置分组晚约
+    // 250ms 才出现 —— 于是「发送模式」这一行总是比其它行动态晚一拍冒出来。
+    // 现在两种判据任一成立即可：搜索框、或已渲染出设置分组标题。
+    // 聊天页/列表页都没有 .settings-groupTitle，所以不会误判。
     var title = document.querySelector('.mobile-title');
+    var titleText = title ? String(title.textContent || '') : '';
     var hasSearch = !!document.querySelector('.settings-search');
-    if (!hasSearch) return null;
-    if (title && String(title.textContent || '').indexOf('设置') < 0) return null;
+    var hasGroups = document.querySelectorAll('.settings-groupTitle').length > 0;
+    if (!hasSearch && !hasGroups) return null;
+    // 有搜索框但标题明确不是「设置」→ 说明还在别的页面，不动。
+    if (hasSearch && titleText !== '' && titleText.indexOf('设置') < 0) return null;
     return document.querySelector('.mobile-scroll');
   }
 
@@ -3461,11 +3467,13 @@ const SEND_MODE_SETTINGS_HTML = `<script>
     var row = document.getElementById('dm-sendmode-row');
     if (row) { paint(); return; }
 
-    var li = build();
-    var group = chatGroup();
-    if (group) group.appendChild(li);
-    else scroll.appendChild(li);
-    paint();
+    // 必须等「对话」分组渲染出来再插入：否则会先落到 .mobile-scroll 顶部，
+        // 位置错在第一个分组之上。分组没到时直接返回，等 observer 下一次触发。
+        var group = chatGroup();
+        if (!group) return;
+        var li = build();
+        group.appendChild(li);
+        paint();
 
     var select = document.getElementById('dm-sendmode-select');
     if (!select) return;
