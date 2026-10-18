@@ -5517,9 +5517,9 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
 
 // ── 工作区页左上角「插件」「自动化」入口 + 两个宿主信息页 ─────────────────────
 // 数据来源（全部宿主真实服务，不写死、不造假）：
-//   · 插件页   ← ctx.get('pluginManager').listBundles()
-//     @deepseek-ai/dsh-plugin-manager 的公开方法；桌面「插件管理」页用的就是
-//     同一个方法（ui-plugin-manager client 调 ctx.remote.pluginManager.listBundles()）。
+//   · 插件页   ← ctx.get('pluginManager').listBundles() + listPlugins()
+//     @deepseek-ai/dsh-plugin-manager 的公开方法；桌面「插件」页用的就是这两个
+//     （ui-plugin-manager client 调 ctx.remote.pluginManager.listBundles/listPlugins）。
 //   · 自动化页 ← ctx.get('schedule').catalog()
 //     @deepseek-ai/dsh-schedule 的公开方法，返回宿主全部 active/inactive 定时任务；
 //     桌面「自动化任务」页同源（ui-schedule client 调 ctx.remote.schedule.catalog()）。
@@ -5531,17 +5531,31 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
 // 两个按钮是 header 的直接子节点 + 绝对定位（同 48px / 同 top:50% / 同 .mobile-iconbtn
 // 规格），并给 header 加 .dm-header-extras 把首列从 48px 扩到 148px —— 标题会自动在
 // 剩余空间重新居中，320/360/390 宽都不会被按钮压住（见 theme.css 同名段落）。
-const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="插件" title="插件"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.4 7.9c-.05.32.06.65.29.88l1.57 1.57c.47.47.7 1.09.7 1.7s-.23 1.23-.7 1.7l-1.61 1.61a.98.98 0 0 1-.84.28c-.47-.07-.8-.48-.97-.93a2.5 2.5 0 1 0-3.21 3.21c.45.17.86.5.93.97a.98.98 0 0 1-.28.84l-1.61 1.61a2.4 2.4 0 0 1-1.7.7 2.4 2.4 0 0 1-1.7-.7l-1.57-1.57a1.03 1.03 0 0 0-.88-.29c-.49.07-.84.5-1.02.97a2.5 2.5 0 1 1-3.24-3.24c.47-.18.9-.53.97-1.02a1.03 1.03 0 0 0-.29-.88L1.7 13.75A2.4 2.4 0 0 1 1 12.05c0-.62.24-1.23.7-1.7l1.53-1.53c.24-.24.58-.35.92-.3.51.08.88.53 1.07 1.01a2.5 2.5 0 1 0 3.26-3.26c-.48-.19-.93-.56-1.01-1.07-.05-.34.06-.68.3-.92l1.53-1.53A2.4 2.4 0 0 1 12 1c.61 0 1.23.24 1.7.7l1.57 1.57c.23.23.56.34.88.29.49-.07.84-.5 1.02-.97a2.5 2.5 0 1 1 3.24 3.24c-.47.18-.9.53-.97 1.02Z"/></svg></button><button id="dm-automation-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="自动化" title="自动化"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.2V12l3.1 1.9"/><path d="M4.2 4.6l2.6-.3.3 2.6"/><path d="M3.4 8.9A9 9 0 0 1 20.6 12"/></svg></button>
+//
+// 两个入口图标取自宿主自己的图标定义（web shell 的 IconPluginPinwheelOutlineRegular /
+// IconClockOutlineRegular，16×16、stroke 1px 描边风格），path d 原样照搬。
+const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="插件" title="插件"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M7.84457 5.06199C11.6605 4.93876 14.7962 6.14848 14.8484 7.76397C14.8875 8.97461 13.1838 10.0696 10.7215 10.5942"/><path d="M5.12742 8.07731C5.00419 4.26138 6.21391 1.12568 7.8294 1.07351C9.04004 1.03441 10.135 2.73808 10.6596 5.20037"/><path d="M8.02457 10.6802C4.20865 10.8034 1.07294 9.5937 1.02077 7.97821C0.981678 6.76758 2.68535 5.67262 5.14763 5.14798"/><path d="M10.7476 7.89535C10.8708 11.7113 9.66109 14.847 8.0456 14.8991C6.83496 14.9382 5.74 13.2346 5.21536 10.7723"/></svg></button><button id="dm-automation-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="自动化" title="自动化"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M8 14C11.3137 14 14 11.3137 14 8C14 4.68629 11.3137 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14Z"/><path d="M8 4.31V8.46L11 10.08"/></svg></button>
 <div id="dm-host-pages">
 <section id="dm-page-plugins" class="dm-page" hidden aria-label="插件">
-<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="1"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新插件" data-dm-refresh="plugins"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button></header>
+<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="plugins"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新插件" data-dm-refresh="plugins"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button></header>
 <div class="dm-page-body" data-dm-body="plugins"><p class="dm-page-state">加载中…</p></div>
 </section>
-<section id="dm-page-automations" class="dm-page" hidden aria-label="自动化">
-<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="1"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">自动化</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新自动化" data-dm-refresh="automations"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button></header>
-<div class="dm-page-body" data-dm-body="automations"><p class="dm-page-state">加载中…</p></div>
+<section id="dm-page-plugin-detail" class="dm-page dm-page-detail" hidden aria-label="插件详情">
+<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回插件列表" data-dm-back="detail"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><span class="dm-page-iconbtn dm-page-spacer" aria-hidden="true"></span></header>
+<div class="dm-page-body" id="dm-plugin-detail-body"><p class="dm-page-state">加载中…</p></div>
+</section>
+<section id="dm-page-automations" class="dm-page" hidden aria-label="自动化任务">
+<header class="dm-page-header dm-page-header-auto"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="automations"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">自动化任务</h1><button class="dm-page-new" type="button" data-dm-new="1">＋ 新建</button></header>
+<div class="dm-page-body" data-dm-body="automations">
+<div class="dm-auto-toolbar">
+<div class="dm-auto-tabs" role="tablist"><button class="dm-auto-tab" type="button" role="tab" data-dm-tab="all">全部</button><button class="dm-auto-tab" type="button" role="tab" data-dm-tab="active">已开启</button><button class="dm-auto-tab" type="button" role="tab" data-dm-tab="inactive">已结束</button></div>
+<div class="dm-auto-search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg><input type="search" inputmode="search" placeholder="搜索自动化任务" aria-label="搜索自动化任务" data-dm-search="1"></div>
+</div>
+<div class="dm-auto-list" data-dm-auto-list="1"><p class="dm-page-state">加载中…</p></div>
+</div>
 </section>
 </div>
+<div class="dm-toast" id="dm-toast" role="status" aria-live="polite" hidden></div>
 <script>
 (function () {
   'use strict';
@@ -5549,29 +5563,81 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
   // 页面注册表：kind → 宿主 RPC。标题/方法都只在这里出现一次。
   var PAGES = {
     plugins: { el: 'dm-page-plugins', method: 'mobile.plugins', title: '插件' },
-    automations: { el: 'dm-page-automations', method: 'mobile.automations', title: '自动化' }
+    automations: { el: 'dm-page-automations', method: 'mobile.automations', title: '自动化任务' }
   };
-  var current = null;   // { kind, el } —— 当前打开的信息页
-  var seq = 0;          // 每次 load 递增，晚到的响应不许覆盖新页面
-  var loading = {};     // kind → 该页最新的请求序号
+  // 宿主图标 path 原文（16×16 描边；来自 web shell 的 primitives 图标组件）。
+  var ICON_PINWHEEL = '<svg class="dm-clock" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M7.84457 5.06199C11.6605 4.93876 14.7962 6.14848 14.8484 7.76397C14.8875 8.97461 13.1838 10.0696 10.7215 10.5942"/><path d="M5.12742 8.07731C5.00419 4.26138 6.21391 1.12568 7.8294 1.07351C9.04004 1.03441 10.135 2.73808 10.6596 5.20037"/><path d="M8.02457 10.6802C4.20865 10.8034 1.07294 9.5937 1.02077 7.97821C0.981678 6.76758 2.68535 5.67262 5.14763 5.14798"/><path d="M10.7476 7.89535C10.8708 11.7113 9.66109 14.847 8.0456 14.8991C6.83496 14.9382 5.74 13.2346 5.21536 10.7723"/></svg>';
+  var ICON_CLOCK = '<svg class="dm-clock" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M8 14C11.3137 14 14 11.3137 14 8C14 4.68629 11.3137 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14Z"/><path d="M8 4.31V8.46L11 10.08"/></svg>';
+
+  var current = null;      // { kind, el } —— 当前打开的信息页（列表层）
+  var detailName = null;   // 当前打开的插件详情（bundle name 或 entry:entryId）
+  var seq = 0;             // 每次 load 递增，晚到的响应不许覆盖新页面
+  var loading = {};
+  var pluginsValue = null; // mobile.plugins 最近一次成功的结果（value）
+  var autoValue = null;    // mobile.automations 最近一次成功的结果（value）
+  var autoTab = 'active';  // 桌面默认选中「已开启」
+  var autoQuery = '';
+  var toastTimer = null;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  function localized(value) {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') return value.zh || value.en || '';
+    return '';
+  }
+  function shortName(name) {
+    var text = String(name || '');
+    if (text.charAt(0) === '@') {
+      var slash = text.indexOf('/');
+      if (slash >= 0) return text.slice(slash + 1);
+    }
+    return text;
+  }
+  function firstChar(text) {
+    var value = String(text || '').trim();
+    return value === '' ? '?' : value.slice(0, 1).toUpperCase();
+  }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function fmtWhen(iso) {
+    if (!iso) return '';
+    var date = new Date(iso);
+    if (isNaN(date.getTime())) return String(iso);
+    return (date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+  }
+  function duration(seconds) {
+    var value = Number(seconds);
+    if (!isFinite(value) || value <= 0) return '';
+    if (value % 86400 === 0) return (value / 86400) + ' 天';
+    if (value % 3600 === 0) return (value / 3600) + ' 小时';
+    if (value % 60 === 0) return (value / 60) + ' 分钟';
+    return value + ' 秒';
+  }
+  var WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-  function rpc(method) {
+  function rpc(method, payload) {
     return fetch('/m/api/' + method, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rpcId: 'dm-host-' + Date.now() + '-' + Math.random().toString(36).slice(2), payload: {} })
+      body: JSON.stringify({ rpcId: 'dm-host-' + Date.now() + '-' + Math.random().toString(36).slice(2), payload: payload || {} })
     }).then(function (res) {
       return res.json().then(function (json) { return json; }, function () { return null; });
     }).then(function (json) {
       if (!json || !json.result) throw new Error('宿主没有返回 RPC 结果（HTTP 异常或响应为空）');
       return json.result;
     });
+  }
+
+  function toast(text) {
+    var el = document.getElementById('dm-toast');
+    if (!el) return;
+    el.textContent = String(text == null ? '' : text);
+    el.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.hidden = true; }, 2800);
   }
 
   function pageBody(kind) {
@@ -5583,20 +5649,16 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     var gear = document.querySelector('.mobile-header .mobile-headerSlot-right > button[aria-label="设置"]');
     return gear ? gear.closest('.mobile-header') : null;
   }
-
   function syncHeader() {
     var header = workspaceHeader();
     var headers = document.querySelectorAll('.mobile-header');
-    for (var i = 0; i < headers.length; i++) {
-      headers[i].classList.toggle('dm-header-extras', headers[i] === header);
-    }
+    for (var i = 0; i < headers.length; i++) headers[i].classList.toggle('dm-header-extras', headers[i] === header);
     if (!header) return;
     var plugins = document.getElementById('dm-plugins-btn');
     var automation = document.getElementById('dm-automation-btn');
     if (plugins && plugins.parentNode !== header) header.appendChild(plugins);
     if (automation && automation.parentNode !== header) header.appendChild(automation);
   }
-
   var syncQueued = false;
   function queueSync() {
     if (syncQueued) return;
@@ -5612,170 +5674,339 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     if (!cfg) return;
     var el = document.getElementById(cfg.el);
     if (!el) return;
-    if (current && current.kind === kind) { load(kind); return; }
+    if (current && current.kind === kind) { loadPage(kind); return; }
     if (current) closePage(true);
+    closeDetail(true);
     current = { kind: kind, el: el };
     el.hidden = false;
     document.documentElement.classList.add('dm-host-page-open');
     try { history.pushState({ dmHostPage: kind }, '', '#/dm-' + kind); } catch (e) {}
-    load(kind);
+    loadPage(kind);
   }
-
   function closePage(fromPop) {
     if (!current) return;
     var el = current.el;
     current = null;
     el.hidden = true;
     document.documentElement.classList.remove('dm-host-page-open');
-    // 用户点返回：history.back()，随后 popstate 会再走一次（那时 current 已清空，空转）。
-    // 安卓/浏览器返回键：popstate 先到，这里不再 back，否则会把 SPA 的上一层也退掉。
+    if (!fromPop) { try { history.back(); } catch (e) {} }
+  }
+  function openDetail(key) {
+    var found = detailOf(key);
+    if (!found) return;
+    detailName = key;
+    var el = document.getElementById('dm-page-plugin-detail');
+    if (!el) return;
+    el.hidden = false;
+    document.documentElement.classList.add('dm-host-page-open');
+    renderDetail(found);
+    try { history.pushState({ dmHostDetail: key }, '', '#/dm-plugin/' + encodeURIComponent(key)); } catch (e) {}
+  }
+  function closeDetail(fromPop) {
+    if (detailName === null) return;
+    detailName = null;
+    var el = document.getElementById('dm-page-plugin-detail');
+    if (el) el.hidden = true;
     if (!fromPop) { try { history.back(); } catch (e) {} }
   }
 
   window.addEventListener('popstate', function (event) {
     var state = event && event.state;
+    if (detailName !== null) {
+      if (!state || !state.dmHostDetail) { closeDetail(true); return; }
+    }
     if (current && (!state || state.dmHostPage !== current.kind)) closePage(true);
   });
 
-  // ── 渲染 ────────────────────────────────────────────────────────────────
-  function renderError(kind, error) {
+  // ── 插件：数据加载 ──────────────────────────────────────────────────────
+  function loadPage(kind) {
+    var cfg = PAGES[kind];
     var body = pageBody(kind);
+    if (!cfg || !body) return;
+    if (kind === 'plugins') {
+      if (pluginsValue) { renderPlugins(); return; }
+      body.innerHTML = '<p class="dm-page-state">加载中…</p>';
+    } else {
+      autoQuery = '';
+      autoTab = 'active';
+      var search = document.querySelector('[data-dm-search]');
+      if (search) search.value = '';
+      if (autoValue) { renderAutomations(); return; }
+      // 自动化页的 Tab/搜索框是静态节点，不能连容器一起 innerHTML 覆盖；
+      // 只把「列表区」置为加载态。
+      var autoList = document.querySelector('[data-dm-auto-list]');
+      if (autoList) autoList.innerHTML = '<p class="dm-page-state">加载中…</p>';
+    }
+    var my = ++seq;
+    loading[kind] = my;
+    rpc(cfg.method).then(function (result) {
+      if (loading[kind] !== my) return;
+      if (!result || result.ok !== true) {
+        renderPageError(kind, result && result.error ? result.error : { code: 'unknown', message: '宿主返回了无法识别的结果' });
+        return;
+      }
+      if (kind === 'plugins') { pluginsValue = result.value || {}; renderPlugins(); }
+      else { autoValue = result.value || {}; renderAutomations(); }
+    }).catch(function (error) {
+      if (loading[kind] !== my) return;
+      renderPageError(kind, { code: 'network_error', message: (error && error.message) || String(error) });
+    });
+  }
+
+  function renderPageError(kind, error) {
+    // 自动化页只替换列表区，保留顶部 Tab/搜索框（它们不依赖 RPC 结果）。
+    var body = kind === 'automations' ? document.querySelector('[data-dm-auto-list]') : pageBody(kind);
     if (!body) return;
     var code = error && error.code ? String(error.code) : 'unknown';
     var message = error && error.message ? String(error.message) : '未知错误';
+    var retry = kind === 'plugins' ? 'plugins' : 'automations';
     body.innerHTML = '<div class="dm-page-state dm-page-error">' +
       '<p class="dm-page-stateTitle">读取失败</p>' +
       '<p class="dm-page-stateText">' + esc(message) + '</p>' +
       '<p class="dm-page-stateCode">' + esc(code) + '</p>' +
-      '<button class="dm-page-retry" type="button" data-dm-retry="' + esc(kind) + '">重试</button>' +
+      '<button class="dm-page-retry" type="button" data-dm-retry="' + retry + '">重试</button>' +
       '</div>';
   }
 
-  function renderPlugins(body, items, value) {
-    body.setAttribute('data-dm-count', String(items.length));
-    if (items.length === 0) {
-      body.innerHTML = '<div class="dm-page-state dm-page-empty">' +
-        '<p class="dm-page-stateTitle">宿主没有已安装的插件包</p>' +
-        '<p class="dm-page-stateText">pluginManager.listBundles() 返回 0 条记录。这里只展示宿主真实数据，不补任何示例。</p>' +
-        '</div>';
+  function iconHtml(icon, title, size) {
+    var cls = 'dm-card-icon' + (size === 'lg' ? ' dm-card-icon-lg' : '');
+    if (typeof icon === 'string' && icon.indexOf('data:image/') === 0) {
+      return '<img class="' + cls + '" src="' + esc(icon) + '" alt="" loading="lazy">';
+    }
+    return '<span class="' + cls + ' dm-card-icon-letter" aria-hidden="true">' + esc(firstChar(title)) + '</span>';
+  }
+
+  function switchHtml(checked, attrs, disabled, label) {
+    return '<button class="dm-switch" type="button" role="switch" aria-checked="' + (checked ? 'true' : 'false') + '" aria-label="' + esc(label || '启停') + '"' +
+      (attrs || '') + (disabled ? ' disabled' : '') + '><span class="dm-switch-knob"></span></button>';
+  }
+
+  function sectionHtml(title, countText, rowsHtml) {
+    if (!rowsHtml) return '';
+    return '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">' + esc(title) + '</span><span class="dm-section-count">' + esc(countText) + '</span></div>' + rowsHtml + '</section>';
+  }
+
+  // ── 插件：列表（内置插件配置 / 实验性插件 / 已安装插件）─────────────────
+  function renderPlugins() {
+    var body = pageBody('plugins');
+    if (!body) return;
+    var value = pluginsValue || {};
+    var groups = value.groups || {};
+    var basic = Array.isArray(groups.basic) ? groups.basic : [];
+    var extensions = Array.isArray(groups.extensions) ? groups.extensions : [];
+    var installed = Array.isArray(groups.installed) ? groups.installed : [];
+    var total = basic.length + extensions.length + installed.length;
+    body.setAttribute('data-dm-count', String(total));
+    body.setAttribute('data-dm-counts', JSON.stringify({ basic: basic.length, extensions: extensions.length, installed: installed.length }));
+    if (total === 0) {
+      body.innerHTML = '<div class="dm-page-state dm-page-empty"><p class="dm-page-stateTitle">宿主没有可展示的插件</p><p class="dm-page-stateText">pluginManager 的真实返回里没有内置配置行、实验性包或已安装包。这里只展示宿主数据，不补示例。</p></div>';
       return;
     }
-    var counts = value && value.counts ? value.counts : {};
-    var enabled = typeof counts.enabled === 'number' ? counts.enabled : 0;
-    var html = '<div class="dm-page-summary"><span>共 ' + items.length + ' 个插件包</span><span>启用 ' + enabled + ' 个</span></div>';
-    for (var i = 0; i < items.length; i++) {
-      var b = items[i] || {};
-      var full = String(b.name || '');
-      var short = full.indexOf('/') >= 0 ? full.slice(full.lastIndexOf('/') + 1) : full;
-      var meta = [];
-      if (b.version) meta.push('v' + b.version);
-      if (b.availability === 'installation') meta.push('宿主内置');
-      else if (b.availability === 'profile') meta.push('profile 安装');
-      else if (b.availability) meta.push(String(b.availability));
-      if (b.official) meta.push('官方');
-      if (b.pluginCount) meta.push(b.pluginCount + ' 个插件');
-      if (b.readOnlyReason) meta.push('只读：' + b.readOnlyReason);
-      if (b.error && b.error.code) meta.push('异常：' + b.error.code);
-      html += '<div class="dm-page-row" data-dm-row="plugin">' +
-        '<div class="dm-page-rowTop"><span class="dm-page-rowName">' + esc(short || full || '(未命名)') + '</span>' +
-        '<span class="dm-page-badge ' + (b.enabled ? 'is-on' : 'is-off') + '">' + (b.enabled ? '已启用' : '未启用') + '</span></div>' +
-        (full ? '<div class="dm-page-rowSub">' + esc(full) + '</div>' : '') +
-        (meta.length ? '<div class="dm-page-rowMeta">' + esc(meta.join(' · ')) + '</div>' : '') +
-        (b.description ? '<div class="dm-page-rowDesc">' + esc(b.description) + '</div>' : '') +
-        '</div>';
-    }
+    var html = '';
+    html += sectionHtml('内置插件配置', '共 ' + basic.length + ' 个', basic.map(function (item) {
+      var title = localized(item.meta && item.meta.title) || shortName(item.moduleName);
+      var description = localized(item.meta && item.meta.description);
+      return '<div class="dm-card" data-open-entry="' + esc(item.entryId) + '" role="button" tabindex="0">' +
+        iconHtml(item.meta && item.meta.icon, title) +
+        '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span></div>' +
+        (description ? '<div class="dm-card-desc">' + esc(description) + '</div>' : '') +
+        '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
+        '<span class="dm-chevron" aria-hidden="true">›</span></div>';
+    }).join(''));
+    html += sectionHtml('实验性插件', '共 ' + extensions.length + ' 个', extensions.map(function (bundle) {
+      return bundleRowHtml(bundle, true);
+    }).join(''));
+    html += sectionHtml('已安装插件', '共 ' + installed.length + ' 个', installed.map(function (bundle) {
+      return bundleRowHtml(bundle, false);
+    }).join(''));
     body.innerHTML = html;
   }
 
-  function pad2(n) { return (n < 10 ? '0' : '') + n; }
-  function fmtWhen(iso) {
-    if (!iso) return '';
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return String(iso);
-    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  function bundleRowHtml(bundle, experimental) {
+    var title = localized(bundle.meta && bundle.meta.title) || shortName(bundle.name);
+    var description = bundle.description || localized(bundle.meta && bundle.meta.description);
+    var protectedMobile = bundle.name === 'dsh-mobile';
+    var badge = experimental ? '<span class="dm-badge dm-badge-beta">实验性</span>' : '';
+    var side = switchHtml(bundle.enabled, ' data-toggle-bundle="' + esc(bundle.name) + '"', protectedMobile, '启停 ' + title);
+    if (protectedMobile) side += '<span class="dm-card-note">手机端插件，请在桌面端停用</span>';
+    var meta = [];
+    if (bundle.version) meta.push('v' + bundle.version);
+    if (bundle.pluginCount) meta.push(bundle.pluginCount + ' 个组件');
+    return '<div class="dm-card" data-open-bundle="' + esc(bundle.name) + '" role="button" tabindex="0">' +
+      iconHtml(bundle.meta && bundle.meta.icon, title) +
+      '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span>' + badge + '</div>' +
+      (description ? '<div class="dm-card-desc">' + esc(description) + '</div>' : '') +
+      (meta.length ? '<div class="dm-card-sub">' + esc(meta.join(' · ')) + '</div>' : '') +
+      '</div><div class="dm-card-side">' + side + '</div></div>';
   }
-  function duration(seconds) {
-    var s = Number(seconds);
-    if (!isFinite(s) || s <= 0) return '';
-    if (s % 86400 === 0) return (s / 86400) + ' 天';
-    if (s % 3600 === 0) return (s / 3600) + ' 小时';
-    if (s % 60 === 0) return (s / 60) + ' 分钟';
-    return s + ' 秒';
+
+  // ── 插件：详情（bundle 详情 / 内置插件 entry 详情）──────────────────────
+  function detailOf(key) {
+    if (!pluginsValue || !pluginsValue.groups) return null;
+    var groups = pluginsValue.groups;
+    var lists = ['basic', 'extensions', 'installed'];
+    if (key.indexOf('entry:') === 0) {
+      var entryId = key.slice('entry:'.length);
+      var basic = groups.basic || [];
+      for (var i = 0; i < basic.length; i++) if (basic[i].entryId === entryId) return { type: 'entry', item: basic[i] };
+      return null;
+    }
+    for (var j = 0; j < lists.length; j++) {
+      var list = groups[lists[j]] || [];
+      for (var k = 0; k < list.length; k++) if (list[k].name === key) return { type: 'bundle', bundle: list[k], experimental: lists[j] === 'extensions' };
+    }
+    return null;
   }
-  var WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-  function triggerText(r) {
-    var kind = String(r.kind || '');
-    if (kind === 'at') return '指定时间';
-    if (kind === 'after') return '延时 ' + duration(r.afterSeconds) + ' 后';
-    if (kind === 'every') return '每 ' + duration(r.everySeconds);
-    if (kind === 'daily') return '每天 ' + String(r.time || '') + (r.timeZone ? ' · ' + r.timeZone : '');
+
+  function renderDetail(found) {
+    var body = document.getElementById('dm-plugin-detail-body');
+    if (!body) return;
+    if (found.type === 'entry') renderEntryDetail(body, found.item);
+    else renderBundleDetail(body, found.bundle, found.experimental);
+  }
+
+  function renderEntryDetail(body, item) {
+    var title = localized(item.meta && item.meta.title) || shortName(item.moduleName);
+    var description = localized(item.meta && item.meta.description);
+    var running = item.enabled === true;
+    var readOnly = typeof item.readOnlyReason === 'string' && item.readOnlyReason !== '';
+    var toggle = switchHtml(running, ' data-toggle-entry="' + esc(item.entryId) + '"', readOnly, '启停 ' + title);
+    var html = '<div class="dm-detail-hero">' + iconHtml(item.meta && item.meta.icon, title, 'lg') +
+      '<div class="dm-detail-head"><div class="dm-card-titleRow"><span class="dm-detail-title">' + esc(title) + '</span>' +
+      '<span class="dm-badge ' + (running ? 'dm-badge-on' : 'dm-badge-off') + '">' + (running ? '运行中' : '已停用') + '</span></div>' +
+      '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
+      '<div class="dm-card-side">' + toggle + '</div></div>';
+    if (description) html += '<p class="dm-detail-desc">' + esc(description) + '</p>';
+    html += '<div class="dm-detail-note">这是内置插件的桌面端配置入口。手机端只读展示，配置请在桌面端修改。</div>';
+    html += '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">来源信息</span></div>' +
+      '<dl class="dm-detail-dl"><dt>entry id</dt><dd>' + esc(item.entryId) + '</dd><dt>包名</dt><dd>' + esc(item.moduleName) + '</dd><dt>运行状态</dt><dd>' + esc(running ? '运行中' : '已停用') + '</dd>' +
+      (readOnly ? '<dt>只读原因</dt><dd>' + esc(item.readOnlyReason) + '</dd>' : '') + '</dl></section>';
+    body.innerHTML = html;
+  }
+
+  function renderBundleDetail(body, bundle, experimental) {
+    var title = localized(bundle.meta && bundle.meta.title) || shortName(bundle.name);
+    var description = bundle.description || localized(bundle.meta && bundle.meta.description);
+    var protectedMobile = bundle.name === 'dsh-mobile';
+    var rows = Array.isArray(bundle.rows) ? bundle.rows : [];
+    var runningRows = rows.filter(function (row) { return row.enabled === true; }).length;
+    var badges = '';
+    if (bundle.version) badges += '<span class="dm-badge dm-badge-version">v' + esc(bundle.version) + '</span>';
+    if (experimental || bundle.official) badges += '<span class="dm-badge dm-badge-beta">实验性</span>';
+    var toggle = switchHtml(bundle.enabled, ' data-toggle-bundle="' + esc(bundle.name) + '"', protectedMobile, '启停 ' + title);
+    var html = '<div class="dm-detail-hero">' + iconHtml(bundle.meta && bundle.meta.icon, title, 'lg') +
+      '<div class="dm-detail-head"><div class="dm-card-titleRow"><span class="dm-detail-title">' + esc(title) + '</span>' + badges + '</div>' +
+      '<div class="dm-card-sub">' + esc(bundle.name) + '</div></div>' +
+      '<div class="dm-card-side">' + toggle + '</div></div>';
+    if (protectedMobile) html += '<div class="dm-detail-note">手机端插件：这里不能关闭，请在桌面端停用。</div>';
+    // 可卸载的包：只做占位。removeBundle 不可逆（且 dsh-mobile 自己也被管理），
+    // 本期不实现卸载，点击/悬浮都提示去桌面端。
+    if (bundle.removable && bundle.installed) {
+      html += '<div class="dm-detail-actions"><button class="dm-danger-btn" type="button" data-dm-uninstall="' + esc(bundle.name) + '" title="请在桌面端卸载" aria-disabled="true">卸载</button><span class="dm-detail-actions-note">卸载是不可逆操作，请在桌面端进行</span></div>';
+    }
+    if (description) html += '<p class="dm-detail-desc">' + esc(description) + '</p>';
+    if (rows.length > 0) {
+      html += '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">包含的组件</span><span class="dm-section-count">共 ' + rows.length + ' 个 · ' + runningRows + ' 运行中</span></div>' +
+        rows.map(function (row) { return componentRowHtml(row); }).join('') + '</section>';
+    }
+    var sourceLabel = bundle.source
+      ? bundle.source
+      : (bundle.availability === 'installation' ? '内置（DSH 安装包）' : bundle.availability === 'profile' ? 'profile 包' : String(bundle.availability || '未知'));
+    html += '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">来源信息</span></div>' +
+      '<dl class="dm-detail-dl"><dt>代码来源</dt><dd>' + esc(sourceLabel) + '</dd><dt>当前版本</dt><dd>' + esc(bundle.version ? 'v' + bundle.version : '未知') + '</dd></dl></section>';
+    body.innerHTML = html;
+  }
+
+  function componentRowHtml(row) {
+    var title = localized(row.meta && row.meta.title) || shortName(row.moduleName);
+    var description = localized(row.meta && row.meta.description);
+    var stateText = row.enabled ? '运行中' : (row.hasLiveEntry ? '已停用' : '未加载');
+    var attrs = row.hasLiveEntry && row.entryId ? ' data-toggle-entry="' + esc(row.entryId) + '"' : '';
+    var toggle = row.hasLiveEntry && row.entryId
+      ? switchHtml(row.enabled, attrs, false, '启停 ' + title)
+      : '<span class="dm-badge dm-badge-off">未加载</span>';
+    return '<div class="dm-card dm-card-component">' + iconHtml(row.meta && row.meta.icon, title) +
+      '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span>' +
+      '<span class="dm-dot ' + (row.enabled ? 'is-on' : 'is-off') + '"></span><span class="dm-dot-text">' + esc(stateText) + '</span></div>' +
+      (description ? '<div class="dm-card-desc">' + esc(description) + '</div>' : '') +
+      '<div class="dm-card-sub">' + esc((row.entryId || row.rowId) + ' · ' + row.moduleName) + '</div></div>' +
+      '<div class="dm-card-side">' + toggle + '</div></div>';
+  }
+
+  // ── 自动化：列表 / Tab / 搜索 ───────────────────────────────────────────
+  function triggerText(record) {
+    var kind = String(record.kind || '');
+    if (kind === 'at') return '一次性';
+    if (kind === 'after') return '一次性 · 延时 ' + (duration(record.afterSeconds) || '') + '后';
+    if (kind === 'every') return '每 ' + duration(record.everySeconds);
+    if (kind === 'daily') return '每天 ' + String(record.time || '') + (record.timeZone ? ' · ' + record.timeZone : '');
     if (kind === 'weekly') {
       var days = [];
-      if (Array.isArray(r.weekdays)) {
-        for (var i = 0; i < r.weekdays.length; i++) days.push(WEEK[Number(r.weekdays[i]) - 1] || ('第' + r.weekdays[i] + '天'));
-      }
-      return '每周 ' + days.join('、') + ' ' + String(r.time || '') + (r.timeZone ? ' · ' + r.timeZone : '');
+      if (Array.isArray(record.weekdays)) for (var i = 0; i < record.weekdays.length; i++) days.push(WEEK[Number(record.weekdays[i]) - 1] || ('第' + record.weekdays[i] + '天'));
+      return '每周 ' + days.join('、') + ' ' + String(record.time || '') + (record.timeZone ? ' · ' + record.timeZone : '');
     }
-    if (kind === 'cron') return 'cron ' + String(r.expression || '') + (r.timeZone ? ' · ' + r.timeZone : '');
+    if (kind === 'cron') return 'cron ' + String(record.expression || '') + (record.timeZone ? ' · ' + record.timeZone : '');
     return kind ? ('未知触发（' + kind + '）') : '未知触发';
   }
 
-  function renderAutomations(body, items, value) {
-    body.setAttribute('data-dm-count', String(items.length));
-    if (items.length === 0) {
-      body.innerHTML = '<div class="dm-page-state dm-page-empty">' +
-        '<p class="dm-page-stateTitle">宿主当前没有自动化任务</p>' +
-        '<p class="dm-page-stateText">schedule.catalog() 返回 0 条记录（未过滤）。这里只展示宿主真实数据，不补任何示例。</p>' +
-        '</div>';
-      return;
-    }
-    var counts = value && value.counts ? value.counts : {};
-    var active = typeof counts.active === 'number' ? counts.active : 0;
-    var html = '<div class="dm-page-summary"><span>共 ' + items.length + ' 条任务</span><span>进行中 ' + active + ' 条</span></div>';
-    for (var i = 0; i < items.length; i++) {
-      var r = items[i] || {};
-      var isActive = r.status === 'active';
-      var title = String(r.title || '').trim();
-      if (!title) title = String(r.prompt || '').trim().slice(0, 40) || '(未命名任务)';
-      var when = fmtWhen(r.scheduledAt);
-      var meta = [triggerText(r)];
-      if (when) meta.push(isActive ? '下次执行 ' + when : '原定 ' + when);
-      if (r.lastDelivery && r.lastDelivery.deliveredAt) meta.push('上次投递 ' + fmtWhen(r.lastDelivery.deliveredAt));
-      html += '<div class="dm-page-row" data-dm-row="automation">' +
-        '<div class="dm-page-rowTop"><span class="dm-page-rowName">' + esc(title) + '</span>' +
-        '<span class="dm-page-badge ' + (isActive ? 'is-on' : 'is-off') + '">' + (isActive ? '进行中' : '已结束') + '</span></div>' +
-        '<div class="dm-page-rowMeta">' + esc(meta.join(' · ')) + '</div>' +
-        (r.prompt ? '<div class="dm-page-rowDesc">' + esc(r.prompt) + '</div>' : '') +
-        (r.sessionId ? '<div class="dm-page-rowSub">会话 ' + esc(String(r.sessionId).slice(0, 12)) + '…</div>' : '') +
-        '</div>';
-    }
-    body.innerHTML = html;
-  }
-
-  function load(kind) {
-    var cfg = PAGES[kind];
-    var body = pageBody(kind);
-    if (!cfg || !body) return;
-    var my = ++seq;
-    loading[kind] = my;
-    body.innerHTML = '<p class="dm-page-state dm-page-loading">加载中…</p>';
-    rpc(cfg.method).then(function (result) {
-      if (loading[kind] !== my || !current || current.kind !== kind) return;
-      if (!result || result.ok !== true) {
-        renderError(kind, result && result.error ? result.error : { code: 'unknown', message: '宿主返回了无法识别的结果' });
-        return;
-      }
-      var value = result.value && typeof result.value === 'object' ? result.value : {};
-      var items = Array.isArray(value.items) ? value.items : [];
-      if (kind === 'plugins') renderPlugins(body, items, value);
-      else renderAutomations(body, items, value);
-    }).catch(function (error) {
-      if (loading[kind] !== my || !current || current.kind !== kind) return;
-      renderError(kind, { code: 'network_error', message: (error && error.message) || String(error) });
+  function automationRows() {
+    var value = autoValue || {};
+    var items = Array.isArray(value.items) ? value.items : [];
+    var query = autoQuery.trim().toLowerCase();
+    return items.filter(function (item) {
+      if (autoTab === 'active' && item.status !== 'active') return false;
+      if (autoTab === 'inactive' && item.status !== 'inactive') return false;
+      if (query === '') return true;
+      var haystack = (String(item.title || '') + '\\n' + String(item.prompt || '')).toLowerCase();
+      return haystack.indexOf(query) >= 0;
     });
   }
 
-  // ── 事件：两个入口 / 返回 / 刷新 / 重试（全部用事件委托，节点重建也不用重绑）──
+  function renderAutomations() {
+    var body = pageBody('automations');
+    if (!body) return;
+    var value = autoValue || {};
+    var counts = value.counts || {};
+    var visible = automationRows();
+    body.setAttribute('data-dm-count', String(visible.length));
+    body.setAttribute('data-dm-total', String(Array.isArray(value.items) ? value.items.length : 0));
+    var tabs = document.querySelectorAll('[data-dm-tab]');
+    for (var i = 0; i < tabs.length; i++) {
+      var selected = tabs[i].getAttribute('data-dm-tab') === autoTab;
+      tabs[i].classList.toggle('is-active', selected);
+      tabs[i].setAttribute('aria-selected', selected ? 'true' : 'false');
+    }
+    var list = document.querySelector('[data-dm-auto-list]');
+    if (!list) return;
+    if (visible.length === 0) {
+      list.innerHTML = '<div class="dm-page-state dm-page-empty dm-auto-empty">' +
+        '<div class="dm-empty-clock" aria-hidden="true">' + ICON_CLOCK.replace('width="20" height="20"', 'width="34" height="34"') + '</div>' +
+        '<p class="dm-page-stateTitle">还没有自动化任务，在会话中创建的任务会显示在这里</p>' +
+        '<button class="dm-page-retry" type="button" data-dm-new="1">新建自动化任务</button></div>';
+      return;
+    }
+    var html = '<div class="dm-auto-summary">共 ' + visible.length + ' 条' + (autoTab === 'active' ? '进行中' : autoTab === 'inactive' ? '已结束' : '') +
+      (typeof counts.total === 'number' ? ' · 宿主共 ' + counts.total + ' 条' : '') + '</div>';
+    for (var j = 0; j < visible.length; j++) {
+      var item = visible[j];
+      var title = String(item.title || '').trim() || String(item.prompt || '').trim().slice(0, 40) || '(未命名任务)';
+      var when = fmtWhen(item.scheduledAt);
+      var meta = [triggerText(item)];
+      if (when) meta.push(item.status === 'active' ? '下次运行 ' + when : '原定 ' + when);
+      if (item.lastDelivery && item.lastDelivery.deliveredAt) meta.push('上次投递 ' + fmtWhen(item.lastDelivery.deliveredAt));
+      html += '<div class="dm-auto-row" data-dm-row="automation">' +
+        '<span class="dm-auto-icon" aria-hidden="true">' + ICON_CLOCK + '</span>' +
+        '<div class="dm-auto-main"><div class="dm-auto-title">' + esc(title) + '</div>' +
+        '<div class="dm-auto-meta">' + esc(meta.join(' · ')) + '</div>' +
+        (item.prompt && item.prompt !== title ? '<div class="dm-auto-prompt">' + esc(item.prompt) + '</div>' : '') +
+        '</div>' +
+        '<span class="dm-badge ' + (item.status === 'active' ? 'dm-badge-on' : 'dm-badge-off') + '">' + (item.status === 'active' ? '已开启' : '已结束') + '</span>' +
+        '</div>';
+    }
+    list.innerHTML = html;
+  }
+
+  // ── 事件：入口 / 返回 / 刷新 / 重试 / Tab / 搜索 / 开关 ──────────────────
   document.addEventListener('click', function (event) {
     var target = event.target;
     if (!target || !target.closest) return;
@@ -5785,23 +6016,190 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
       openPage(opener.id === 'dm-plugins-btn' ? 'plugins' : 'automations');
       return;
     }
-    if (target.closest('[data-dm-back]')) {
+    var back = target.closest('[data-dm-back]');
+    if (back) {
       event.preventDefault();
-      closePage(false);
+      var which = back.getAttribute('data-dm-back');
+      if (which === 'detail') closeDetail(false);
+      else closePage(false);
       return;
     }
     var refresh = target.closest('[data-dm-refresh]');
     if (refresh) {
       event.preventDefault();
-      load(refresh.getAttribute('data-dm-refresh'));
+      if (refresh.getAttribute('data-dm-refresh') === 'plugins') { pluginsValue = null; }
+      loadPage(refresh.getAttribute('data-dm-refresh'));
       return;
     }
     var retry = target.closest('[data-dm-retry]');
     if (retry) {
       event.preventDefault();
-      load(retry.getAttribute('data-dm-retry'));
+      var kind = retry.getAttribute('data-dm-retry');
+      if (kind === 'plugins') pluginsValue = null; else autoValue = null;
+      loadPage(kind);
+      return;
+    }
+    if (target.closest('[data-dm-uninstall]')) {
+      event.preventDefault();
+      toast('请在桌面端卸载');
+      return;
+    }
+    if (target.closest('[data-dm-new]')) {
+      event.preventDefault();
+      toast('请在桌面端或会话中创建自动化任务');
+      return;
+    }
+    var tab = target.closest('[data-dm-tab]');
+    if (tab) {
+      event.preventDefault();
+      autoTab = tab.getAttribute('data-dm-tab');
+      renderAutomations();
+      return;
+    }
+    var toggleBundle = target.closest('[data-toggle-bundle]');
+    if (toggleBundle) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBundleState(toggleBundle, toggleBundle.getAttribute('data-toggle-bundle'));
+      return;
+    }
+    var toggleEntry = target.closest('[data-toggle-entry]');
+    if (toggleEntry) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleEntryState(toggleEntry, toggleEntry.getAttribute('data-toggle-entry'));
+      return;
+    }
+    var openBundle = target.closest('[data-open-bundle]');
+    if (openBundle) {
+      event.preventDefault();
+      openDetail(openBundle.getAttribute('data-open-bundle'));
+      return;
+    }
+    var openEntry = target.closest('[data-open-entry]');
+    if (openEntry) {
+      event.preventDefault();
+      openDetail('entry:' + openEntry.getAttribute('data-open-entry'));
     }
   });
+
+  document.addEventListener('input', function (event) {
+    var target = event.target;
+    if (!target || !target.getAttribute) return;
+    if (target.getAttribute('data-dm-search') === '1') {
+      autoQuery = target.value || '';
+      renderAutomations();
+    }
+  });
+
+  // 开关：乐观更新 → 真正调宿主 → 失败回滚并提示；成功静默刷新缓存。
+  function setSwitch(button, checked) {
+    button.setAttribute('aria-checked', checked ? 'true' : 'false');
+  }
+  /** 从最近一次 mobile.plugins 结果里读某个 bundle 的真实 enabled。 */
+  function bundleEnabledNow(name) {
+    var groups = (pluginsValue && pluginsValue.groups) || {};
+    var lists = ['basic', 'extensions', 'installed'];
+    for (var i = 0; i < lists.length; i++) {
+      var list = groups[lists[i]] || [];
+      for (var j = 0; j < list.length; j++) if (list[j].name === name) return list[j].enabled === true;
+    }
+    return null;
+  }
+  function entryEnabledNow(entryId) {
+    var groups = (pluginsValue && pluginsValue.groups) || {};
+    var basic = groups.basic || [];
+    for (var i = 0; i < basic.length; i++) if (basic[i].entryId === entryId) return basic[i].enabled === true;
+    var lists = ['extensions', 'installed'];
+    for (var k = 0; k < lists.length; k++) {
+      var rows = (groups[lists[k]] || []).reduce(function (all, bundle) { return all.concat(bundle.rows || []); }, []);
+      for (var r = 0; r < rows.length; r++) if (rows[r].entryId === entryId) return rows[r].enabled === true;
+    }
+    return null;
+  }
+  /** 连接断开后的对账：重取插件数据，若已达成目标就刷新视图，否则回滚。 */
+  function reconcileToggle(button, before, next, kind, key) {
+    var attempts = 0;
+    var done = false;
+    function retry() {
+      attempts++;
+      rpc('mobile.plugins').then(function (result) {
+        if (done) return;
+        if (!result || result.ok !== true) throw new Error('rpc');
+        pluginsValue = result.value || {};
+        var actual = kind === 'bundle' ? bundleEnabledNow(key) : entryEnabledNow(key);
+        if (actual === next) {
+          done = true;
+          if (current && current.kind === 'plugins') renderPlugins();
+          if (detailName !== null) {
+            var found = detailOf(detailName);
+            if (found) renderDetail(found);
+          }
+          toast('已保存并生效');
+          return;
+        }
+        if (attempts < 5) { setTimeout(retry, 1200); return; }
+        done = true;
+        setSwitch(button, before);
+        toast('启停失败：宿主状态未变化');
+      }).catch(function () {
+        if (done) return;
+        if (attempts < 5) { setTimeout(retry, 1200); return; }
+        done = true;
+        setSwitch(button, before);
+        toast('启停失败：连接中断');
+      });
+    }
+    setTimeout(retry, 900);
+  }
+
+  function toggleBundleState(button, name) {
+    if (button.disabled) return;
+    var before = button.getAttribute('aria-checked') === 'true';
+    var next = !before;
+    setSwitch(button, next);
+    button.disabled = true;
+    rpc('mobile.pluginBundleEnabled', { name: name, enabled: next }).then(function (result) {
+      if (!result || result.ok !== true) throw result && result.error ? result.error : new Error('宿主没有返回结果');
+      var application = result.value && result.value.application;
+      if (application === 'restart-required') toast('已保存，重启 DSH 后生效');
+      else if (application === 'overridden') toast('已保存，但被更高优先级配置覆盖');
+      refreshPluginsSilently();
+    }).catch(function () {
+      // 启停会触发 HMR：宿主 reconcile 期间本插件的 HTTP server 可能被重建，
+      // 于是这次请求的连接会断（fetch 报 network error），但宿主其实已经生效。
+      // 所以失败后不立刻回滚，而是重取真实状态：与目标一致就算成功。
+      reconcileToggle(button, before, next, 'bundle', name);
+    }).then(function () { button.disabled = false; });
+  }
+  function toggleEntryState(button, entryId) {
+    if (button.disabled) return;
+    var before = button.getAttribute('aria-checked') === 'true';
+    var next = !before;
+    setSwitch(button, next);
+    button.disabled = true;
+    rpc('mobile.pluginEntryEnabled', { entryId: entryId, enabled: next }).then(function (result) {
+      if (!result || result.ok !== true) throw result && result.error ? result.error : new Error('宿主没有返回结果');
+      var application = result.value && result.value.application;
+      if (application === 'restart-required') toast('已保存，重启 DSH 后生效');
+      refreshPluginsSilently();
+    }).catch(function () {
+      reconcileToggle(button, before, next, 'entry', entryId);
+    }).then(function () { button.disabled = false; });
+  }
+
+  // 静默重取：不闪 loading，只更新缓存并按当前视图重渲染（保留详情页）。
+  function refreshPluginsSilently() {
+    rpc('mobile.plugins').then(function (result) {
+      if (!result || result.ok !== true) return;
+      pluginsValue = result.value || {};
+      if (current && current.kind === 'plugins') renderPlugins();
+      if (detailName !== null) {
+        var found = detailOf(detailName);
+        if (found) renderDetail(found);
+      }
+    }).catch(function () {});
+  }
 
   // 刷新后如果地址栏还残留 #/dm-*，先清掉，避免和 SPA 的空白 hash 状态混淆。
   if (location.hash.indexOf('#/dm-') === 0) {
@@ -7217,6 +7615,26 @@ export function apply(ctx, config) {
     }
   }
 
+  /**
+   * 在 HMR 事务上下文之外执行回调。
+   *
+   * 为什么需要：本插件的 HTTP server 若是在一次 HMR reload 中重建的，那么之后所有
+   * 由这些 request handler 发起的异步调用都会继承 HMR 的 AsyncLocalStorage 标记
+   *（dsh-hmr 用 `executing.getStore() === true` 判断「已在事务里」）。此时
+   * pluginManager.setBundleEnabled 会走 hmr.runExclusive，直接报
+   * "HMR transactions cannot be nested"，导致手机端开关永远失败。
+   * `hmr.executing` 是 dsh-hmr 实例上的真实 AsyncLocalStorage，用它的 exit()
+   * 退回事务外再调用，就能和桌面端一样正常启停（此时由 hmr.runExclusive 自己再开事务）。
+   */
+  async function callOutsideHmr(operation) {
+    const hmr = hostService('hmr')
+    const store = hmr && hmr.executing
+    if (store && typeof store.exit === 'function') {
+      return await store.exit(operation)
+    }
+    return await operation()
+  }
+
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     switch (method) {
@@ -7713,14 +8131,45 @@ export function apply(ctx, config) {
       // ctx.remote.pluginManager.listBundles()），remote 只是把原始数组包成
       // { ok, value } 信封；这里直接在宿主进程里拿原始数组，字段完全一致。
       // 只投影手机需要的字段，不把 meta 等内部对象整包下发。
+      // ── 插件页：宿主 pluginManager 的真实数据 ─────────────────────────────
+      // 数据源（asar: dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js）：
+      //   · listBundles() 1681 行 —— 插件包（已安装 / 官方可选 / 实验性）。
+      //   · listPlugins() 1656 行 —— Loader 里每个插件行（含 meta 标题/描述/图标）。
+      // 桌面「插件」页（ui-plugin-manager client）用的就是这两个方法：先
+      // ctx.remote.pluginManager.listBundles() + listPlugins()，再按
+      // BUILTIN_PROFILE_BUNDLES / official / MORE_BUNDLES 分成「内置插件配置 /
+      // 实验性插件 / 已安装插件」三组。这里把同一份原始数据交给手机端分组。
+      // ── 插件页：宿主 pluginManager 的真实数据 ─────────────────────────────
+      // 数据源（asar: dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js）：
+      //   · listBundles() 1681 行 —— 插件包（已安装 / 官方可选 / 实验性）。
+      //   · listPlugins() 1656 行 —— Loader 里每个插件行（含 meta 标题/描述/图标）。
+      // 桌面「插件」页（ui-plugin-manager client）用的就是这两个方法：先
+      // ctx.remote.pluginManager.listBundles() + listPlugins()，再按
+      // BUILTIN_PROFILE_BUNDLES / official / MORE_BUNDLES 分成「内置插件配置 /
+      // 实验性插件 / 已安装插件」三组。这里把同一份原始数据交给手机端分组。
+      // ── 插件页：宿主 pluginManager 的真实数据（列表 + 分组 + 详情）───────
+      // 数据源（asar: dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js）：
+      //   · listBundles() 1681 行 —— 插件包，含 rows（包内组件）、source（代码来源）、
+      //     official/optional/removable/installed、meta（标题/描述/data URL 图标）。
+      //   · listPlugins() 1656 行 —— Loader 里每个插件行（entryId/moduleName/enabled/
+      //     fiberPhase/meta）；用来给 bundle rows 补「运行状态」，以及取「内置插件配置」
+      //     那四行（它们的 meta.description.en 明确写着 dsh web client's Plugins page）。
+      // 分组与桌面 ui-plugin-manager client 完全同源（client.js:598508 附近）：
+      //   listed = 排除 BUILTIN_PROFILE_BUNDLES 后 installed||official||error 的 bundle
+      //   已安装插件 = !official；实验性插件 = official && (!MORE_BUNDLES 或 enabled)
+      // 两份名字表 COPY 自宿主 client（宿主自己也是硬编码这两张表，不是我们发明的）。
       case 'mobile.plugins': {
         const manager = hostService('pluginManager')
         if (!manager || typeof manager.listBundles !== 'function') {
           return serviceUnavailable('pluginManager', '宿主的插件管理服务未启用（profile 未加载 plugin-manager）')
         }
         let bundles
+        let inventory
         try {
-          bundles = await manager.listBundles()
+          [bundles, inventory] = await Promise.all([
+            manager.listBundles(),
+            typeof manager.listPlugins === 'function' ? manager.listPlugins() : Promise.resolve([]),
+          ])
         } catch (err) {
           return {
             ok: false,
@@ -7730,12 +8179,85 @@ export function apply(ctx, config) {
             },
           }
         }
-        const all = Array.isArray(bundles) ? bundles : []
-        // availability === 'missing' 且未启用 = 官方目录里「能装但还没装」的条目，
-        // 不属于「已安装/已启用」，过滤掉。其余保留（含已安装但未启用的行，
-        // 手机端用「未启用」徽标如实展示）。
-        const items = all
-          .filter((bundle) => bundle && typeof bundle.name === 'string' && (bundle.availability !== 'missing' || bundle.enabled === true))
+
+        // 桌面插件页排除的基础 profile bundle（宿主 client.js 里的同名集合）。
+        const BUILTIN_PROFILE_BUNDLES = new Set([
+          '@deepseek-ai/dsh-base',
+          '@deepseek-ai/dsh-web-app',
+          '@deepseek-ai/dsh-headless',
+          '@deepseek-ai/dsh-sdk-app',
+          '@deepseek-ai/dsh-acp-app',
+          '@deepseek-ai/dsh-sdk-minimal',
+        ])
+        // 桌面「更多」列表里的可选 bundle（宿主 client.js 的 MORE_BUNDLES）。
+        const MORE_BUNDLES = new Set([
+          '@deepseek-ai/dsh-experimental-tool-worktree',
+          '@deepseek-ai/dsh-experimental-cot-translation-bundle',
+          '@deepseek-ai/dsh-experimental-terminal-bundle',
+          '@deepseek-ai/dsh-experimental-session-search',
+          '@deepseek-ai/dsh-experimental-session-titles-bundle',
+          '@deepseek-ai/dsh-experimental-badge-skill-bundle',
+          '@deepseek-ai/dsh-experimental-ralph-bundle',
+          '@deepseek-ai/dsh-experimental-plugin-market-bundle',
+          '@deepseek-ai/dsh-subagent-codex',
+          '@deepseek-ai/dsh-subagent-claude-code',
+        ])
+        // 桌面实验性分组的显示顺序（EXTENSION_BUNDLES）；不在表里的排后面。
+        const EXTENSION_ORDER = [
+          '@deepseek-ai/dsh-experimental-agent-team-profile',
+          '@deepseek-ai/dsh-experimental-voice-input-bundle',
+          '@deepseek-ai/dsh-experimental-auto-review',
+          '@deepseek-ai/dsh-experimental-inspector-profile',
+        ]
+        // 「内置插件配置」四行的显示顺序（桌面插件页 basic 分组的视觉顺序）。
+        const BASIC_ORDER = [
+          'ui-settings-subagent',
+          'ui-settings-web-search',
+          'ui-settings-agent-loop',
+          'ui-settings-shell',
+        ]
+
+        // meta.title/description 有两种真实形态（asar: dsh-app-boot readPluginMeta）：
+        //   · 字符串（包名兜底）；· 本地化对象 { zh, en }（包自带 locale 的 meta.title）。
+        // 原样下发，前端 zh 优先。icon 是 data URL（svg/png），可直接 <img>。
+        const localizedOf = (value) => {
+          if (typeof value === 'string') return value
+          if (!value || typeof value !== 'object') return null
+          const out = {}
+          for (const key of ['zh', 'en']) {
+            if (typeof value[key] === 'string' && value[key] !== '') out[key] = value[key]
+          }
+          return Object.keys(out).length > 0 ? out : null
+        }
+        const metaOf = (meta) => (meta && typeof meta === 'object'
+          ? {
+              title: localizedOf(meta.title),
+              description: localizedOf(meta.description),
+              icon: typeof meta.icon === 'string' ? meta.icon : null,
+              version: typeof meta.version === 'string' ? meta.version : null,
+              error: typeof meta.error === 'string' ? meta.error : null,
+            }
+          : null)
+
+        const entries = Array.isArray(inventory) ? inventory : []
+        const liveById = new Map()
+        for (const entry of entries) {
+          if (entry && typeof entry.entryId === 'string') liveById.set(entry.entryId, entry)
+        }
+        const projectRow = (row) => {
+          const live = row && typeof row.entryId === 'string' ? liveById.get(row.entryId) : undefined
+          return {
+            rowId: row && typeof row.rowId === 'string' ? row.rowId : '',
+            moduleName: row && typeof row.moduleName === 'string' ? row.moduleName : '',
+            entryId: row && typeof row.entryId === 'string' ? row.entryId : null,
+            meta: row ? metaOf(row.meta) : null,
+            hasLiveEntry: live !== undefined,
+            enabled: live ? live.enabled === true : false,
+            fiberPhase: live && typeof live.fiberPhase === 'string' ? live.fiberPhase : null,
+          }
+        }
+        const bundleItems = (Array.isArray(bundles) ? bundles : [])
+          .filter((bundle) => bundle && typeof bundle.name === 'string')
           .map((bundle) => ({
             name: bundle.name,
             version: typeof bundle.version === 'string' ? bundle.version : null,
@@ -7743,33 +8265,145 @@ export function apply(ctx, config) {
             enabled: bundle.enabled === true,
             installed: bundle.installed === true,
             official: bundle.official === true,
+            optional: bundle.optional === true,
+            removable: bundle.removable === true,
             availability: typeof bundle.availability === 'string' ? bundle.availability : null,
             readOnlyReason: typeof bundle.readOnlyReason === 'string' ? bundle.readOnlyReason : null,
+            source: typeof bundle.source === 'string' ? bundle.source : null,
             pluginCount: Array.isArray(bundle.rows) ? bundle.rows.length : 0,
+            rows: (Array.isArray(bundle.rows) ? bundle.rows : []).map(projectRow),
+            meta: metaOf(bundle.meta),
             error: bundle.error && typeof bundle.error.code === 'string' ? { code: bundle.error.code } : null,
           }))
-          .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name))
+        const listed = bundleItems.filter((bundle) => !BUILTIN_PROFILE_BUNDLES.has(bundle.name) && (bundle.installed || bundle.official || bundle.error !== null))
+        const installed = listed.filter((bundle) => !bundle.official).sort((a, b) => a.name.localeCompare(b.name))
+        const official = listed.filter((bundle) => bundle.official)
+        const rank = (name) => {
+          const index = EXTENSION_ORDER.indexOf(name)
+          return index < 0 ? EXTENSION_ORDER.length : index
+        }
+        const extensions = official
+          .filter((bundle) => !MORE_BUNDLES.has(bundle.name) || bundle.enabled)
+          .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name))
+
+        // 内置插件配置：桌面 basic 分组来自 client 的 plugins.row.config 槽位；
+        // 宿主侧没有槽位视图，但这四行在 listPlugins 里的 description 明确写着
+        // "on the dsh web client's Plugins page"，用这个真实字段分流（不写死标题）。
+        const basic = entries
+          .filter((entry) => {
+            const meta = entry && entry.meta
+            const description = meta && meta.description
+            return description && typeof description === 'object' && typeof description.en === 'string' && description.en.includes("web client's Plugins page")
+          })
+          .map((entry) => ({
+            entryId: entry.entryId,
+            moduleName: entry.moduleName,
+            enabled: entry.enabled === true,
+            fiberPhase: typeof entry.fiberPhase === 'string' ? entry.fiberPhase : null,
+            readOnlyReason: typeof entry.readOnlyReason === 'string' ? entry.readOnlyReason : null,
+            meta: metaOf(entry.meta),
+          }))
+          .sort((a, b) => {
+            const rankOf = (item) => {
+              const index = BASIC_ORDER.findIndex((name) => item.moduleName.endsWith('/' + name))
+              return index < 0 ? BASIC_ORDER.length : index
+            }
+            return rankOf(a) - rankOf(b)
+          })
+
         return {
           ok: true,
           value: {
-            items,
+            groups: { basic, extensions, installed },
             counts: {
-              total: items.length,
-              enabled: items.filter((item) => item.enabled).length,
+              basic: basic.length,
+              extensions: extensions.length,
+              installed: installed.length,
             },
-            source: 'pluginManager.listBundles()',
+            source: 'pluginManager.listBundles() + listPlugins()',
           },
         }
       }
 
-      // ── 自动化页：宿主 schedule 服务里的真实定时任务 ─────────────────────
-      // 数据源：@deepseek-ai/dsh-schedule 的 catalog()
-      //（asar: dsh/node_modules/@deepseek-ai/dsh-schedule/lib/index.js:2129）。
-      // catalog() 返回宿主全部 active/inactive 任务（含 sessionId/status），
-      // 桌面「自动化任务」页同源（ui-schedule client 调 ctx.remote.schedule.catalog()）。
-      // 说明：recurring 任务每次投递后宿主会把 record.scheduledAt 推进到下一次，
-      // 一次性任务投递后 status 变 inactive、scheduledAt 停在原定时间 —— 所以页面
-      // 「下次执行 / 原定」的语义与宿主持久化记录完全一致。
+      // ── 插件启停：bundle 开关 / 组件开关（宿主真实接口）─────────────────────
+      // setBundleEnabled(name, enabled) 与 setPluginEnabled(entryId, enabled) 是
+      // pluginManager 的公开方法（asar lib 1949 / 1930 行）。两者都把失败放进
+      // 返回值 result.error（不 throw），result.application 会告诉我们是否 applied。
+      case 'mobile.pluginBundleEnabled': {
+        const manager = hostService('pluginManager')
+        if (!manager || typeof manager.setBundleEnabled !== 'function') {
+          return serviceUnavailable('pluginManager', '宿主的插件管理服务未启用，无法启停插件包')
+        }
+        const name = payload && typeof payload.name === 'string' ? payload.name : ''
+        const enabled = payload && payload.enabled === true
+        if (name === '') return { ok: false, error: { code: 'bad-request', message: '缺少插件包名 name' } }
+        // 安全例外：dsh-mobile 自己就是手机端入口。手机上关掉它 = HTTP 服务随之停止，
+        // 手机会永久失去入口，只能去桌面端恢复。桌面端仍可正常停用。
+        if (name === 'dsh-mobile' && !enabled) {
+          return { ok: false, error: { code: 'mobile_bundle_protected', message: 'dsh-mobile 是手机端入口，不能在手机上关闭；请到桌面端停用。' } }
+        }
+        let result
+        try {
+          result = await callOutsideHmr(() => manager.setBundleEnabled(name, enabled))
+        } catch (err) {
+          return { ok: false, error: { code: 'plugin_toggle_failed', message: (err && err.message) || String(err) } }
+        }
+        if (result && result.error) {
+          return {
+            ok: false,
+            error: {
+              code: typeof result.error.code === 'string' ? result.error.code : 'plugin_toggle_failed',
+              message: typeof result.error.message === 'string' ? result.error.message : `宿主拒绝启停 ${name}`,
+              // 把宿主原始结果带回去，便于区分「无 HMR / 被覆盖 / 文件锁冲突」等原因。
+              details: { host: result },
+            },
+          }
+        }
+        return {
+          ok: true,
+          value: {
+            name,
+            enabled,
+            application: result && typeof result.application === 'string' ? result.application : 'applied',
+            changed: result ? result.changed === true : false,
+          },
+        }
+      }
+      case 'mobile.pluginEntryEnabled': {
+        const manager = hostService('pluginManager')
+        if (!manager || typeof manager.setPluginEnabled !== 'function') {
+          return serviceUnavailable('pluginManager', '宿主的插件管理服务未启用，无法启停插件组件')
+        }
+        const entryId = payload && typeof payload.entryId === 'string' ? payload.entryId : ''
+        const enabled = payload && payload.enabled === true
+        if (entryId === '') return { ok: false, error: { code: 'bad-request', message: '缺少插件 entryId' } }
+        let result
+        try {
+          result = await callOutsideHmr(() => manager.setPluginEnabled(entryId, enabled))
+        } catch (err) {
+          return { ok: false, error: { code: 'plugin_toggle_failed', message: (err && err.message) || String(err) } }
+        }
+        if (result && result.error) {
+          return {
+            ok: false,
+            error: {
+              code: typeof result.error.code === 'string' ? result.error.code : 'plugin_toggle_failed',
+              message: typeof result.error.message === 'string' ? result.error.message : `宿主拒绝启停 ${entryId}`,
+              details: { host: result },
+            },
+          }
+        }
+        return {
+          ok: true,
+          value: {
+            entryId,
+            enabled,
+            application: result && typeof result.application === 'string' ? result.application : 'applied',
+            changed: result ? result.changed === true : false,
+          },
+        }
+      }
+
       case 'mobile.automations': {
         const schedule = hostService('schedule')
         if (!schedule || typeof schedule.catalog !== 'function') {
