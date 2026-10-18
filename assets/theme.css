@@ -1437,6 +1437,17 @@ body {
   min-height: var(--dm-vh, 100vh) !important;
 }
 
+/* ── 配对页：不要再让人填「服务器地址」 ─────────────────────────────────
+   手机本来就是直接打开域名（或局域网地址）进来的，当前 origin 就是服务器；
+   bundle 的配对表单却还渲染一个「服务器地址」输入框，看起来像要重新填域名。
+   这里只隐藏那个输入框和它的 label，配对逻辑不变（依旧用 window.location.origin），
+   于是页面上只剩「配对码 + 配对」。
+   id/for 来自 bundle 的配对组件（mobile-pair-server / mobile-pair-link）。 */
+label[for="mobile-pair-server"],
+#mobile-pair-server {
+  display: none !important;
+}
+
 /* 底部抽屉：max-height: 100vh —— 老 WebView 上抽屉会比可见区高，
    展开态（.sheet-full）尤其明显，一并换成可见高度。 */
 .sheet,

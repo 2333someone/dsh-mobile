@@ -300,11 +300,65 @@ function isLoopback(req) {
 }
 
 function lanIPv4Addresses() {
-  return Object.values(networkInterfaces())
-    .flat()
-    .filter((i) => i && i.family === 'IPv4' && !i.internal)
-    .map((i) => i.address)
-    .filter((a) => !a.startsWith('169.254.'))
+  // 只认 RFC1918 私网地址：虚拟网卡 / VPN / 代理常会冒出一个公网段 IPv4
+  //（本机就有一条 2.0.1.1/24 的「以太网 2」），它既不是局域网、也不是给手机
+  // 用的入口，混进地址列表只会让人以为「为什么有三个地址」。
+  // 排序：192.168.* 最常见，排前面；其次 10.*；最后 172.16–31.*。
+  const isPrivate = (ip) =>
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+  const rank = (ip) => (ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : 2)
+  const out = []
+  for (const list of Object.values(networkInterfaces())) {
+    for (const i of list || []) {
+      if (!i || i.family !== 'IPv4' || i.internal) continue
+      if (!isPrivate(i.address)) continue
+      if (!out.includes(i.address)) out.push(i.address)
+    }
+  }
+  return out.sort((a, b) => rank(a) - rank(b))
+}
+
+// ── public domain (publicBaseUrl) ───────────────────────────────────────────
+// 公网域名支持在桌面设置面板里直接填（原来只能改 profile 配置）。落盘到
+// ~/.dsh/dsh-mobile-public.json，优先于 profile 的 publicBaseUrl；空串表示
+// 回到配置值。只接受 http(s)://host[:port][/path]，去掉 query/hash 与尾斜杠。
+function normalizePublicBase(value) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (raw === '') return ''
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    if (url.hostname === '') return null
+    url.hash = ''
+    url.search = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
+function loadPublicBase(file) {
+  try {
+    if (!existsSync(file)) return ''
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    const raw = saved && typeof saved === 'object' ? saved.publicBaseUrl : saved
+    const normalized = normalizePublicBase(raw)
+    return normalized === null ? '' : normalized
+  } catch {
+    return ''
+  }
+}
+
+function savePublicBase(file, value) {
+  try {
+    const dir = join(file, '..')
+    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify({ publicBaseUrl: value }, null, 2))
+  } catch (err) {
+    console.warn('[dsh-mobile] failed to save public domain:', err && err.message)
+  }
 }
 
 // ── device store ────────────────────────────────────────────────────────────
@@ -5359,6 +5413,8 @@ export function apply(ctx, config) {
     pushConfigFile: join(homedir(), '.dsh', 'dsh-mobile-push.json'),
     // 发送模式（排队 / 直接插入）的落盘位置：与推送配置分开存，互不牵连。
     sendModeFile: join(homedir(), '.dsh', 'dsh-mobile-sendmode.json'),
+    // 设置面板里填的公网域名（publicBaseUrl 的运行时覆盖；空 = 用上面的配置值）。
+    publicBaseFile: join(homedir(), '.dsh', 'dsh-mobile-public.json'),
     transcribeServices: [],
     // 手机端模型列表里隐藏的老模型（DeepSeek v3.x / R1 与旧混元）；可在配置里覆盖。
     hiddenModels: [
@@ -5381,6 +5437,8 @@ export function apply(ctx, config) {
   let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
   // 发送模式：手机端唯一一处真值；下发 mobile.preferences，写回 session.prompt。
   let sendMode = loadSendMode(cfg.sendModeFile)
+  // 设置面板里填的公网域名；空字符串表示沿用 profile 配置里的 publicBaseUrl。
+  let publicBaseOverride = loadPublicBase(cfg.publicBaseFile)
   const cookieName = COOKIE_NAME
   // 用量页缓存：60 秒 TTL，只缓存查询成功的视图（含数据采集时刻 fetchedAt）。
   let usageCache = { at: 0, view: null }
@@ -5525,10 +5583,31 @@ export function apply(ctx, config) {
   function accessAddresses() {
     const port = Number(cfg.mobilePort) || DEFAULT_MOBILE_PORT
     const lan = lanIPv4Addresses().map((a) => `http://${a}:${port}`)
-    const publicBase = typeof cfg.publicBaseUrl === 'string' && cfg.publicBaseUrl.trim() !== ''
-      ? cfg.publicBaseUrl.trim().replace(/\/+$/, '')
-      : null
-    return { lan, publicBase, port }
+    // 优先用设置面板里填的域名；没有才回落到 profile 配置。
+    const fromConfig = typeof cfg.publicBaseUrl === 'string' ? cfg.publicBaseUrl.trim().replace(/\/+$/, '') : ''
+    const publicBase = publicBaseOverride !== '' ? publicBaseOverride : (fromConfig !== '' ? fromConfig : null)
+    return { lan, publicBase, publicBaseCustom: publicBaseOverride !== '', port }
+  }
+
+  /** 设置面板保存/清除公网域名（loopback-only）。 */
+  function setPublicBase(req, res) {
+    readJsonBody(req)
+      .then((body) => {
+        const raw = body && typeof body.url === 'string' ? body.url.trim() : ''
+        if (raw === '') {
+          publicBaseOverride = ''
+          savePublicBase(cfg.publicBaseFile, '')
+          return sendJson(res, 200, { ok: true, publicBase: accessAddresses().publicBase })
+        }
+        const normalized = normalizePublicBase(raw)
+        if (normalized === null) {
+          return sendJson(res, 400, { ok: false, error: '域名格式不对：需要 http(s)://主机[:端口]' })
+        }
+        publicBaseOverride = normalized
+        savePublicBase(cfg.publicBaseFile, normalized)
+        sendJson(res, 200, { ok: true, publicBase: normalized })
+      })
+      .catch((err) => sendJson(res, 400, { ok: false, error: String((err && err.message) || err) }))
   }
 
   // ── settings-panel endpoints (simple JSON) ────────────────────────────────
@@ -7898,6 +7977,8 @@ export function apply(ctx, config) {
         return requireLoopback(req, res, status)
       case 'POST /device/revoke':
         return requireLoopback(req, res, revokeDevice)
+      case 'POST /domain':
+        return requireLoopback(req, res, setPublicBase)
       default:
         break
     }

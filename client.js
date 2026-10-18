@@ -88,6 +88,19 @@ window.__ModuleLoader__.load({
 .dm-detail { font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); margin-top: 2px; }
 .dm-muted { color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 13px; }
 .dm-err { color: var(--dsw-alias-state-error-primary, #e5484d); font-size: 12.5px; margin-top: 10px; }
+.dm-domain { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--dsw-alias-border-l2, #d0d2da); }
+.dm-domainHead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.dm-domainLabel { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary, #1b1c20); }
+.dm-domainHint { font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-input {
+  flex: 1; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2, #d0d2da); background: transparent;
+  color: var(--dsw-alias-label-primary, #1b1c20); font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.dm-input::placeholder { color: var(--dsw-alias-label-secondary, #9aa0ad); }
+.dm-input:focus { outline: none; border-color: #4D6BFE; box-shadow: 0 0 0 2px rgba(77,107,254,.16); }
+.dm-btnSm { padding: 8px 14px; font-size: 12.5px; }
 .dm-actions { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; }
 .dm-spin {
   width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4);
@@ -204,6 +217,23 @@ window.__ModuleLoader__.load({
       return { title, detail: bits.join(' · ') }
     }
 
+    /**
+     * 访问地址里「局域网」只保留 RFC1918 私网地址。
+     * 有些机器上会多出 VPN / 虚拟网卡的公网段 IPv4（例如 2.0.1.1/24），
+     * 那不是手机能用来直连的入口，混进来就会显示成三条地址。
+     */
+    function lanOnly(urls) {
+      const isPrivate = (host) =>
+        host.startsWith('10.') || host.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+      return (Array.isArray(urls) ? urls : []).filter((u) => {
+        try {
+          return isPrivate(new URL(u).hostname)
+        } catch {
+          return false
+        }
+      })
+    }
+
     async function copyText(text) {
       try {
         if (navigator.clipboard && window.isSecureContext) {
@@ -234,6 +264,10 @@ window.__ModuleLoader__.load({
       const [copied, setCopied] = useState('')
       const [confirmRevoke, setConfirmRevoke] = useState('')
       const [now, setNow] = useState(() => Date.now())
+      const [domainDraft, setDomainDraft] = useState('')
+      const [domainBusy, setDomainBusy] = useState(false)
+      const [domainErr, setDomainErr] = useState('')
+      const domainEdited = useRef(false)
       const confirmTimer = useRef()
       const copyTimer = useRef()
 
@@ -243,6 +277,8 @@ window.__ModuleLoader__.load({
           .then((j) => {
             if (!j || !j.ok) return
             setStatus(j)
+            // 域名输入框：用户正在编辑时不要被轮询覆盖。
+            if (!domainEdited.current) setDomainDraft((j.addresses && j.addresses.publicBase) || '')
             // 宿主端已有待配对码时同步显示（例如另一处生成）。
             if (j.pending) setCode((cur) => cur ?? { code: j.pending.code, expiresAt: j.pending.expiresAt })
           })
@@ -296,6 +332,34 @@ window.__ModuleLoader__.load({
         }).then(() => refresh()).catch(() => {})
       }
 
+      /** 保存 / 清除公网域名（空串 = 清除，回到 profile 配置）。 */
+      const saveDomain = (value) => {
+        if (domainBusy) return
+        setDomainErr('')
+        setDomainBusy(true)
+        fetch('/m/api/domain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: value }),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            if (j && j.ok) {
+              domainEdited.current = false
+              refresh()
+            } else {
+              setDomainErr((j && j.error) || '保存失败')
+            }
+          })
+          .catch(() => setDomainErr('保存失败：无法访问宿主机'))
+          .finally(() => setDomainBusy(false))
+      }
+
+      const clearDomain = () => {
+        setDomainDraft('')
+        saveDomain('')
+      }
+
       const onCopy = async (url) => {
         const ok = await copyText(url)
         if (!ok) return
@@ -306,7 +370,10 @@ window.__ModuleLoader__.load({
 
       const addrs = (status && status.addresses) || { lan: [], publicBase: null }
       const devices = (status && status.devices) || []
-      const urls = [...(addrs.lan || []), ...(addrs.publicBase ? [addrs.publicBase] : [])]
+      const urls = [...lanOnly(addrs.lan), ...(addrs.publicBase ? [addrs.publicBase] : [])]
+      // 「清除」只在用户自己填过域名时出现；没填时 publicBase 来自 profile 配置，
+      // 清掉只会回到配置值，按钮会误导。
+      const hasDomainOverride = addrs.publicBaseCustom === true
       const isFixed = !!(code && (code.fixed === true || code.expiresAt > now + 86400000))
       const expired = code && !isFixed ? now > code.expiresAt : false
 
@@ -334,7 +401,50 @@ window.__ModuleLoader__.load({
                   }, copied === u ? '已复制' : '复制'),
                 ),
               )
-            : h('p', { className: 'dm-muted', style: { marginTop: 10 } }, '未检测到地址：请确认插件已启用，或在配置里填写 publicBaseUrl。'),
+            : h('p', { className: 'dm-muted', style: { marginTop: 10 } }, '未检测到地址：请确认插件已启用，或在下面填写公网域名。'),
+
+          // 公网域名：反代 / 隧道的对外地址。填了之后会出现在上面的地址里，
+          // 手机直接打开「域名/m/」，配对时只需要输入配对码。
+          h('div', { className: 'dm-domain' },
+            h('div', { className: 'dm-domainHead' },
+              h('span', { className: 'dm-domainLabel' }, '公网域名'),
+              h('span', { className: 'dm-domainHint' }, '可选 · 反向代理 / 隧道地址'),
+            ),
+            h('div', { className: 'dm-urlRow' },
+              h('input', {
+                className: 'dm-input',
+                value: domainDraft,
+                placeholder: 'https://example.com:45632',
+                spellCheck: false,
+                autoCapitalize: 'none',
+                autoCorrect: 'off',
+                onChange: (e) => {
+                  domainEdited.current = true
+                  setDomainDraft(e.target.value)
+                  setDomainErr('')
+                },
+                onKeyDown: (e) => {
+                  if (e.key === 'Enter') saveDomain(domainDraft.trim())
+                },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'dm-btn dm-btnSm',
+                disabled: domainBusy,
+                onClick: () => saveDomain(domainDraft.trim()),
+              }, domainBusy ? '保存中…' : '保存'),
+              addrs.publicBaseCustom
+                ? h('button', {
+                    type: 'button',
+                    className: 'dm-ghost dm-btnSm',
+                    disabled: domainBusy,
+                    onClick: clearDomain,
+                  }, '清除')
+                : null,
+            ),
+            h('p', { className: 'dm-sub' }, '保存后这里会出现「域名/m/」。手机从该域名打开时，页面已经知道服务器地址，配对只填配对码。'),
+            domainErr ? h('p', { className: 'dm-err' }, domainErr) : null,
+          ),
         ),
 
         // ── 手机配对 ──
