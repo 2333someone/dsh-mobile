@@ -8134,6 +8134,25 @@ export function apply(ctx, config) {
     export: { label: '导出', keywords: ['下载会话日志', '会话日志'] },
   }
 
+  // 与宿主命令菜单一致的分段与顺序（桌面 @deepseek-ai/dsh-client-ui-commands
+  // 的 SECTION_ROWS）：
+  //   添加：文件 / 目标 / 计划 / 反馈
+  //   指令：压缩 / 权限 / 模型 / 导出，其余宿主命令按注册表顺序接在后面
+  //   技能：技能系统注册的命令统一放最后（宿主命令表里它们没有 definitionId）
+  // 手机端拿不到桌面端的 file / model 两个 client-side 命令，缺了就只显示实际
+  // 存在的条目，绝不伪造。
+  const HOST_ADD_ORDER = ['file', 'goal', 'plan', 'feedback']
+  const HOST_COMMAND_ORDER = ['compact', 'permission', 'model', 'export']
+
+  function commandSectionOf(name, sourceKey) {
+    if (HOST_ADD_ORDER.indexOf(name) >= 0) return '添加'
+    if (HOST_COMMAND_ORDER.indexOf(name) >= 0) return '指令'
+    // 技能命令由技能系统注册，宿主命令注册表里没有 definitionId；没有来源的
+    // 其它命令按宿主「未列出的收进指令段末尾」处理，只有像技能的才进技能段。
+    if (sourceKey === '' || /skill/i.test(sourceKey)) return '技能'
+    return '指令'
+  }
+
   function commandSourceOf(definitionId) {
     const raw = typeof definitionId === 'string' ? definitionId : ''
     if (raw === '') return { key: '', label: '未标注来源' }
@@ -8188,6 +8207,26 @@ export function apply(ctx, config) {
         group: source.label,
       })
     }
+    // 按宿主菜单重排：添加 → 指令（固定顺序优先，其余按注册表顺序）→ 技能。
+    // panel 是按 items 的顺序「遇到新 group 就画一个小标题」，所以排完序分组
+    // 自然就是宿主的三段。
+    const appearOrder = new Map(items.map((it, index) => [it.name, index]))
+    const rankOf = (order, name) => {
+      const index = order.indexOf(name)
+      return index < 0 ? 1e6 : index
+    }
+    for (const it of items) it.group = commandSectionOf(it.name, it.source)
+    const sectionRank = (it) => (it.group === '添加' ? 0 : it.group === '指令' ? 1 : 2)
+    items.sort((a, b) => {
+      const bySection = sectionRank(a) - sectionRank(b)
+      if (bySection !== 0) return bySection
+      if (a.group === '添加') return rankOf(HOST_ADD_ORDER, a.name) - rankOf(HOST_ADD_ORDER, b.name)
+      if (a.group === '指令') {
+        const byFixed = rankOf(HOST_COMMAND_ORDER, a.name) - rankOf(HOST_COMMAND_ORDER, b.name)
+        if (byFixed !== 0) return byFixed
+      }
+      return appearOrder.get(a.name) - appearOrder.get(b.name)
+    })
     return { available: true, items, live: agent !== undefined, sessionId }
   }
 
