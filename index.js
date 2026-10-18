@@ -2769,13 +2769,20 @@ const SEND_MODE_HTML = `<script>
 // 识别方式：找标题为「对话」的 .settings-groupTitle，取它所在的 ul —— 与本机语言一致，
 // 不依赖英文文案。找不到就挂到设置页滚动容器 .mobile-scroll 末尾，绝不静默失败。
 //
-// 行内点击直接切换并写回宿主（mobile.preferences 的写通道），附带「已保存」提示。
+// 交互：行内是一个真正的原生 <select>（排队 / 直接插入），只有下拉能改值；
+// 整行不再 click toggle —— 行是 <div>，点击行不会触发任何写操作。
+// change → window.__dmSendMode.set(v) → 成功后刷新显示 + 提示「已保存」。
 const SEND_MODE_SETTINGS_HTML = `<script>
 (function () {
   var LABELS = {
     queue: '排队（等当前回复结束）',
     steer: '直接插入（插队立即生效）',
   };
+  var SHORT = { queue: '排队', steer: '直接插入' };
+  var OPTIONS = [
+    { value: 'queue', text: SHORT.queue },
+    { value: 'steer', text: SHORT.steer },
+  ];
 
   function settingsPage() {
     // 设置页标志：有搜索框 .settings-search 且标题是「设置」。
@@ -2797,13 +2804,14 @@ const SEND_MODE_SETTINGS_HTML = `<script>
 
   function build() {
     var li = document.createElement('li');
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'settings-row dm-sendmode-row';
-    btn.id = 'dm-sendmode-row';
+    // 注意：必须是 div，不能是 button —— <select> 嵌在 <button> 里是非法 HTML，
+    // 而且 button 的点击会与下拉冲突。行本身不再是「点了就切换」的按钮。
+    var row = document.createElement('div');
+    row.className = 'settings-row dm-sendmode-row';
+    row.id = 'dm-sendmode-row';
 
     var icon = document.createElement('span');
-    icon.className = 'card-icon';
+    icon.className = 'card-icon dm-sendmode-icon';
     icon.innerHTML = '<span aria-hidden="true">↩</span>';
 
     var main = document.createElement('span');
@@ -2815,19 +2823,30 @@ const SEND_MODE_SETTINGS_HTML = `<script>
     titleText.textContent = '发送模式';
     title.appendChild(titleText);
     var desc = document.createElement('span');
-    desc.className = 'card-desc';
+    desc.className = 'card-desc dm-sendmode-desc';
     desc.id = 'dm-sendmode-desc';
     main.appendChild(title);
     main.appendChild(desc);
 
+    // 右侧操作区：真·原生 <select>，复用 bundle 的 .settings-input 外观。
     var action = document.createElement('span');
-    action.className = 'card-action';
-    action.id = 'dm-sendmode-value';
+    action.className = 'card-action dm-sendmode-action';
+    var select = document.createElement('select');
+    select.className = 'settings-input dm-sendmode-select';
+    select.id = 'dm-sendmode-select';
+    select.setAttribute('aria-label', '发送模式');
+    for (var i = 0; i < OPTIONS.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = OPTIONS[i].value;
+      opt.textContent = OPTIONS[i].text;
+      select.appendChild(opt);
+    }
+    action.appendChild(select);
 
-    btn.appendChild(icon);
-    btn.appendChild(main);
-    btn.appendChild(action);
-    li.appendChild(btn);
+    row.appendChild(icon);
+    row.appendChild(main);
+    row.appendChild(action);
+    li.appendChild(row);
     return li;
   }
 
@@ -2837,15 +2856,18 @@ const SEND_MODE_SETTINGS_HTML = `<script>
       : 'queue';
   }
 
+  // paint() 是唯一的显示出口：desc 文字 + 下拉选中项 + aria-label，
+  // dm:sendmode 事件（含别的设备改了值）也走这里，所以下拉会跟着变。
   function paint() {
     var row = document.getElementById('dm-sendmode-row');
     if (!row) return;
     var m = current();
-    var value = document.getElementById('dm-sendmode-value');
+    if (m !== 'steer') m = 'queue';
+    var select = document.getElementById('dm-sendmode-select');
     var desc = document.getElementById('dm-sendmode-desc');
-    if (value) value.textContent = m === 'steer' ? '直接插入' : '排队';
+    if (select && select.value !== m) select.value = m;
     if (desc) desc.textContent = LABELS[m] || LABELS.queue;
-    row.setAttribute('aria-label', '发送模式：' + (m === 'steer' ? '直接插入' : '排队'));
+    row.setAttribute('aria-label', '发送模式：' + SHORT[m]);
   }
 
   function ensure() {
@@ -2860,18 +2882,23 @@ const SEND_MODE_SETTINGS_HTML = `<script>
     else scroll.appendChild(li);
     paint();
 
-    var btn = document.getElementById('dm-sendmode-row');
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!window.__dmSendMode) return;
-      var next = current() === 'steer' ? 'queue' : 'steer';
-      btn.disabled = true;
+    var select = document.getElementById('dm-sendmode-select');
+    if (!select) return;
+    if (!window.__dmSendMode) { select.disabled = true; return; }
+
+    // 只有下拉能改值：点击行不再切换。
+    select.addEventListener('click', function (e) { e.stopPropagation(); });
+    select.addEventListener('change', function () {
+      var next = select.value === 'steer' ? 'steer' : 'queue';
+      select.disabled = true;
       window.__dmSendMode.set(next).then(function () {
-        btn.disabled = false;
+        select.disabled = false;
         paint();
         flash();
-      }, function () { btn.disabled = false; });
+      }, function () {
+        select.disabled = false;
+        paint(); // 失败就回滚到宿主真值
+      });
     });
   }
 

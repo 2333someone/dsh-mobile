@@ -1428,9 +1428,73 @@ body {
   z-index: 1;
 }
 
-/* 设置页「发送模式」行：复用 bundle 自带的 settings-row 外观，
-   只补一处——值文字（排队 / 直接插入）用弱化色，和「字体大小」等行一致。 */
-.dm-sendmode-row .card-action {
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
+/* ── 设置页「发送模式」行（index.js 的 SEND_MODE_SETTINGS_HTML 注入）───────────
+   结构：<li><div class="settings-row dm-sendmode-row">
+            <span class="card-icon dm-sendmode-icon">↩</span>
+            <span class="card-main">标题 + .dm-sendmode-desc</span>
+            <span class="card-action"><select class="settings-input dm-sendmode-select"></span>
+   外观一律复用 bundle 的类：.settings-row（48px 图标列 + 1fr + auto 的网格、
+   min-height 56px、分隔线）、.card-icon（48px 列，内层 40px 圆角方块）、
+   .card-main / .card-title / .card-titleText / .card-desc、.card-action（右对齐）、
+   .settings-input（下拉的输入框外观：1px 边框 + --radius-chip + --bg-input）。
+   这里只补三件 bundle 没有的事：图标尺寸、下拉宽度/触控区、desc 不截断。
+
+   加载顺序提醒：bundle 的 CSS 是运行时 createElement('style') 追加的，DOM 顺序
+   在本文件之后，同等特异性下 bundle 赢 —— 所以凡是要压过 bundle 的都要 !important
+   （.settings-row .card-icon > * 给了内层背景/前景色，我们要覆盖字号就得 !important）。 */
+.dm-sendmode-row {
+  /* 下拉比一行纯文字高一点，行高留足，别让下拉顶到分隔线 */
+  min-height: 60px !important;
+  /* 行不再是 button：没有点击态、也没有默认的光标/字体继承问题 */
+  cursor: default;
 }
+
+/* 图标：bundle 的 .settings-row .card-icon > * 只给了 40px 的方块背景，
+   里面的字符字号是继承来的（--text-base 左右），看起来偏小。
+   这里把内层的字号与盒尺寸一起钉成 26px（≥24px，与设置页其它行图标视觉一致），
+   配合 square 盒 + line-height:1 + flex 双轴居中，字形不变形、不偏心。
+   （字符不是 SVG，所以只能改 font-size，不存在 viewBox 变形问题。） */
+.dm-sendmode-icon {
+  width: 40px !important;
+  height: 40px !important;
+}
+.dm-sendmode-icon > * {
+  width: 40px !important;
+  height: 40px !important;
+  font-size: 26px !important;
+  line-height: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* 描述文字：bundle 的 .card-desc 是 white-space:nowrap + ellipsis，
+   这两句说明不短，手机上会被截断成「排队（等当前…」，所以放开换行。 */
+.dm-sendmode-desc {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.35 !important;
+}
+
+/* 下拉：.settings-input 给了 flex:1，在 card-action 里会把行挤宽，
+   这里收成固定宽度；同时保证 ≥36px 高、≥44px 触控区好按。 */
+.dm-sendmode-select {
+  flex: none !important;
+  width: auto !important;
+  min-width: 104px;
+  height: 36px;
+  padding: 6px 10px !important;
+  font-size: var(--text-md, 14px) !important;
+  line-height: 1.2 !important;
+  color: var(--text-primary) !important;
+  /* 原生下拉箭头由 UA 画，别让继承的 appearance 把它弄丢 */
+  -webkit-appearance: auto !important;
+  appearance: auto !important;
+  /* 不写 overflow:hidden —— 只在下拉自身，不涉及任何滚动容器 */
+}
+
+/* 保存中禁用：沿用 bundle .settings-input:disabled 的 0.55 透明度即可。 */
+
+/* 保存提示：复用 bundle 自带的 settings-saved 样式，不新增全局样式。 */
+
