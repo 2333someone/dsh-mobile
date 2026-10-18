@@ -7947,7 +7947,7 @@ const MODELS_CENTER_HTML = `<script>
 
   function sheetHeader(title) {
     return '<div class="dm-mc-sheetHead"><span class="dm-mc-sheetTitle">' + esc(title) + '</span>' +
-      '<button class="dm-mc-btn" type="button" data-dm-mc-sheet-close="1">取消</button></div>';
+      '<button class="dm-mc-btn" type="button" aria-label="关闭" data-dm-mc-sheet-close="1">✕</button></div>';
   }
 
   function sheetFooter(label) {
@@ -7956,11 +7956,124 @@ const MODELS_CENTER_HTML = `<script>
       '</div>';
   }
 
+  // 每个页签自己的「取消 / 保存」：取消只是关面板，保存成功后由 settleSave 关面板并刷新。
+  function sheetFooterRow(label) {
+    return '<div class="dm-mc-sheetActions">' +
+      '<button class="dm-mc-btn" type="button" data-dm-mc-sheet-close="1">取消</button>' +
+      (label === null || label === undefined ? '' :
+        '<button class="dm-cfg-save" type="button" data-dm-mc-save="1"' + (busy ? ' disabled' : '') + '>' +
+        esc(busy ? '保存中…' : label) + '</button>') +
+      '</div>';
+  }
+
   function catalogChoices() {
     if (!data || !Array.isArray(data.catalog)) return [];
     var configured = {};
     (data.providers || []).forEach(function (item) { if (item.configured) configured[item.provider] = true; });
     return data.catalog.filter(function (item) { return !configured[item.provider]; });
+  }
+
+  // ── 添加面板：两段式切换（第三方目录 / 自定义 API）─────────────────────
+  // 两个页签共用一个面板：切走前把输入存进 sheet.draft[tab]，切回来再填回去，
+  // 所以「填一半 → 切走 → 切回」不会丢内容。
+  var ADD_THIRD_HINT = '从内置目录中选择 OpenAI、Anthropic、Kimi 等提供商，填入其 API 密钥即可使用。';
+  var ADD_CUSTOM_HINT = '连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。';
+
+  function addDraftOf(tab) {
+    if (!sheet || sheet.kind !== 'add') return {};
+    if (!sheet.draft || typeof sheet.draft !== 'object') sheet.draft = {};
+    if (!sheet.draft[tab] || typeof sheet.draft[tab] !== 'object') sheet.draft[tab] = {};
+    return sheet.draft[tab];
+  }
+
+  function captureAddDraft() {
+    if (!sheet || sheet.kind !== 'add') return;
+    if (sheet.tab === 'custom') {
+      var custom = addDraftOf('custom');
+      custom.route = readField('route');
+      custom.displayName = readField('displayName');
+      custom.api = readField('api');
+      custom.baseURL = readField('baseURL');
+      custom.key = readField('key');
+      custom.modelsText = readField('models');
+    } else if (sheet.picked) {
+      var third = addDraftOf('third');
+      third.displayName = readField('displayName');
+      third.api = readField('api');
+      third.baseURL = readField('baseURL');
+      third.key = readField('key');
+    }
+  }
+
+  function addSegHtml() {
+    var tab = sheet.tab === 'custom' ? 'custom' : 'third';
+    var seg = function (value, label) {
+      return '<button class="dm-mc-segBtn' + (tab === value ? ' is-on' : '') + '" type="button" role="tab"' +
+        ' aria-selected="' + (tab === value ? 'true' : 'false') + '" data-dm-mc-tab="' + value + '">' + label + '</button>';
+    };
+    return '<div class="dm-mc-seg" role="tablist" aria-label="添加方式">' +
+      seg('third', '第三方模型提供商') + seg('custom', '自定义模型 API') + '</div>';
+  }
+
+  function addThirdListHtml(query) {
+    var choices = catalogChoices().filter(function (item) {
+      return query === '' || String(item.provider + ' ' + (item.displayName || '')).toLowerCase().indexOf(query) >= 0;
+    });
+    var html = '<p class="dm-cfg-hint dm-mc-addHint">' + ADD_THIRD_HINT + '</p>' +
+      '<input class="dm-cfg-input dm-mc-search" type="search" placeholder="搜索提供商目录" data-dm-mc-catsearch="1" value="' + esc(query) + '">' +
+      '<div class="dm-mc-list" data-dm-mc-catlist="1">';
+    if (choices.length === 0) {
+      html += '<p class="dm-cfg-hint">' + (query === '' ? '目录中的提供商都已添加。' : '没有匹配的提供商。') + '</p>';
+    } else {
+      for (var i = 0; i < choices.length; i++) {
+        var entry = choices[i];
+        html += '<button class="dm-mc-listItem" type="button" data-dm-mc-cat="' + esc(entry.provider) + '">' +
+          '<span class="dm-mc-listName">' + esc(entry.displayName || entry.provider) + '</span>' +
+          '<span class="dm-mc-listSub">' + esc(entry.provider) + (entry.defaultBaseURL ? ' · ' + esc(entry.defaultBaseURL) : '') + '</span></button>';
+      }
+    }
+    html += '</div>' + sheetFooterRow(null);
+    return html;
+  }
+
+  function addThirdFormHtml() {
+    var third = addDraftOf('third');
+    var catalogEntry = null;
+    (data.catalog || []).forEach(function (entry) { if (entry.provider === sheet.picked) catalogEntry = entry; });
+    return '<p class="dm-cfg-hint dm-mc-addHint">' + ADD_THIRD_HINT + '</p>' +
+      '<div class="dm-mc-picked"><span class="dm-mc-pickedName">' +
+      esc((catalogEntry && (catalogEntry.displayName || catalogEntry.provider)) || sheet.picked) +
+      '</span><button class="dm-mc-btn" type="button" data-dm-mc-backlist="1">重新选择</button></div>' +
+      fieldHtml('Provider ID', 'route', sheet.picked, { disabled: true }) +
+      fieldHtml('显示名称', 'displayName', third.displayName || '', { placeholder: '留空使用默认名称' }) +
+      fieldHtml('API 地址', 'baseURL', third.baseURL || ((catalogEntry && catalogEntry.defaultBaseURL) || ''), { placeholder: 'https://gateway.example/v1', hint: '含 API 前缀；程序会按协议追加路径。' }) +
+      fieldHtml('API 协议', 'api', third.api || 'openai-completions', {
+        select: [
+          { value: 'openai-completions', label: 'openai-completions（OpenAI 兼容 /chat/completions）' },
+          { value: 'openai-responses', label: 'openai-responses（OpenAI Responses）' },
+          { value: 'anthropic-messages', label: 'anthropic-messages（Anthropic Messages）' },
+        ],
+      }) +
+      fieldHtml('API Key', 'key', third.key || '', { type: 'password', placeholder: '输入 API 密钥（可留空，之后用编辑补）' }) +
+      sheetErrorHtml() + sheetFooterRow('保存');
+  }
+
+  function addCustomFormHtml() {
+    var custom = addDraftOf('custom');
+    return '<p class="dm-cfg-hint dm-mc-addHint">' + ADD_CUSTOM_HINT + '</p>' +
+      fieldHtml('Provider ID', 'route', custom.route || '', { placeholder: '例如 my-gateway', hint: '以小写字母开头的标识，在请求中唯一标识该提供商，并用于派生凭据名。' }) +
+      fieldHtml('显示名称', 'displayName', custom.displayName || '', { placeholder: '留空使用默认名称' }) +
+      fieldHtml('API 地址', 'baseURL', custom.baseURL || '', { placeholder: 'https://gateway.example/v1' }) +
+      fieldHtml('API 协议', 'api', custom.api || 'openai-completions', {
+        select: [
+          { value: 'openai-completions', label: 'openai-completions（OpenAI 兼容 /chat/completions）' },
+          { value: 'openai-responses', label: 'openai-responses（OpenAI Responses）' },
+          { value: 'anthropic-messages', label: 'anthropic-messages（Anthropic Messages）' },
+        ],
+      }) +
+      fieldHtml('API Key', 'key', custom.key || '', { type: 'password', placeholder: '输入 API 密钥' }) +
+      fieldHtml('模型目录（每行一个，可写 id=显示名）', 'models', custom.modelsText || '', { textarea: true, rows: 5, placeholder: 'gpt-4o' }) +
+      sheetErrorHtml() + sheetFooterRow('创建提供商');
   }
 
   function renderSheet() {
@@ -7972,7 +8085,12 @@ const MODELS_CENTER_HTML = `<script>
     }
     host.hidden = false;
     var body = '';
-    if (sheet.kind === 'catalog') {
+    if (sheet.kind === 'add') {
+      body = sheetHeader('添加模型提供商') + addSegHtml() +
+        (sheet.tab === 'custom'
+          ? addCustomFormHtml()
+          : (sheet.picked ? addThirdFormHtml() : addThirdListHtml(String(sheet.query || '').toLowerCase())));
+    } else if (sheet.kind === 'catalog') {
       var query = String(sheet.query || '').toLowerCase();
       var choices = catalogChoices().filter(function (item) {
         if (query === '') return true;
@@ -8050,7 +8168,7 @@ const MODELS_CENTER_HTML = `<script>
             { value: 'max', label: 'max' },
           ],
         }) +
-        sheetErrorHtml() + sheetFooter('应用默认模型');
+        sheetErrorHtml() + sheetFooterRow('应用默认模型');
     } else if (sheet.kind === 'delete') {
       var target = providerOf(sheet.route);
       body = sheetHeader('删除 ' + (target ? target.displayName || target.provider : sheet.route) + '？') +
@@ -8177,6 +8295,30 @@ const MODELS_CENTER_HTML = `<script>
       action = 'setDefaultModel';
       payload = { action: action, provider: readField('provider'), model: readField('model'), reasoningEffort: readField('reasoningEffort') };
       if (payload.model === '') { sheet.error = '请选择模型'; renderSheet(); return; }
+    } else if (sheet.kind === 'add') {
+      captureAddDraft();
+      action = 'saveProvider';
+      if (sheet.tab === 'custom') {
+        var customDraft = addDraftOf('custom');
+        payload = {
+          action: action, mode: 'custom', route: String(customDraft.route || ''),
+          displayName: String(customDraft.displayName || ''), api: String(customDraft.api || ''),
+          baseURL: String(customDraft.baseURL || ''), models: parseModelsText(String(customDraft.modelsText || '')),
+          key: String(customDraft.key || ''),
+        };
+      } else if (sheet.picked) {
+        var thirdDraft = addDraftOf('third');
+        payload = {
+          action: action, mode: 'catalog', route: sheet.picked,
+          displayName: String(thirdDraft.displayName || ''), api: String(thirdDraft.api || ''),
+          baseURL: String(thirdDraft.baseURL || ''), key: String(thirdDraft.key || ''),
+        };
+        if (payload.baseURL === '') delete payload.baseURL;
+      } else {
+        sheet.error = '请先从目录中选择一个提供商，或切到「自定义模型 API」';
+        renderSheet();
+        return;
+      }
     } else if (sheet.kind === 'provider') {
       action = 'saveProvider';
       payload = {
@@ -8230,20 +8372,48 @@ const MODELS_CENTER_HTML = `<script>
     if (target.closest('[data-dm-mc-back]')) { event.preventDefault(); closeModelsPage(false); return; }
     if (target.closest('[data-dm-mc-refresh]') || target.closest('[data-dm-mc-retry]')) { event.preventDefault(); load(); return; }
     if (target.closest('[data-dm-mc-sheet-close]') || target.closest('[data-dm-mc-mask]')) { event.preventDefault(); closeSheet(); return; }
-    if (target.closest('[data-dm-mc-add]')) { event.preventDefault(); openForm = null; openSheet({ kind: 'catalog', query: '' }); return; }
-    if (target.closest('[data-dm-mc-custom]')) { event.preventDefault(); openSheet({ kind: 'provider', mode: 'custom', route: '', displayName: '', api: 'openai-completions', baseURL: '', modelsText: '', keyConfigured: false }); return; }
+    if (target.closest('[data-dm-mc-add]')) {
+      event.preventDefault();
+      openForm = null;
+      sheet = { kind: 'add', tab: 'third', query: '', error: null, picked: null, draft: { custom: {}, third: {} } };
+      renderSheet();
+      return;
+    }
+    var tabBtn = target.closest('[data-dm-mc-tab]');
+    if (tabBtn) {
+      event.preventDefault();
+      if (!sheet || sheet.kind !== 'add') return;
+      captureAddDraft();
+      sheet.tab = tabBtn.getAttribute('data-dm-mc-tab') === 'custom' ? 'custom' : 'third';
+      renderSheet();
+      return;
+    }
+    if (target.closest('[data-dm-mc-backlist]')) {
+      event.preventDefault();
+      if (sheet && sheet.kind === 'add') { captureAddDraft(); sheet.picked = null; renderSheet(); }
+      return;
+    }
+    if (target.closest('[data-dm-mc-custom]')) {
+      event.preventDefault();
+      if (sheet && sheet.kind === 'add') { captureAddDraft(); sheet.tab = 'custom'; renderSheet(); }
+      return;
+    }
     var cat = target.closest('[data-dm-mc-cat]');
     if (cat) {
       event.preventDefault();
+      if (!sheet || sheet.kind !== 'add') return;
+      captureAddDraft();
+      var pickedRoute = cat.getAttribute('data-dm-mc-cat');
       var catalogEntry = null;
-      (data.catalog || []).forEach(function (item) { if (item.provider === cat.getAttribute('data-dm-mc-cat')) catalogEntry = item; });
-      openSheet({
-        kind: 'provider', mode: 'catalog', route: cat.getAttribute('data-dm-mc-cat'),
-        displayName: catalogEntry && catalogEntry.displayName ? catalogEntry.displayName : '',
-        api: 'openai-completions',
-        baseURL: catalogEntry && catalogEntry.defaultBaseURL ? catalogEntry.defaultBaseURL : '',
-        modelsText: '', keyConfigured: false,
-      });
+      (data.catalog || []).forEach(function (item) { if (item.provider === pickedRoute) catalogEntry = item; });
+      sheet.tab = 'third';
+      sheet.picked = pickedRoute;
+      var thirdDraft = addDraftOf('third');
+      thirdDraft.displayName = catalogEntry && catalogEntry.displayName ? catalogEntry.displayName : pickedRoute;
+      thirdDraft.api = 'openai-completions';
+      thirdDraft.baseURL = catalogEntry && catalogEntry.defaultBaseURL ? catalogEntry.defaultBaseURL : '';
+      thirdDraft.key = '';
+      renderSheet();
       return;
     }
     var edit = target.closest('[data-dm-mc-edit]');
@@ -8294,7 +8464,7 @@ const MODELS_CENTER_HTML = `<script>
   PAGE.addEventListener('input', function (event) {
     var target = event.target;
     if (!target || !target.getAttribute) return;
-    if (target.getAttribute('data-dm-mc-catsearch') !== null && sheet && sheet.kind === 'catalog') {
+    if (target.getAttribute('data-dm-mc-catsearch') !== null && sheet && (sheet.kind === 'add' || sheet.kind === 'catalog')) {
       sheet.query = String(target.value || '');
       var list = PAGE.querySelector('[data-dm-mc-catlist]');
       if (!list) return;

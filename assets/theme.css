@@ -3233,3 +3233,49 @@ img.chat-msg-image {
     transition: none;
   }
 }
+
+/* 模型页「添加提供商」：第三方目录 / 自定义 API 两段式切换（段控件 + 已选行）。 */
+.dm-mc-seg {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg-elevated, #f1f1f4);
+}
+.dm-mc-segBtn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 9px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary, #4a4a5a);
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-mc-segBtn.is-on {
+  background: var(--bg-surface, #ffffff);
+  border-color: var(--border-subtle, #e6e6ea);
+  color: var(--text-primary, #1a1a2e);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+}
+.dm-mc-picked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.dm-mc-pickedName {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary, #1a1a2e);
+  overflow-wrap: anywhere;
+}
+.dm-mc-addHint {
+  margin-bottom: 10px;
+}
