@@ -3107,3 +3107,76 @@ html.dm-host-page-open body {
 .mobile-row-swipe-inner.swiped {
   transform: translateX(-76px) !important;
 }
+
+/* ── 设置页范围徽标：只压深前景色，保证 10px 小字可读 ─────────────────────
+   bundle 自带的 .settings-badge-* 背景/色相都保留（与设置页顶部图例一致），
+   但它两档前景色偏浅（实测对比度：本机 3.12:1、桌面端 2.39:1，深色主题下更糊）。
+   这里只改前景色：本机 3.12→4.50，桌面端 2.39→5.51。图例用同一批 class，
+   所以会一起变清楚，标签与图例仍然完全同色同规格。 */
+.settings-badge-phone {
+  color: #14804a !important;
+}
+.settings-badge-desktop {
+  color: #5b6370 !important;
+}
+
+/* ── 宿主唤醒卡（.chat-trigger）：图标放大到 18px + 文字左对齐 ─────────────
+   用户反馈：13px 文字旁的 15px 图标偏小，且图标相对文字偏高。
+   尺寸：把 .chat-trigger-icon 的盒子与本体一起提到 18px（之前统一成
+   16px 盒 / 1em=15px 的规则在文件更早的位置，这里用同特异性 + 靠后覆盖）。
+   垂直位置不在这里硬调 —— ICON_OPTICAL_ALIGN 会按「文字墨迹中心」算
+   translateY，尺寸变了它下一帧会自己重新对齐。 */
+.chat-trigger-icon {
+  font-size: 18px !important;
+  width: 18px !important;
+  height: 18px !important;
+}
+.chat-trigger-icon > svg,
+.chat-trigger-icon > .dm-icon {
+  width: 18px !important;
+  height: 18px !important;
+}
+/* 标题与说明左对齐、成行：bundle 的 .chat-trigger-head 是 flex，
+   标题原为 flex:none（长标题不换行、会撑出去），这里允许它在剩余宽度内收缩换行，
+   并且显式左对齐；说明区（note/text）同样左对齐。 */
+.chat-trigger-title {
+  flex: 0 1 auto !important;
+  min-width: 0;
+  text-align: left !important;
+  line-height: 1.4;
+}
+.chat-trigger-note,
+.chat-trigger-text {
+  text-align: left !important;
+}
+
+/* 唤醒卡展开体与标题左边缘对齐：bundle 给 .chat-trigger-body 的 padding-left 是 40px
+   （按 15px 图标算的 16+15+9），图标提到 18px 后标题列从 44px 起 —— 这里同步到 44px，
+   让「标题 / 说明 / 正文」从同一列起排，不再差 4px。 */
+.chat-trigger-body {
+  padding-left: 44px !important;
+}
+
+/* 设置行右侧 value 过长时（如通知行「权限被拒绝，请在浏览器设置中开启」）会把
+   左侧 .card-main 挤到 0 宽 —— 标题会和范围标签一起被挤没（实测 titleText 宽 0）。
+   bundle 的网格第三列是 auto（按 max-content 固定），光给 value 设 max-width 管不到它，
+   所以直接把第三列限成最多 46% 行宽、内容省略号收尾，保证
+   「图标 + 标题 + 范围标签」始终可见。 */
+.settings-row {
+  /* fit-content(46%)：短 value（跟随系统/标准）仍按内容宽度，只有超长的才被限到 46%，
+     这样不会把中间的标题/描述列压窄（minmax(0,46%) 会被「maximize tracks」撑满 46%）。 */
+  /* 第二列给 84px 下限：320px 窄屏上「标题 + 范围标签」也必须放得下（实测 320 时
+     1fr 会被长 value 压到 56px，标题只剩 7px）。第三列 fit-content(46%)：短 value 按
+     内容宽度、超长的才限到 46%，空间不够时它先收缩。 */
+  grid-template-columns: 48px minmax(84px, 1fr) fit-content(46%) !important;
+}
+.settings-row .card-action {
+  min-width: 0;
+  overflow: hidden;
+}
+.settings-row .settings-rowValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
