@@ -4294,7 +4294,8 @@ const PRESET_STATUS_HTML = `<script>
  *
  * 需求：模型生成中要能看到最新内容，但**不能和用户抢滚动条**。
  *   · 只在「正在生成」窗口内跟随：旁听 /m/api/events.mux，见到
- *     turn/start 或 assistant/chunk 置 generating，见到 turn/end 复位；
+ *     **只有 text-delta（结论正文）才开启跟随**，reasoning-delta（思考）不跟随；
+ *     turn/start 与 turn/end 复位；
  *   · 用户往上滚（离底 > 120px）就停跟随，滚回底部附近（< 80px）恢复；
  *   · 切会话 / 加载历史不动滚动位置（那时没有生成中的帧）；
  *   · 只改 .chat-scroll 的 scrollTop，**不移动任何 React 节点**、不碰整页滚动。
@@ -4307,7 +4308,9 @@ const CHAT_AUTOSCROLL_HTML = `<script>
 
     var FOLLOW_STOP = 120;   // 离底超过这个距离：用户在看上面，停止跟随
     var FOLLOW_RESUME = 80;  // 离底小于这个距离：认为回到末尾，恢复跟随
-    var generating = false;
+    // 只在**结论正文**流式输出时跟随：宿主的流式帧里 reasoning-delta 是思考、
+    // text-delta 才是最终正文。思考/工具阶段完全不干预，用户可以自由上下翻记录。
+    var answering = false;
     var follow = true;
     var raf = 0;
     var lastTop = -1;        // 上一次由本脚本钉住时的 scrollTop
@@ -4317,7 +4320,7 @@ const CHAT_AUTOSCROLL_HTML = `<script>
 
     function tick() {
       raf = 0;
-      if (!generating || !follow) return;
+      if (!answering || !follow) return;
       var el = scroller();
       if (!el) return;
       var d = distance(el);
@@ -4360,12 +4363,23 @@ const CHAT_AUTOSCROLL_HTML = `<script>
                 var raw = ev && ev.data ? String(ev.data) : '';
                 if (raw === '') return;
                 // 先子串预判，避免每个 chunk 都 JSON.parse。
-                if (raw.indexOf('turn/start') >= 0 || raw.indexOf('assistant/chunk') >= 0) {
-                  generating = true;
+                if (raw.indexOf('turn/start') >= 0) {
+                  // 新的一轮：进入思考/工具阶段，不跟随，也不动滚动位置。
+                  answering = false;
+                  follow = true;
+                } else if (raw.indexOf('text-delta') >= 0) {
+                  // 结论正文开始流式：第一次到达时贴底一次，之后持续跟随。
+                  if (!answering) {
+                    answering = true;
+                    follow = true;
+                    var el0 = scroller();
+                    if (el0) el0.scrollTop = el0.scrollHeight;
+                  }
                   schedule();
                 } else if (raw.indexOf('turn/end') >= 0) {
-                  generating = false;
+                  answering = false;
                 }
+                // reasoning-delta（思考过程）刻意不处理：那时不该自动滚动。
               });
             }
           } catch (e) {}
@@ -4380,7 +4394,7 @@ const CHAT_AUTOSCROLL_HTML = `<script>
     } catch (e) {}
 
     // 兜底：某些情况下 SSE 旁听不到（重连/换实现），只要还标记着生成中就继续跟。
-    setInterval(function () { if (generating) schedule(); }, 900);
+    setInterval(function () { if (answering) schedule(); }, 900);
   } catch (e) {}
 })();
 </script>`
