@@ -7732,6 +7732,13 @@ export function apply(ctx, config) {
     return retry.events.length > 0 ? retry : direct
   }
 
+  /**
+   * readHistoryAs：取一页历史，并在「加载更早」时把窗口对齐到 turn 起点。
+   *
+   * `controller.page({ beforeSeq, maxMessages })` 是按消息/条数切窗的 —— 它不认识 turn
+   * 边界，所以「加载更早」取到的窗口经常落在某一轮的中间（首条是 assistant/message，
+   * 甚至落在一段 reasoning 后面），手机上渲染出来就是顶部半截思考折叠。
+   */
   async function readHistoryAs(beforeSeq, maxMessages, address) {
     const controller = sc()
     const signal = new AbortController().signal
@@ -7750,19 +7757,85 @@ export function apply(ctx, config) {
       cursor = undefined
     }
     if (cursor === undefined) return { events: [], hasMore: false }
-    const page = await controller.page(
-      {
-        address,
-        throughSeq: cursor,
-        ...(beforeSeq === undefined ? {} : { beforeSeq }),
-        maxMessages: Math.max(1, Math.min(Number(maxMessages) || 50, 200)),
-      },
-      signal,
-    )
-    const events = (page.records || []).map((r) => ({ event: r.event }))
+
+    const limit = Math.max(1, Math.min(Number(maxMessages) || 50, 200))
+    const pageWindow = async (seq) => {
+      const page = await controller.page(
+        {
+          address,
+          throughSeq: cursor,
+          ...(seq === undefined ? {} : { beforeSeq: seq }),
+          maxMessages: limit,
+        },
+        signal,
+      )
+      return { records: Array.isArray(page.records) ? page.records : [], hasMore: !!page.hasMore }
+    }
+
+    const toEvents = (records) => records.map((r) => ({ event: r.event }))
+    const isUserMessage = (record) => {
+      const event = record && record.event
+      return event !== null && typeof event === 'object' && event.type === 'user/message'
+    }
+    const firstUserIndex = (records) => {
+      for (let index = 0; index < records.length; index += 1) {
+        if (isUserMessage(records[index])) return index
+      }
+      return -1
+    }
+    const firstSeqOf = (records) => {
+      for (const record of records) {
+        const event = record && record.event
+        if (event !== null && typeof event === 'object' && typeof event.seq === 'number' && Number.isFinite(event.seq)) {
+          return event.seq
+        }
+      }
+      return undefined
+    }
+
+    const first = await pageWindow(beforeSeq)
+    // 首屏（无 beforeSeq）与其他读取路径一律保持原样：只取最新一页，不做任何裁剪。
+    if (beforeSeq === undefined) {
+      return {
+        events: toEvents(first.records),
+        hasMore: first.hasMore,
+        ...(projections ? { projections } : {}),
+      }
+    }
+
+    // ── 「加载更早」：把窗口对齐到 turn 起点（user/message）───────────────────
+    // 宿主一页 ≈ 一两百条事件，正常情况下一页里就有 user/message，从它开始返回即可。
+    // 若整页都属于同一个更早的 turn（一条 user/message 都没有），就用本页最早的 seq
+    // 再往前取一页并合并后重试 —— 最多 3 页，避免极端会话把一次点击拖成很多次宿主查询。
+    let records = first.records
+    let hasMore = first.hasMore
+    let found = firstUserIndex(records)
+    let rounds = 0
+    while (found < 0 && rounds < 2) {
+      const earliest = firstSeqOf(records)
+      if (!hasMore || earliest === undefined || records.length === 0) break
+      const older = await pageWindow(earliest)
+      if (older.records.length === 0) {
+        hasMore = older.hasMore
+        break
+      }
+      records = [...older.records, ...records]
+      hasMore = older.hasMore
+      rounds += 1
+      found = firstUserIndex(records)
+    }
+    if (found > 0) {
+      // 丢掉窗口里第一个不完整 turn 的全部事件，从它的 user/message 开始。
+      records = records.slice(found)
+    } else if (found < 0) {
+      // 单个 turn 的事件超过 3 页：本页整体不可用，交回空窗口 + hasMore，让前端继续往前取。
+      records = []
+      hasMore = true
+    }
+
     return {
-      events,
-      hasMore: !!page.hasMore,
+      events: toEvents(records),
+      hasMore,
       ...(projections ? { projections } : {}),
     }
   }
