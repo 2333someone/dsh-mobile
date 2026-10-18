@@ -2124,3 +2124,205 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
   margin-bottom: 8px;
 }
 
+/* ── 工作区页左上角「插件」「自动化」入口 ─────────────────────────────────
+   齿轮由本文件上面的规则移到 left:4px（48×48，absolute、top:50%）。这里在它右边
+   放两个同规格按钮（left:52px / left:100px，同样 48×48、同样 .mobile-iconbtn、
+   同样 top:50% + translateY(-50%)），视觉与齿轮完全一致。
+
+   两个按钮由 index.js 的 HOST_PAGES_HTML 注入，只有工作区列表页（顶栏里存在
+   aria-label="设置" 的齿轮）才显示。它们不塞进 React 管的 .mobile-headerSlot-right，
+   而是作为 .mobile-header 的直接子节点绝对定位，避免参与 React 的子节点对账；
+   页面切换由脚本用 .dm-header-extras 类统一开关。
+
+   header 原本是 grid `48px | minmax(0,1fr) | auto`，首个 48px 列已经被齿轮占了
+   但它是绝对定位、不占流。两个按钮各 48px = 96px，所以把首列扩到 148px，标题
+   （第二列）就会自动在「按钮右侧 → 搜索按钮左侧」这段真实空白里重新居中：
+   实测 320/360/390 宽都不压标题文字（390 宽标题字形原本 144.5~195.5，扩列后
+   居中到 194.5~245.5；320 宽时 158.5~209.5，仍在第二列内）。 */
+.mobile-header.dm-header-extras {
+  grid-template-columns: 148px minmax(0, 1fr) auto !important;
+}
+.dm-header-btn {
+  display: none !important;
+  position: absolute !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  z-index: 2;
+}
+.mobile-header.dm-header-extras .dm-header-btn {
+  display: flex !important;
+}
+#dm-plugins-btn {
+  left: 52px !important;
+}
+#dm-automation-btn {
+  left: 100px !important;
+}
+.mobile-header.dm-header-extras .mobile-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 两个宿主信息页（插件 / 自动化）───────────────────────────────────────
+   自建全屏 overlay：不碰 bundle 的路由和 React 树，pushState 只写入 #/dm-*，
+   bundle 不读 hash，所以不会干扰它。页面头（返回 / 标题 / 刷新）与工作区顶栏
+   同高，配色全部取 bundle 的 design token，深浅色主题自动跟随。 */
+.dm-page {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page, #f5f5f7);
+  color: var(--text-primary, #1a1a2e);
+}
+.dm-page[hidden] {
+  display: none !important;
+}
+.dm-page-header {
+  flex: none;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  padding-top: calc(4px + env(safe-area-inset-top, 0px));
+  background: var(--bg-page, #f5f5f7);
+  border-bottom: 1px solid var(--border-subtle, #f0f0f2);
+}
+.dm-page-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 25.5px;
+  text-align: center;
+  color: var(--text-primary, #1a1a2e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-page-iconbtn {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary, #4a4a5a);
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-page-iconbtn:active {
+  background: var(--bg-elevated, #f1f1f4);
+}
+.dm-page-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 12px 16px calc(28px + env(safe-area-inset-bottom, 0px));
+}
+.dm-page-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 10px;
+  font-size: 13px;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-page-row {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-radius: 12px;
+  background: var(--bg-surface, #ffffff);
+}
+.dm-page-rowTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dm-page-rowName {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary, #1a1a2e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-page-badge {
+  flex: none;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+}
+.dm-page-badge.is-on {
+  color: #1a7f37;
+  background: rgba(34, 197, 94, 0.12);
+}
+.dm-page-badge.is-off {
+  color: var(--text-tertiary, #6a6a7a);
+  background: var(--bg-elevated, #f1f1f4);
+}
+.dm-page-rowSub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-tertiary, #6a6a7a);
+  word-break: break-all;
+}
+.dm-page-rowMeta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary, #4a4a5a);
+}
+.dm-page-rowDesc {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #4a4a5a);
+}
+.dm-page-state {
+  padding: 48px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-page-stateTitle {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-secondary, #4a4a5a);
+}
+.dm-page-stateText {
+  margin: 0;
+  line-height: 1.6;
+}
+.dm-page-stateCode {
+  margin: 10px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-quaternary, #9a9aaa);
+}
+.dm-page-retry {
+  margin-top: 16px;
+  padding: 8px 18px;
+  border: 1px solid var(--border-default, #e2e4e8);
+  border-radius: 999px;
+  background: var(--bg-surface, #ffffff);
+  color: var(--accent, #6366f1);
+  font-size: 14px;
+}
+html.dm-host-page-open,
+html.dm-host-page-open body {
+  overflow: hidden !important;
+}
