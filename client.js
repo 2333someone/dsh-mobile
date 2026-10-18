@@ -131,6 +131,77 @@ window.__ModuleLoader__.load({
       return `${String(m).padStart(1, '0')}:${String(s % 60).padStart(2, '0')}`
     }
 
+    /**
+     * UA → 「平台 · 浏览器」+ 能拿到的型号。与宿主端 describeDeviceUA 同一套规则：
+     * 华为 ArkWeb 的 UA 把型号写死成 "Phone"（只有 OpenHarmony/HarmonyOS + 浏览器），
+     * 夸克等 Android UA 常带型号（如 PLQ110），Windows/iOS 则只能给平台。
+     */
+    function describeDeviceUA(userAgent) {
+      const ua = String(userAgent || '')
+      const grab = (re) => {
+        const hit = re.exec(ua)
+        return hit && typeof hit[1] === 'string' ? hit[1] : ''
+      }
+      let platform = ''
+      if (/OpenHarmony|HarmonyOS/i.test(ua)) {
+        const v = grab(/OpenHarmony\s+([\d.]+)/i) || grab(/HarmonyOS\s+([\d.]+)/i)
+        platform = v === '' ? 'HarmonyOS' : 'HarmonyOS ' + v
+      } else if (/Android/i.test(ua)) {
+        const v = grab(/Android\s+([\d.]+)/i)
+        platform = v === '' ? 'Android' : 'Android ' + v
+      } else if (/iPhone|iPad|iPod/i.test(ua)) {
+        platform = 'iOS'
+      } else if (/Windows NT 10/i.test(ua)) {
+        platform = 'Windows'
+      } else if (/Macintosh|Mac OS X/i.test(ua)) {
+        platform = 'macOS'
+      } else if (/Linux/i.test(ua)) {
+        platform = 'Linux'
+      }
+      let browser = ''
+      const browsers = [
+        [/HuaweiBrowser\/([\d.]+)/i, '华为浏览器'],
+        [/Quark\/([\d.]+)/i, '夸克'],
+        [/MicroMessenger\/([\d.]+)/i, '微信'],
+        [/Edg\/([\d.]+)/i, 'Edge'],
+        [/Firefox\/([\d.]+)/i, 'Firefox'],
+        [/Chrome\/([\d.]+)/i, 'Chrome'],
+        [/Version\/([\d.]+)[\s\S]*Safari/i, 'Safari'],
+      ]
+      for (const [re, name] of browsers) {
+        const v = grab(re)
+        if (v !== '') {
+          browser = name + ' ' + v.split('.')[0]
+          break
+        }
+      }
+      let model = ''
+      if (!/OpenHarmony|HarmonyOS/i.test(ua)) {
+        if (/iPhone/i.test(ua)) model = 'iPhone'
+        else if (/iPad/i.test(ua)) model = 'iPad'
+        else if (/Android/i.test(ua)) {
+          const hit = /Android[^;)]*;\s*(?:[A-Za-z]{2}-[A-Za-z]{2};\s*)?([^;)]+?)\s*(?:Build\/|\))/i.exec(ua)
+          const token = hit && typeof hit[1] === 'string' ? hit[1].replace(/^U;\s*/i, '').trim() : ''
+          if (token.length >= 2 && !/^wv$/i.test(token) && !/^Android$/i.test(token)) model = token.slice(0, 40)
+        }
+      }
+      return { model, platform, browser, label: [platform, browser].filter((s) => s !== '').join(' · ') }
+    }
+
+    /** 已配对设备 → 列表两行：手动改名优先，其次型号 / 「平台 · 浏览器」。 */
+    function describeDevice(d) {
+      const info = describeDeviceUA(d.userAgent)
+      const model = typeof d.model === 'string' && d.model !== '' ? d.model : info.model
+      const label = typeof d.label === 'string' && d.label !== '' ? d.label : info.label
+      const name = typeof d.name === 'string' && d.name !== '' && d.name !== '手机设备' ? d.name : ''
+      const title = name || model || label || '设备'
+      const bits = []
+      if (model !== '' && model !== title) bits.push(model)
+      if (label !== '' && label !== title) bits.push(label)
+      bits.push(d.deviceId, '最近活跃 ' + fmt(d.lastSeenAt))
+      return { title, detail: bits.join(' · ') }
+    }
+
     async function copyText(text) {
       try {
         if (navigator.clipboard && window.isSecureContext) {
@@ -297,11 +368,12 @@ window.__ModuleLoader__.load({
           h('p', { className: 'dm-title' }, `已配对设备（${devices.length}）`),
           devices.length === 0
             ? h('p', { className: 'dm-muted', style: { marginTop: 8 } }, '还没有设备。用上面的配对码在手机上配对后，这里会显示。')
-            : devices.map((d, i) =>
-                h('div', { key: d.deviceId, className: 'dm-row', style: { animationDelay: `${i * 40}ms` } },
+            : devices.map((d, i) => {
+                const desc = describeDevice(d)
+                return h('div', { key: d.deviceId, className: 'dm-row', style: { animationDelay: `${i * 40}ms` } },
                   h('div', null,
-                    h('div', { className: 'dm-name' }, d.name || '设备'),
-                    h('div', { className: 'dm-detail' }, `${d.deviceId} · 最近活跃 ${fmt(d.lastSeenAt)}`),
+                    h('div', { className: 'dm-name', title: d.userAgent || '' }, desc.title),
+                    h('div', { className: 'dm-detail' }, desc.detail),
                   ),
                   h('button', {
                     type: 'button',
@@ -309,8 +381,8 @@ window.__ModuleLoader__.load({
                     'data-confirm': confirmRevoke === d.deviceId ? 'true' : 'false',
                     onClick: () => revoke(d.deviceId),
                   }, confirmRevoke === d.deviceId ? '确认撤销？' : '撤销'),
-                ),
-              ),
+                )
+              }),
         ),
       )
     }

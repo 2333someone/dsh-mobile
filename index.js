@@ -4560,6 +4560,56 @@ const PRESET_STATUS_HTML = `<script>
  *   · 切会话 / 加载历史不动滚动位置（那时没有生成中的帧）；
  *   · 只改 .chat-scroll 的 scrollTop，**不移动任何 React 节点**、不碰整页滚动。
  */
+/**
+ * 设备型号上报（手机端页面加载时执行一次）。
+ *
+ * 为什么要客户端上报：UA 里不一定有型号（华为 ArkWeb 写死 "Phone"）。
+ * Chromium 的高熵 Client Hints 能给出真实型号（`navigator.userAgentData
+ * .getHighEntropyValues(['model','platform','platformVersion'])`），但它只在
+ * 页面里拿得到，必须由手机自己 POST 回宿主。
+ *
+ * 宿主侧 mobile.reportDevice 会把它写进设备表（并顺手把默认名「手机设备」
+ * 换成型号/平台标签）；拿不到 model 的浏览器留着 UA，由宿主解析出
+ * 「平台 · 浏览器」兜底，所以不会白跑。
+ */
+const DEVICE_INFO_HTML = `<script>
+(function () {
+  try {
+    var send = function (info) {
+      try {
+        fetch('/m/api/mobile.reportDevice', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            type: 'client-request',
+            rpcId: 'dev-' + String(Date.now()),
+            method: 'mobile.reportDevice',
+            payload: info
+          })
+        }).catch(function () {});
+      } catch (e) {}
+    };
+    var ua = typeof navigator === 'object' && typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
+    var data = typeof navigator === 'object' ? navigator.userAgentData : null;
+    if (data && typeof data.getHighEntropyValues === 'function') {
+      data.getHighEntropyValues(['model', 'platform', 'platformVersion']).then(function (v) {
+        send({
+          model: v && typeof v.model === 'string' ? v.model : '',
+          platform: v && typeof v.platform === 'string' ? v.platform : '',
+          platformVersion: v && typeof v.platformVersion === 'string' ? v.platformVersion : '',
+          ua: ua
+        });
+      }, function () {
+        send({ ua: ua });
+      });
+    } else {
+      send({ ua: ua });
+    }
+  } catch (e) {}
+})();
+</script>`
+
 const CHAT_AUTOSCROLL_HTML = `<script>
 (function () {
   try {
@@ -4950,6 +5000,7 @@ function mobilePageHtml() {
     CHAT_AUTOSCROLL_HTML,
     ICON_OPTICAL_ALIGN_HTML,
     USAGE_INLINE_HTML,
+    DEVICE_INFO_HTML,
     '</body>',
     '</html>',
   ].join('')
@@ -5330,6 +5381,69 @@ export function apply(ctx, config) {
     return String(cfg.pairCode == null ? '' : cfg.pairCode).trim()
   }
 
+  /**
+   * 从 UA 里尽量认出「平台 · 浏览器」，顺带给出能拿到的型号。
+   *
+   * UA 里能稳定读到平台（Android / HarmonyOS / iOS / Windows / macOS）和浏览器
+   * （华为浏览器 / 夸克 / Edge / Chrome / Safari…），部分 Android UA 还带型号
+   * （例如夸克：`Android 16; zh-CN; PLQ110 Build/…`）。
+   * 但华为 ArkWeb 的 UA 把型号写死成 `Phone`（`(Phone; OpenHarmony 7.0; Android 10)`），
+   * 拿不到真实型号 —— 这种就只能显示「HarmonyOS x · 华为浏览器 y」，
+   * 精确型号靠手机端上报的 Client Hints（navigator.userAgentData.model）。
+   */
+  function describeDeviceUA(userAgent) {
+    const ua = String(userAgent || '')
+    const grab = (re) => {
+      const hit = re.exec(ua)
+      return hit && typeof hit[1] === 'string' ? hit[1] : ''
+    }
+    let platform = ''
+    if (/OpenHarmony|HarmonyOS/i.test(ua)) {
+      const v = grab(/OpenHarmony\s+([\d.]+)/i) || grab(/HarmonyOS\s+([\d.]+)/i)
+      platform = v === '' ? 'HarmonyOS' : 'HarmonyOS ' + v
+    } else if (/Android/i.test(ua)) {
+      const v = grab(/Android\s+([\d.]+)/i)
+      platform = v === '' ? 'Android' : 'Android ' + v
+    } else if (/iPhone|iPad|iPod/i.test(ua)) {
+      platform = 'iOS'
+    } else if (/Windows NT 10/i.test(ua)) {
+      platform = 'Windows'
+    } else if (/Macintosh|Mac OS X/i.test(ua)) {
+      platform = 'macOS'
+    } else if (/Linux/i.test(ua)) {
+      platform = 'Linux'
+    }
+    let browser = ''
+    const browsers = [
+      [/HuaweiBrowser\/([\d.]+)/i, '华为浏览器'],
+      [/Quark\/([\d.]+)/i, '夸克'],
+      [/MicroMessenger\/([\d.]+)/i, '微信'],
+      [/Edg\/([\d.]+)/i, 'Edge'],
+      [/Firefox\/([\d.]+)/i, 'Firefox'],
+      [/Chrome\/([\d.]+)/i, 'Chrome'],
+      [/Version\/([\d.]+)[\s\S]*Safari/i, 'Safari'],
+    ]
+    for (const [re, name] of browsers) {
+      const v = grab(re)
+      if (v !== '') {
+        browser = name + ' ' + v.split('.')[0]
+        break
+      }
+    }
+    let model = ''
+    if (!/OpenHarmony|HarmonyOS/i.test(ua)) {
+      if (/iPhone/i.test(ua)) model = 'iPhone'
+      else if (/iPad/i.test(ua)) model = 'iPad'
+      else if (/Android/i.test(ua)) {
+        const hit = /Android[^;)]*;\s*(?:[A-Za-z]{2}-[A-Za-z]{2};\s*)?([^;)]+?)\s*(?:Build\/|\))/i.exec(ua)
+        const token = hit && typeof hit[1] === 'string' ? hit[1].replace(/^U;\s*/i, '').trim() : ''
+        if (token.length >= 2 && !/^wv$/i.test(token) && !/^Android$/i.test(token)) model = token.slice(0, 40)
+      }
+    }
+    const label = [platform, browser].filter((s) => s !== '').join(' · ')
+    return { model, platform, browser, label }
+  }
+
   function createDevice(userAgent) {
     if (devices.size >= MAX_DEVICES) return null
     const now = Date.now()
@@ -5431,9 +5545,20 @@ export function apply(ctx, config) {
 
   function status(req, res) {
     const now = Date.now()
-    const devicesView = [...devices.entries()].map(([deviceId, d]) => ({
-      deviceId, name: d.name || '设备', createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, userAgent: d.userAgent || '',
-    }))
+    const devicesView = [...devices.entries()].map(([deviceId, d]) => {
+      const info = describeDeviceUA(d.userAgent)
+      return {
+        deviceId,
+        name: d.name || '设备',
+        createdAt: d.createdAt,
+        lastSeenAt: d.lastSeenAt,
+        userAgent: d.userAgent || '',
+        // 手机端上报过 Client Hints 就优先用它，否则用 UA 解析出来的兜底标签。
+        model: d.model || info.model || '',
+        label: info.label || '',
+        platform: d.platform || info.platform || '',
+      }
+    })
     const fixed = fixedPairCode()
     const pending = fixed !== ''
       ? { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
@@ -6230,15 +6355,53 @@ export function apply(ctx, config) {
       }
       // ── 设备管理 ──
       case 'pair.devices': {
-        const list = [...devices.entries()].map(([deviceId, d]) => ({
-          deviceId,
-          name: d.name || '设备',
-          createdAt: d.createdAt,
-          lastSeenAt: d.lastSeenAt,
-          userAgent: d.userAgent || '',
-          primary: d.primary === true,
-        }))
+        const list = [...devices.entries()].map(([deviceId, d]) => {
+          const info = describeDeviceUA(d.userAgent)
+          return {
+            deviceId,
+            name: d.name || '设备',
+            createdAt: d.createdAt,
+            lastSeenAt: d.lastSeenAt,
+            userAgent: d.userAgent || '',
+            model: d.model || info.model || '',
+            label: info.label || '',
+            platform: d.platform || info.platform || '',
+            primary: d.primary === true,
+          }
+        })
         return { ok: true, value: { devices: list, maxDevices: MAX_DEVICES } }
+      }
+      case 'mobile.reportDevice': {
+        // 手机端页面加载时上报 Client Hints（navigator.userAgentData 的
+        // model / platform / platformVersion）与 UA。宿主记进设备表：
+        //   · 设备管理第一行显示真实型号（有的话）；
+        //   · 拿不到型号的浏览器（鸿蒙 UA 写死 "Phone"）仍由 UA 兜底出
+        //     「平台 · 浏览器」，不会又退回「手机设备」；
+        //   · 仍是默认名「手机设备」时，顺手把 name 换成型号/标签，
+        //     手机端自己的设备面板也能看到（bundle 只读 name）。
+        const deviceId = rpcContext && typeof rpcContext.deviceId === 'string' ? rpcContext.deviceId : ''
+        const target = devices.get(deviceId)
+        if (!target) return { ok: false, error: { code: 'not-found', message: '设备不存在' } }
+        const before = JSON.stringify([target.name, target.model, target.platform, target.platformVersion, target.userAgent])
+        const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
+        const ua = text(payload?.ua, 180)
+        if (ua !== '') target.userAgent = ua
+        const info = describeDeviceUA(ua !== '' ? ua : target.userAgent)
+        const model = text(payload?.model, 60) || info.model
+        const platform = text(payload?.platform, 40)
+        const platformVersion = text(payload?.platformVersion, 20)
+        if (model !== '') target.model = model
+        if (platform !== '') target.platform = platform
+        if (platformVersion !== '') target.platformVersion = platformVersion
+        if (target.name === undefined || target.name === '' || target.name === '手机设备') {
+          const autoName = model !== '' ? model : info.label
+          if (autoName !== '') target.name = autoName.slice(0, 40)
+        }
+        // 每次开页面都上报一次；内容没变就不落盘（避免无意义的写文件）。
+        if (JSON.stringify([target.name, target.model, target.platform, target.platformVersion, target.userAgent]) !== before) {
+          persistDevices(cfg.devicesFile, devices)
+        }
+        return { ok: true, value: { ok: true } }
       }
       case 'pair.revoke': {
         const removed = devices.delete(String(payload.deviceId || ''))
