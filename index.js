@@ -59,6 +59,28 @@ const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
 const WHALE_URL = '/m/whale.png'
 // 浏览器推送能力自检页（只读诊断，不配对/不写设备/不订阅）。
 const PUSH_CHECK_URL = '/m/push-check'
+// ── 只读截图路由：GET /m/shot/<file> → ~/.dsh/dsh-mobile-shots/<file> ────────
+// 手机网页端看对话时，主机本地路径（C:\...）的图片必然裂图 —— 手机浏览器访问不到
+// 主机磁盘。这里把主机上的截图目录只读地映射成一个 https 绝对 URL：
+//   https://<公网域名>:45632/m/shot/<file>.png
+// 安全取舍见 serveShot() 的注释（匿名只读 + 单层文件名白名单 + 扩展名白名单）。
+const SHOT_PREFIX = '/m/shot'
+// 只允许单层文件名：不含 / \ : % 与空白，天然挡住目录穿越（.. 另做显式检查）。
+const SHOT_NAME = /^[A-Za-z0-9._-]+$/
+const SHOT_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+}
+const SHOT_DIR = join(homedir(), '.dsh', 'dsh-mobile-shots')
+
+function ensureShotDir() {
+  try {
+    mkdirSync(SHOT_DIR, { recursive: true })
+  } catch {}
+}
 const TOKEN_TTL_MS = 5 * 60 * 1000
 const IDLE_EXPIRE_MS = 7 * 24 * 3600 * 1000
 const SWEEP_INTERVAL_MS = 60 * 1000
@@ -13971,6 +13993,78 @@ export function apply(ctx, config) {
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
+  // ── 只读截图路由：GET|HEAD /m/shot/<file> ───────────────────────────────────
+  // 截图落在 ~/.dsh/dsh-mobile-shots/（唯一写入方是宿主侧脚本/人工），这里只读。
+  //
+  // 为什么允许匿名（不校验配对 cookie）：
+  //   · 手机里的 <img src> 是浏览器原生图片加载，不会带我们的 Cookie/Authorization；
+  //     一旦要求配对，这个路由在手机上就永远是 401，等于没做。
+  //   · 代价被三重限制兜住：只读、只认单层文件名、只认 5 种图片扩展名 —— 暴露面是
+  //     「这个目录里的图片」，不是「任意文件」。截图内容是主动贴进对话的界面证据，
+  //     不含密钥；真正的写/敏感操作仍全部走 /m/api 的配对鉴权。
+  //
+  // 防目录穿越（多层，任何一层失手都还有下一层）：
+  //   1. new URL(...).pathname 已规范化 /../；%2f 这类编码保留在原样里；
+  //   2. 解码后必须整体匹配 ^[A-Za-z0-9._-]+$ —— 含 / \ : % 一律 400；
+  //   3. 显式拒绝 "."、".."；
+  //   4. resolve(join(SHOT_DIR, name)) 后再用 relative(SHOT_DIR, full) 复核，
+  //      落点不在目录内（以 .. 开头或成绝对路径）再 400。
+  function serveShot(req, res, path) {
+    const method = (req.method || 'GET').toUpperCase()
+    if (method !== 'GET' && method !== 'HEAD') {
+      res.setHeader('Allow', 'GET, HEAD')
+      return sendJson(res, 405, { ok: false, error: 'method not allowed' })
+    }
+    const raw = path.length > SHOT_PREFIX.length ? path.slice(SHOT_PREFIX.length + 1) : ''
+    let name = raw
+    try {
+      name = decodeURIComponent(raw)
+    } catch {
+      return sendJson(res, 400, { ok: false, error: 'bad name' })
+    }
+    if (name === '' || name === '.' || name === '..' || !SHOT_NAME.test(name)) {
+      return sendJson(res, 400, { ok: false, error: 'bad name' })
+    }
+    const type = SHOT_TYPES[extname(name).toLowerCase()]
+    if (type === undefined) return sendJson(res, 400, { ok: false, error: 'unsupported type' })
+    ensureShotDir()
+    const root = resolvePath(SHOT_DIR)
+    const full = resolvePath(join(root, name))
+    const rel = relativePath(root, full)
+    if (rel === '' || rel.startsWith('..') || isAbsolutePath(rel)) {
+      return sendJson(res, 400, { ok: false, error: 'bad name' })
+    }
+    let info
+    try {
+      info = statSync(full)
+    } catch {
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    if (!info.isFile()) return sendJson(res, 404, { ok: false, error: 'not found' })
+    // 符号链接防线：目录里若有人放了 evil.png → C:\...\secret，单靠文件名白名单
+    // 挡不住。realpath 之后再判一次落点，越界一律 404（不泄露目标是否存在）。
+    let real
+    try {
+      real = realpathSync(full)
+    } catch {
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    const realRel = relativePath(root, real)
+    if (realRel === '' || realRel.startsWith('..') || isAbsolutePath(realRel)) {
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    let buf
+    try {
+      buf = readFileSync(real)
+    } catch {
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    // no-store：同一用例重跑会用同名文件覆盖，缓存会让手机一直看到旧图。
+    // 显式 Content-Length：HEAD 也要给出大小（Node 对 HEAD 会省略 body，但不会补这个头）。
+    res.setHeader('Content-Length', String(buf.length))
+    return sendBuffer(res, 200, type, buf, { 'Cache-Control': 'no-store' })
+  }
+
   // ── request router (both HTTP faces) ──────────────────────────────────────
   async function routeRequest(req, res) {
     let url
@@ -14021,6 +14115,9 @@ export function apply(ctx, config) {
       return sendText(res, 200, 'text/css; charset=utf-8', css)
     }
     if (path === API_PREFIX || path.startsWith(API_PREFIX + '/')) return handleApi(req, res, url)
+    // 只读截图：/m/shot/<file>。放在 /m/api 之后是因为前缀互不重叠，放哪都一样；
+    // 单独一个分支，绝不影响上面任何既有路由的行为。
+    if (path === SHOT_PREFIX || path.startsWith(SHOT_PREFIX + '/')) return serveShot(req, res, path)
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
@@ -14049,6 +14146,8 @@ export function apply(ctx, config) {
 
   // ── face 2: dedicated 0.0.0.0 listener (phone / LAN / public) ─────────────
   ctx.effect(() => {
+    // 截图目录先建好：手机端第一次 <img> 请求前它就该存在（人工/脚本往里放图）。
+    ensureShotDir()
     const port = Number(cfg.mobilePort) || DEFAULT_MOBILE_PORT
     const host = cfg.mobileHost || '0.0.0.0'
     const server = createServer((req, res) => {
