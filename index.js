@@ -3393,36 +3393,88 @@ const SEND_MODE_SETTINGS_HTML = `<script>
 })();
 </script>`
 
-// 排队消息的位置（需求 C）：把 bundle 的 .queue-dock 挪到聊天窗工具栏（.chat-tools）**上面**。
+// 排队消息的位置（需求 C）：让 bundle 的 .queue-dock 显示在聊天工具栏（.chat-tools）
+// 那一行**上面**，但绝不移动节点本身。
 //
-// bundle 把 Ho() 渲染成 .chat-composer 的第一个子元素（输入框上方），而 .chat-tools
-// 是它的**上一个兄弟** —— 也就是「上下文压缩/模型/权限」那一行。用户要的是
-// 「工具栏上面」，即 dock 必须排在 .chat-tools 之前。
-// 用 insertBefore 做真实 DOM 搬移（不是 CSS 定位）：这样它天然在文档流里，
-// 不会盖住消息区，也不会引入 overflow 问题。
+// 这个节点是 React 持有的：Ho() 被渲染成 .chat-composer 的第一个子元素。旧实现用
+// insertBefore 把它挪到 .chat-tools 之前，队列清空时 React 仍按「原父节点」做
+// removeChild，而节点早已不在那里 → `Failed to execute 'removeChild' on 'Node'`
+// → 整棵 React 树卸载，整页白屏。所以位置改用纯 CSS 表达，DOM 树一个节点都不动。
+//
+// 做法：节点留在 .chat-composer 里，由 theme.css 把它 position:absolute 到
+// composer 上方；本脚本只量高度，把「工具栏（含运行状态条）+ 8px」写进根节点的
+// --dm-queue-lift。绝对定位的包含块就是 position:relative 的 .chat-composer：
+//   · 键盘弹起 / composer 变高时自动跟随，不用读 visualViewport；
+//   · 滚动消息区不影响它（composer 不在滚动容器里），不需要 scroll 监听；
+//   · 不占文档流，所以没有排队项时一点空白都不留。
+// 没有 .queue-dock（Ho() 返回 null）时本脚本什么都不做。
 const QUEUE_DOCK_PLACE_HTML = `<script>
 (function () {
-  function dock() { return document.querySelector('.queue-dock[data-queue-dock]'); }
-  function chat() { return document.querySelector('.chat-composer'); }
-  // 工具栏：模型 / 权限 pill + 上下文用量那一行。
-  function tools() { return document.querySelector('.chat-tools'); }
-
-  function place() {
-    var d = dock();
-    if (!d) return;              // 没排队消息时 bundle 直接返回 null，什么都不做
-    var t = tools();
-    if (!t || !t.parentNode) return;
-    // 已经在工具栏前一个位置了就不要动（避免每帧重排、也避免打断用户正在编辑的输入框）。
-    if (d.nextSibling === t) return;
-    t.parentNode.insertBefore(d, t);
-  }
-
   try {
-    var mo = new MutationObserver(place);
-    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (!document.documentElement || window.__dmQueueDock) return;
+    window.__dmQueueDock = true;
+
+    var root = document.documentElement;
+    var raf = 0;
+    var last = -1;
+
+    function composer() { return document.querySelector('.chat-composer'); }
+    function dock() { return document.querySelector('.chat-composer > .queue-dock[data-queue-dock]'); }
+    function tools() { return document.querySelector('.chat-tools'); }
+
+    // 工具栏上方可能还有一条运行状态条（.chat-status-strip：任务 / 后台任务 / 子代理）。
+    // dock 要排在整摞底栏控件的上面，否则会正好盖住那一行。只认这一个 class，并且它
+    // 必须是 .chat-tools 的前一个兄弟（bundle 的渲染顺序）；隐藏（尺寸为 0）时不算。
+    function topOfStack(t) {
+      var top = t.getBoundingClientRect().top;
+      var prev = t.previousElementSibling;
+      if (prev && prev.classList && prev.classList.contains('chat-status-strip')) {
+        var r = prev.getBoundingClientRect();
+        if (r.height > 0 && r.width > 0 && r.top < top) top = r.top;
+      }
+      return top;
+    }
+
+    function update() {
+      raf = 0;
+      var c = composer();
+      if (!c) return;
+      var d = dock();
+      if (!d) return;             // 没有排队消息：Ho() 返回 null，不留任何空白
+      var t = tools();
+      if (!t || !t.parentNode) return;
+      var cr = c.getBoundingClientRect();
+      var tr = t.getBoundingClientRect();
+      // 布局不认识（页面切换中、工具栏被隐藏）时保持上一次的有效值，不写坏变量。
+      if (cr.width <= 0 || cr.height <= 0 || tr.width <= 0) return;
+      var lift = Math.round(cr.top - topOfStack(t) + 8);
+      if (!isFinite(lift) || lift <= 0 || lift > 600) return;
+      if (lift === last) return;
+      last = lift;
+      root.style.setProperty('--dm-queue-lift', lift + 'px');
+    }
+
+    function schedule() {
+      if (raf) return;
+      raf = (window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); })(update);
+    }
+
+    // 队列出现/消失、状态条出现、键盘压缩工具栏……都会动到高度：Observer 覆盖结构变化，
+    // resize 覆盖视口变化。rAF 合并，同一帧里只量一次。
+    try {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'hidden']
+      });
+    } catch (e) {}
+    window.addEventListener('resize', schedule);
+    // 兜底：字体加载 / 工具栏内部换行等不产生上述变化的情况；低频，开销可忽略。
+    setInterval(schedule, 1000);
+    update();
   } catch (e) {}
-  setInterval(place, 300);
-  place();
 })();
 </script>`
 
@@ -5923,6 +5975,38 @@ export function apply(ctx, config) {
   const lastPersistedSeq = new Map()
 
   /**
+   * sessionId -> 最近一条已落盘 `step/start` 的 { turn, step }。
+   *
+   * **为什么必须从真事件兜底**：`start` 帧只在 attempt 刚创建时发一次。手机
+   * （或本插件的 follow）在生成中途才接上时，follow 的 snapshot 里带的是
+   * `assistantStream.activeAttempt`，后面的 chunk 帧不会再配一个 start。此时
+   * `st.turn/st.step` 是空的，合成出来的 `assistant/chunk` 就缺 `{turn,step}`
+   * —— bundle 的 `it()` 只能按 turn/step 找待定气泡，找不到就**每个 chunk 新建
+   * 一条消息**（实测 408 个 chunk 全都没有 turn/step）。
+   *
+   * 兜底值取自真事件里的 `step/start`（follow 与全局总线都会送）：它先于该步的
+   * 任何 chunk 落盘，所以中途接上也能拿到正确的 turn/step。
+   */
+  const lastStep = new Map()
+
+  /** 记下真事件里的 turn/step 边界（step/start、turn/start 都带 turn，step/start 另带 step）。 */
+  function noteStepEvent(sessionId, event) {
+    if (!event || typeof event !== 'object') return
+    if (event.type !== 'step/start' && event.type !== 'turn/start') return
+    const data = event.data && typeof event.data === 'object' ? event.data : {}
+    const turn = typeof data.turn === 'number' ? data.turn : undefined
+    const step = typeof data.step === 'number' ? data.step : undefined
+    if (turn === undefined) return
+    const prev = lastStep.get(sessionId)
+    // 只进不退：乱序/重放不会把 turn 拉回去。
+    if (prev !== undefined && (prev.turn > turn || (prev.turn === turn && (prev.step ?? -1) > (step ?? -1)))) return
+    lastStep.set(sessionId, { turn, ...(step === undefined ? {} : { step }) })
+    if (lastStep.size > 256) {
+      for (const k of [...lastStep.keys()].slice(0, lastStep.size - 256)) lastStep.delete(k)
+    }
+  }
+
+  /**
    * 取（必要时新建）某会话当前 attempt 的流式状态。
    *
    * **只按 (sessionId, attemptId) 取，不把 revision 当身份的一部分。**
@@ -6031,16 +6115,110 @@ export function apply(ctx, config) {
     // 基准取「已经流过去的真事件里最大的 seq」而不是只取 startedAfterSeq：宿主一轮里
     // 会连续落盘多条事件，每落一条水位就抬一次，chunk 必须跟着抬，否则会被判旧。
     let slot = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index + 1 : ++st.seq
-    if (!Number.isFinite(slot) || slot < 1) slot = ++st.seq
-    if (slot > STREAM_SEQ_SLOTS - 1) slot = STREAM_SEQ_SLOTS - 1
+    return buildAssistantChunkEvent(sessionId, st, slot, frame.time, chunk)
+  }
+
+  /**
+   * 用「流式状态 + slot」合成一条 `assistant/chunk` 事件（live chunk 与快照补放共用）。
+   *
+   * `slot` 是桶内序号（1..STREAM_SEQ_SLOTS-1），seq = base + slot/STREAM_SEQ_SLOTS，
+   * 因此同一 attempt 内严格递增，且恒小于 base+1（= 下一条已落盘事件）。
+   */
+  function buildAssistantChunkEvent(sessionId, st, slot, rawTime, chunk) {
+    let s = typeof slot === 'number' && Number.isFinite(slot) ? Math.floor(slot) : ++st.seq
+    if (!Number.isFinite(s) || s < 1) s = ++st.seq
+    if (s > STREAM_SEQ_SLOTS - 1) s = STREAM_SEQ_SLOTS - 1
     const base = Math.max(st.seqBase, lastPersistedSeq.get(sessionId) ?? 0)
-    const seq = base + slot / STREAM_SEQ_SLOTS
-    st.seq = slot
-    const time = typeof frame.time === 'number' && Number.isFinite(frame.time) ? frame.time : Date.now()
+    const seq = base + s / STREAM_SEQ_SLOTS
+    st.seq = s
+    const time = typeof rawTime === 'number' && Number.isFinite(rawTime) ? rawTime : Date.now()
     const data = { chunk: { type: chunk.type, text: chunk.text } }
-    if (st.turn !== undefined) data.turn = st.turn
-    if (st.step !== undefined) data.step = st.step
+    // turn/step 优先用 attempt 的 start 帧；没接上 start 时退回最近一条 step/start。
+    // 少了它 bundle 无法把逐字增量累加进同一个待定气泡（每个 chunk 会变成一条新消息）。
+    const fallback = lastStep.get(sessionId)
+    const turn = st.turn !== undefined ? st.turn : fallback?.turn
+    const step = st.step !== undefined ? st.step : fallback?.step
+    if (turn !== undefined) data.turn = turn
+    if (step !== undefined) data.step = step
     return { type: 'assistant/chunk', seq, time, data }
+  }
+
+  /**
+   * 把 compact 快照流（`AssistantStreamAccumulator.snapshot()` 的 records）展开成
+   * 逐 token 的 `{ time, chunk }`。
+   *
+   * 快照是压缩格式（同一条消息的连续 delta 合并成 `{type:'text-chunks', dt, texts}`），
+   * 不能直接喂给 bundle —— `ze()` 只认 `{chunk:{type:'text-delta'|'reasoning-delta',text}}`。
+   * 这里按宿主 `expandAssistantStream()` 的同一语义展开；tool-call 片段 bundle 不渲染，跳过。
+   */
+  function expandSnapshotStream(stream) {
+    const out = []
+    if (!Array.isArray(stream)) return out
+    for (const record of stream) {
+      if (!record || typeof record !== 'object') continue
+      if (record.type === 'chunk') {
+        if (record.chunk && typeof record.chunk === 'object') out.push({ time: record.time, chunk: record.chunk })
+        continue
+      }
+      if (record.type !== 'text-chunks' && record.type !== 'reasoning-chunks') continue
+      const texts = Array.isArray(record.texts) ? record.texts : []
+      const dt = Array.isArray(record.dt) ? record.dt : []
+      let time = typeof record.time0 === 'number' && Number.isFinite(record.time0) ? record.time0 : Date.now()
+      for (let i = 0; i < texts.length; i += 1) {
+        if (i > 0) time += typeof dt[i - 1] === 'number' && Number.isFinite(dt[i - 1]) ? dt[i - 1] : 0
+        out.push({
+          time,
+          chunk: {
+            type: record.type === 'text-chunks' ? 'text-delta' : 'reasoning-delta',
+            ...(typeof record.index === 'number' ? { index: record.index } : {}),
+            text: texts[i],
+          },
+        })
+      }
+    }
+    return out
+  }
+
+  /**
+   * follow 的 snapshot 里带着 `assistantStream.activeAttempt`：**当前正在生成的那一步**
+   * 已经产出的全部片段（compact 格式）+ 它的 attemptId / turn / step / startedAfterSeq。
+   *
+   * 手机在生成中途打开会话时，follow 才刚建立，start 帧早就发过了 —— 不补放这段快照，
+   * 手机就永远缺前半段正文（用户看到的「只显示一半」），而且后续 chunk 没有 turn/step，
+   * 每个 token 都会新开一条消息。这里把它补成正常的 assistant/chunk 序列。
+   *
+   * 只在「这个 attempt 还没有 live 帧进来」时补放一次：follow 重连会重发同一个
+   * activeAttempt，重放会重复推字（seq 已被水位挡掉一部分，但不能依赖它）。
+   */
+  function replayAssistantSnapshot(sessionId, snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return
+    const attempt = snapshot.activeAttempt
+    if (!attempt || typeof attempt !== 'object') return
+    const attemptId = typeof attempt.attemptId === 'string' ? attempt.attemptId : undefined
+    if (attemptId === undefined) return
+    const revision = typeof snapshot.revision === 'number' ? snapshot.revision : undefined
+    const st = streamStateFor(sessionId, attemptId, revision)
+    if (typeof attempt.turn === 'number') st.turn = attempt.turn
+    if (typeof attempt.step === 'number') st.step = attempt.step
+    if (typeof attempt.startedAfterSeq === 'number' && Number.isFinite(attempt.startedAfterSeq)) {
+      st.seqBase = attempt.startedAfterSeq
+    }
+    // 已经有 live chunk 进状态了：说明启动顺序不是「snapshot → chunk」，别重放。
+    if (st.lastIndex >= 0) return
+    const expanded = expandSnapshotStream(attempt.stream)
+    let slot = 0
+    for (const { time, chunk } of expanded) {
+      if (!chunk || typeof chunk !== 'object') continue
+      if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') continue
+      if (typeof chunk.text !== 'string' || chunk.text === '') continue
+      slot += 1
+      emitMux({ type: 'session/event', sessionId, event: buildAssistantChunkEvent(sessionId, st, slot, time, chunk) })
+    }
+    if (typeof attempt.nextIndex === 'number' && Number.isFinite(attempt.nextIndex)) {
+      // 后续 live chunk 的 index 从 nextIndex 起（快照已包含 0..nextIndex-1 的**全部** chunk，
+      // 包括我们不渲染的 tool-call 片段），所以增量判重的水位直接对齐到 nextIndex-1。
+      st.lastIndex = Math.max(st.lastIndex, attempt.nextIndex - 1)
+    }
   }
 
 
@@ -6063,17 +6241,16 @@ export function apply(ctx, config) {
             if (ref.signal.aborted) return
             if (!f) continue
             if (f.type === 'snapshot') {
-            } else if (f.type === 'event' && f.event) {
-            } else if (f.type === 'assistant-stream' && f.frame) {
-              const fr = f.frame
-            } else {
-            }
-            if (f.type === 'snapshot') {
               // 快照里的 records 是已经存在的历史，不重推（聊天窗自己读过历史）。
               // 只告诉手机「从 lastSeq 起之后的事件会实时到达」，bundle 据此刷新缓存。
               if (typeof f.cursor === 'number') {
                 // 合成 chunk 的 seq 基准：订阅那一刻会话的最后一个已落盘 seq。
                 lastPersistedSeq.set(sessionId, f.cursor)
+              }
+              // 正在生成中的那一步：快照带着已产出的片段，补放给手机，
+              // 否则中途进场（手机在桌面生成到一半时打开会话）会永久缺前半段正文。
+              replayAssistantSnapshot(sessionId, f.assistantStream)
+              if (typeof f.cursor === 'number') {
                 emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
               }
               continue
@@ -6085,6 +6262,8 @@ export function apply(ctx, config) {
                 const prev = lastPersistedSeq.get(sessionId)
                 if (prev === undefined || f.event.seq > prev) lastPersistedSeq.set(sessionId, f.event.seq)
               }
+              // 记下 turn/step 边界：中途接上（没见到 start 帧）时给 chunk 兜底。
+              noteStepEvent(sessionId, f.event)
               emitMux({ type: 'session/event', sessionId, event: f.event })
               continue
             }
@@ -6612,6 +6791,8 @@ export function apply(ctx, config) {
           const prev = lastPersistedSeq.get(session.id)
           if (prev === undefined || event.seq > prev) lastPersistedSeq.set(session.id, event.seq)
         }
+        // 与 follow 同一条兜底：中途接上的 attempt 没有 start 帧，turn/step 取自真事件。
+        noteStepEvent(session.id, event)
         emitMux({ type: 'session/event', sessionId: session.id, event })
       }, { global: true })
     } catch {
