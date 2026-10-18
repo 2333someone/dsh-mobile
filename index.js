@@ -5490,11 +5490,11 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
     // 行上标「本机」，绝不混进 mobile.commands 的返回（bundle 的「＋」面板也用那份）。
     var LOCAL_ACTIONS = [
       {
-        name: 'file', label: '文件', description: '从相册或相机添加', group: '添加', source: 'local',
+        name: 'file', cmdName: '文件', label: '文件', description: '从相册或相机添加', group: '添加', source: 'local',
         keywords: ['附件', '图片', '拍照', '相册', '上传'],
       },
       {
-        name: 'model', label: '模型', description: '选择本会话使用的模型', group: '指令', source: 'local',
+        name: 'model', cmdName: '模型', label: '模型', description: '选择本会话使用的模型', group: '指令', source: 'local',
         keywords: ['切换模型', '模型目录', '思考强度'],
       },
     ];
@@ -5576,6 +5576,9 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
           it.label = zh.label;
           it.description = zh.description;
         }
+        // 命令名也中文化：面板显示/插入 /目标；宿主只认英文，执行前由
+        // mobile.commandExec 的 canonicalCommandLine() 映射回去。data-name 仍存英文。
+        it.cmdName = zh ? zh.label : it.name;
         if (it.group === '添加') {
           add.push(it);
           continue;
@@ -5614,6 +5617,8 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         if (typeof sk.description === 'string' && sk.description !== '') skillKeywords.push(sk.description);
         out.push({
           name: sk.name,
+          // 技能标识是宿主英文名，无法中文化：显示与插入都用英文 /name。
+          cmdName: sk.name,
           label: sk.name,
           description: desc,
           group: '技能',
@@ -5692,7 +5697,8 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
     }
 
     function haystack(it) {
-      var parts = [it.name || '', it.label || '', it.description || ''];
+      // 中文命令名（cmdName）、中文说明、英文命令名（name）与关键词都参与搜索。
+      var parts = [it.name || '', it.cmdName || '', it.label || '', it.description || ''];
       var kw = it.keywords;
       if (kw && kw.length) parts = parts.concat(kw);
       return parts.join(' ').toLowerCase();
@@ -5739,8 +5745,11 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       if (icon !== '') iconBox.innerHTML = icon;
       row.appendChild(iconBox);
       var left = el('span', 'dm-cmd-left');
-      left.appendChild(el('span', 'dm-cmd-code', '/' + it.name));
-      if (it.label && it.label !== it.name) left.appendChild(el('span', 'dm-cmd-label', it.label));
+      // 命令名也中文化：/目标、/压缩…；技能保持 /英文技能名（宿主标识无法中文化）。
+      // 英文命令名放进 title（桌面悬浮可见）且 data-name 仍是英文，映射与测试都不受影响。
+      var code = el('span', 'dm-cmd-code', '/' + (it.cmdName || it.name));
+      if (it.cmdName && it.cmdName !== it.name) code.title = it.name;
+      left.appendChild(code);
       row.appendChild(left);
       if (it.description) {
         var desc = el('span', 'dm-cmd-desc', it.description);
@@ -5800,7 +5809,9 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         runLocal(it);
         return;
       }
-      insertLine('/' + it.name + ' ', it.source === 'skill' ? it.name : '');
+      // 插入中文命令名（/目标 ），与面板显示一致；宿主只认英文，执行前由
+      // mobile.commandExec 的 canonicalCommandLine() 映射回 /goal。技能仍是英文名。
+      insertLine('/' + (it.cmdName || it.name) + ' ', it.source === 'skill' ? it.name : '');
     }
 
     // 本机动作：先判断入口在不在，再收起面板，等收起动画（200ms）走完才点 ——
@@ -10652,6 +10663,32 @@ export function apply(ctx, config) {
    * live=false 表示会话还没有活 Agent：此时 list 读到的就是全局命令层
    * （作用域层只能由活 Agent 的 ctx 注册出来，所以这个结果是精确的而非近似）。
    */
+  // ── 中文命令名 → 宿主真实英文名 ─────────────────────────────────────────────
+  // 用户要求「命令名本身也中文化」：手机 `/` 面板显示并插入 `/目标 `，而宿主只解析
+  // 英文命令名（/goal）。所以 mobile.commandExec 在执行前把第一个 token 映射回英文，
+  // 其余参数原样保留；英文名原样透传（向后兼容）；未命中的中文名不做处理，交给宿主
+  // → 走现有 unknown-command，绝不当普通文本静默发送。
+  const COMMAND_NAME_BY_ZH = {
+    目标: 'goal',
+    计划: 'plan',
+    反馈: 'feedback',
+    压缩: 'compact',
+    权限: 'permission',
+    下载日志: 'export',
+    导出: 'export',
+    模型: 'model',
+    编排: 'orchestrate',
+  }
+
+  function canonicalCommandLine(line) {
+    const text = String(line)
+    const match = /^(\s*)\/([^\s/]+)([\s\S]*)$/.exec(text)
+    if (!match) return text
+    const english = COMMAND_NAME_BY_ZH[match[2]]
+    if (english === undefined) return text
+    return match[1] + '/' + english + match[3]
+  }
+
   function commandCatalog(payload) {
     const svc = commandService()
     if (!svc) {
@@ -10730,13 +10767,16 @@ export function apply(ctx, config) {
     if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
     let line = payload && typeof payload.line === 'string' ? payload.line : ''
     if (line === '') {
-      const name = payload && typeof payload.name === 'string' ? payload.name.trim() : ''
+      let name = payload && typeof payload.name === 'string' ? payload.name.trim() : ''
+      name = COMMAND_NAME_BY_ZH[name] || name
       if (!/^[a-z][a-z0-9_-]*$/.test(name)) {
         return { ok: false, error: { code: 'bad-request', message: '命令名不合法' } }
       }
       const args = payload.args === undefined || payload.args === null ? '' : String(payload.args)
       line = args === '' ? `/${name}` : `/${name} ${args}`
     }
+    // 面板插入的是中文命令名（/目标 clear），这里映射回宿主英文名（/goal clear）。
+    line = canonicalCommandLine(line)
     let agent = liveAgentOf(sessionId)
     if (!agent) {
       const sessionController = sc()
