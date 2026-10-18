@@ -1569,6 +1569,22 @@ body {
   display: none !important;
 }
 
+/* ── 过程卡 head 只剩一行时，别把这一行顶在卡片上沿 ──────────────────────
+   .chat-proc-head 是 `display:flex; flex-direction:column`，bundle 没写
+   justify-content → 主轴默认 flex-start。它同时有 min-height:40px 和
+   padding:6px：一行的行盒只有 16.5px（--text-xs 11px × line-height 1.5），
+   40px 卡片里剩下的 9.5px 全部堆在这一行**下面**，于是「思考中」/「已完成」
+   这行看着偏上（实测文字墨迹中心比卡片中线高约 4.7px；右侧 ▸ 是
+   position:absolute + top:50%，仍在正中，一对比更明显）。
+   前面那段 .dm-proc-dup 正好让运行中只留一行，所以这个问题在运行中、
+   结束后都会出现。这里把主轴改成居中：单行时自动落回卡片中线；两行时
+   内容高度已超过 min-height（容器是 auto 高，不会有负剩余空间），
+   justify-content 不会改变任何已有位置。
+   bundle 的 CSS 晚于本文件注入、同特异性它赢，所以必须 !important。 */
+.chat-proc-head {
+  justify-content: center !important;
+}
+
 /* 列表页「Agent 模式」卡片右侧的问号按钮（.mobile-presetHelp）：它打开的
    「Agent 模式说明」弹窗只渲染「当前模式名 + 文档正文」，而宿主 preset 没有
    文档（agentPreset.list 返回 hasDocument:false），点开基本是空壳 —— 用户要求
