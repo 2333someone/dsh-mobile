@@ -4310,6 +4310,7 @@ const CHAT_AUTOSCROLL_HTML = `<script>
     var generating = false;
     var follow = true;
     var raf = 0;
+    var lastTop = -1;        // 上一次由本脚本钉住时的 scrollTop
 
     function scroller() { return document.querySelector('.chat-scroll'); }
     function distance(el) { return el.scrollHeight - el.scrollTop - el.clientHeight; }
@@ -4319,10 +4320,16 @@ const CHAT_AUTOSCROLL_HTML = `<script>
       if (!generating || !follow) return;
       var el = scroller();
       if (!el) return;
-      // 不要在这里用离底距离判断：流式内容一次长很多时距离同样会 >120px，
-      // 但那是内容变高、不是用户上滑；若据此 return，下一帧距离更大，
-      // 就会在本轮里永远追不上。停/恢复跟随只由下面真实 scroll 事件决定。
+      var d = distance(el);
+      // 内容变高也会拉大离底距离，但**不会**让 scrollTop 变小；scrollTop 明显
+      // 变小只可能是用户往上滑。必须在写入 scrollTop 之前判断：rAF 有可能抢在
+      // scroll 事件之前执行，否则用户刚滑走就会被钉回底部。
+      if (lastTop >= 0 && el.scrollTop <= lastTop - 16 && d > FOLLOW_STOP) {
+        follow = false;
+        return;
+      }
       el.scrollTop = el.scrollHeight;
+      lastTop = el.scrollTop;
     }
     function schedule() { if (!raf) raf = window.requestAnimationFrame(tick); }
 
