@@ -5498,8 +5498,6 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         keywords: ['切换模型', '模型目录', '思考强度'],
       },
     ];
-    var SOURCE_BADGES = { host: '宿主', local: '本机', skill: '技能' };
-
     // ── 中文文案（命令）：按宿主命令 name 查表，命中才覆盖 ─────────────────────
     // 来源（不是自翻）：桌面 @deepseek-ai/dsh-client-ui-commands/lib/client.js 的
     // zh 字典（label.goal=目标、description.goal=设置或查看长期任务目标、
@@ -5627,12 +5625,6 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       return out;
     }
 
-    function badgeOf(it) {
-      var text = SOURCE_BADGES[it && it.source];
-      if (!text) return null;
-      return el('span', 'dm-cmd-badge dm-cmd-badge-' + it.source, text);
-    }
-
     function build() {
       var back = document.createElement('div');
       back.className = 'dm-perm-backdrop dm-cmd-backdrop';
@@ -5731,6 +5723,10 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       return '<svg class="dm-cmd-icon" viewBox="' + icon.vb + '" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">' + icon.html + '</svg>';
     }
 
+    // 一行 = [图标] [/name 中文标签] [右侧说明，单行省略]
+    // 与桌面 / 菜单同款：不再放来源徽标、不再放尖括号参数占位（用户明确说没用且乱）。
+    // 说明右对齐、约占 46%，完整文本进 title（桌面悬浮/手机长按可见）；技能与命令
+    // 用同一套结构，只是分组标题不同。
     function rowOf(it) {
       var row = document.createElement('button');
       row.type = 'button';
@@ -5742,23 +5738,15 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       var iconBox = el('span', 'dm-cmd-iconbox');
       if (icon !== '') iconBox.innerHTML = icon;
       row.appendChild(iconBox);
-      var main = el('div', 'dm-perm-main');
-      var nameLine = el('div', 'dm-perm-name dm-cmd-nameline');
-      nameLine.appendChild(el('span', 'dm-cmd-code', '/' + it.name));
-      if (it.label && it.label !== it.name) nameLine.appendChild(el('span', 'dm-cmd-label', it.label));
-      main.appendChild(nameLine);
+      var left = el('span', 'dm-cmd-left');
+      left.appendChild(el('span', 'dm-cmd-code', '/' + it.name));
+      if (it.label && it.label !== it.name) left.appendChild(el('span', 'dm-cmd-label', it.label));
+      row.appendChild(left);
       if (it.description) {
-        var sub = el('div', 'dm-perm-sub', it.description);
-        // 技能描述是完整的 routing 文案（常见 200+ 字符），默认最多两行，
-        // 与桌面菜单一致；完整文本仍在 DOM 里，搜索也照常命中。
-        if (it.source === 'skill') sub.className = 'dm-perm-sub dm-cmd-sub-clamp';
-        main.appendChild(sub);
+        var desc = el('span', 'dm-cmd-desc', it.description);
+        desc.title = it.description;
+        row.appendChild(desc);
       }
-      row.appendChild(main);
-      // 来源徽标紧跟在正文之后（正文 flex:1，徽标自然贴右），三类来源一眼可分。
-      var badge = badgeOf(it);
-      if (badge) row.appendChild(badge);
-      if (it.needsInput && it.hint) row.appendChild(el('span', 'dm-cmd-hint', it.hint));
       if (it.disabled) {
         row.disabled = true;
         row.classList.add('dm-cmd-row-disabled');
