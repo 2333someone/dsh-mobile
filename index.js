@@ -74,6 +74,9 @@ const PROMPT_BODY = 2 * 1024 * 1024
 // 手机点命令后的单次执行上限：bundle 侧 mobile.commandExec 的 fetch 超时是 180s，
 // 宿主这里留 30s 余量，避免「前端已放弃、宿主还在 await」的悬挂。
 const COMMAND_EXEC_TIMEOUT_MS = 150 * 1000
+// 技能目录读取上限：sessionSkillCatalog.list 要做一次 provider 发现（可能要读
+// SKILL.md 目录），冷启动偶尔慢；15s 足够，且不让手机面板无限转圈。
+const SKILL_CATALOG_TIMEOUT_MS = 15 * 1000
 
 // ── 权限预设中文化 ────────────────────────────────────────────────────────
 // 宿主 permissionPresets.catalog() 返回的 options 是原始英文。实测返回：
@@ -5409,7 +5412,8 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
     // 命令面板：数据全部来自宿主命令注册表（RPC：mobile.commands / mobile.commandExec），
     // 这里只做呈现与过滤，不内置任何命令名 —— 宿主没注册的命令不会出现在面板里。
     var panel = null;
-    var state = { items: [], reason: '', filter: '', busy: false };
+    // hostCount / skillCount 分来源计数（DOM 证据用）；items 是合并后的展示列表。
+    var state = { items: [], reason: '', skillsReason: '', filter: '', busy: false, hostCount: 0, skillCount: 0 };
     var lastSessionId = '';
 
     // 与 MODEL_BUTTON_HTML 同一手法：拦截 RPC 请求，自动记住当前会话 id。
@@ -5453,6 +5457,98 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       return n;
     }
 
+    // ── 来源区分：宿主命令 / 本机动作 / 技能 ───────────────────────────────────
+    // 桌面的 / 菜单是三类来源合并出来的：
+    //   1) 宿主命令注册表（commands.list）
+    //   2) client 端 commandUi 贡献：文件（ui-conversation client.js:19694，
+    //      kind:"action" → inputHub.pickFiles）、模型（ui-model-selection
+    //      client.js:1869，kind:"popupSelect" → 模型目录选择器）
+    //   3) skill source（ui-skill client.js:419，skills.list → 插入 /name + 空格）
+    // 手机页面没有第 2 类 client 插件，所以「文件」「模型」用手机本机动作等价实现，
+    // 行上标「本机」，绝不混进 mobile.commands 的返回（bundle 的「＋」面板也用那份）。
+    var LOCAL_ACTIONS = [
+      {
+        name: 'file', label: '文件', description: '添加图片或拍照', group: '添加', source: 'local',
+        keywords: ['附件', '图片', '拍照', '相册', '上传'],
+      },
+      {
+        name: 'model', label: '模型', description: '切换当前会话使用的模型', group: '指令', source: 'local',
+        keywords: ['切换模型', '模型目录', '思考强度'],
+      },
+    ];
+    var SOURCE_BADGES = { host: '宿主', local: '本机', skill: '技能' };
+
+    function localOf(name) {
+      for (var i = 0; i < LOCAL_ACTIONS.length; i++) {
+        if (LOCAL_ACTIONS[i].name !== name) continue;
+        var copy = {};
+        for (var k in LOCAL_ACTIONS[i]) {
+          if (Object.prototype.hasOwnProperty.call(LOCAL_ACTIONS[i], k)) copy[k] = LOCAL_ACTIONS[i][k];
+        }
+        return copy;
+      }
+      return null;
+    }
+
+    // 宿主命令 + 本机动作 + 技能 → 与桌面 SECTION_ROWS 同序的一张展示列表：
+    //   添加：文件（本机）/ 目标 / 计划 / 反馈
+    //   指令：压缩 / 权限 / 模型（本机）/ 导出 / 其余宿主命令
+    //   技能：宿主 sessionSkillCatalog 的真实技能（单独一组，绝不与宿主命令混排）
+    function mergeItems(hostItems, skillItems) {
+      var add = [];
+      var commands = [];
+      for (var i = 0; i < hostItems.length; i++) {
+        var it = hostItems[i];
+        if (!it || typeof it.name !== 'string' || it.name === '') continue;
+        it.source = 'host';
+        if (it.group === '添加') {
+          add.push(it);
+          continue;
+        }
+        // mobile.commands 会把没有 definitionId 的宿主命令归到「技能」段（旧逻辑：
+        // 那时还没有真技能来源）。真技能现在由 mobile.skills 单独提供，宿主命令
+        // 一律收进「指令」段末尾（桌面 ui-commands 对未列出的命令也是这么排的），
+        // 否则 orchestrate 这类命令会和真技能挤在同一组，来源就混了。
+        it.group = '指令';
+        commands.push(it);
+      }
+      var file = localOf('file');
+      if (file) add.unshift(file);
+      var model = localOf('model');
+      if (model) {
+        var after = -1;
+        for (var c = 0; c < commands.length; c++) {
+          if (commands[c].name === 'permission') after = c;
+        }
+        commands.splice(after + 1, 0, model);
+      }
+      var out = add.concat(commands);
+      for (var s = 0; s < skillItems.length; s++) {
+        var sk = skillItems[s];
+        if (!sk || typeof sk.name !== 'string' || sk.name === '') continue;
+        var desc = typeof sk.description === 'string' ? sk.description : '';
+        // 与桌面 ui-skill 的候选描述完全一致：modelInvocable=false（仅用户可调用）
+        // 前缀「仅用户 · 」（client.js:427-430）。
+        if (sk.modelInvocable === false && desc !== '') desc = '仅用户 · ' + desc;
+        out.push({
+          name: sk.name,
+          label: sk.name,
+          description: desc,
+          group: '技能',
+          source: 'skill',
+          disabled: sk.userInvocable === false,
+          keywords: sk.whenToUse ? [sk.whenToUse] : [],
+        });
+      }
+      return out;
+    }
+
+    function badgeOf(it) {
+      var text = SOURCE_BADGES[it && it.source];
+      if (!text) return null;
+      return el('span', 'dm-cmd-badge dm-cmd-badge-' + it.source, text);
+    }
+
     function build() {
       var back = document.createElement('div');
       back.className = 'dm-perm-backdrop dm-cmd-backdrop';
@@ -5460,7 +5556,7 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       sheet.className = 'dm-perm-sheet dm-cmd-sheet';
       var head = document.createElement('div');
       head.className = 'dm-perm-head dm-cmd-head';
-      var title = el('div', 'dm-perm-title', '命令');
+      var title = el('div', 'dm-perm-title', '命令与技能');
       var close = el('button', 'dm-perm-close', '✕');
       close.type = 'button';
       close.setAttribute('aria-label', '关闭');
@@ -5472,8 +5568,8 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       search.className = 'dm-cmd-search';
       search.type = 'search';
       search.autocomplete = 'off';
-      search.setAttribute('placeholder', '搜索命令');
-      search.setAttribute('aria-label', '搜索命令');
+      search.setAttribute('placeholder', '搜索命令或技能');
+      search.setAttribute('aria-label', '搜索命令或技能');
       searchRow.appendChild(search);
 
       var body = el('div', 'dm-perm-body dm-cmd-body');
@@ -5556,6 +5652,8 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       row.type = 'button';
       row.className = 'dm-perm-row dm-cmd-row';
       row.setAttribute('data-name', it.name);
+      if (it.source) row.setAttribute('data-source', it.source);
+      if (it.group) row.setAttribute('data-group', it.group);
       var icon = iconHtml(it);
       var iconBox = el('span', 'dm-cmd-iconbox');
       if (icon !== '') iconBox.innerHTML = icon;
@@ -5565,9 +5663,22 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       nameLine.appendChild(el('span', 'dm-cmd-code', '/' + it.name));
       if (it.label && it.label !== it.name) nameLine.appendChild(el('span', 'dm-cmd-label', it.label));
       main.appendChild(nameLine);
-      if (it.description) main.appendChild(el('div', 'dm-perm-sub', it.description));
+      if (it.description) {
+        var sub = el('div', 'dm-perm-sub', it.description);
+        // 技能描述是完整的 routing 文案（常见 200+ 字符），默认最多两行，
+        // 与桌面菜单一致；完整文本仍在 DOM 里，搜索也照常命中。
+        if (it.source === 'skill') sub.className = 'dm-perm-sub dm-cmd-sub-clamp';
+        main.appendChild(sub);
+      }
       row.appendChild(main);
+      // 来源徽标紧跟在正文之后（正文 flex:1，徽标自然贴右），三类来源一眼可分。
+      var badge = badgeOf(it);
+      if (badge) row.appendChild(badge);
       if (it.needsInput && it.hint) row.appendChild(el('span', 'dm-cmd-hint', it.hint));
+      if (it.disabled) {
+        row.disabled = true;
+        row.classList.add('dm-cmd-row-disabled');
+      }
       row.addEventListener('click', function (e) { e.preventDefault(); pick(it, row); });
       return row;
     }
@@ -5609,6 +5720,19 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
 
     function pick(it, row) {
       if (state.busy) return;
+      // 三条完全不同的路径，按来源分流：
+      //   · 本机动作：转交给 bundle 自己的入口（＋ 面板 / 模型抽屉），不经过宿主命令表；
+      //   · 技能：只把 /name + 空格 插进输入框（桌面 onPick 的语义），发送时宿主 pre-step
+      //     （dsh-tool-skill）再把 skill 正文注入，绝不在这里直接 session.prompt；
+      //   · 宿主命令：带 input 的先展开参数输入，其余直接执行。
+      if (it.source === 'local') {
+        runLocal(it);
+        return;
+      }
+      if (it.source === 'skill') {
+        pickSkill(it);
+        return;
+      }
       // 带参数的命令：先展开一个参数输入框，由用户补完再执行（尊重宿主 input.hint，
       // 绝不替用户猜参数）；不带参数的命令直接执行。
       if (it.needsInput) {
@@ -5616,6 +5740,67 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         return;
       }
       execCommand(it.name, '');
+    }
+
+    // 本机动作：先判断入口在不在，再收起面板，等收起动画（200ms）走完才点 ——
+    // 面板是整屏遮罩，立刻点会被它的 pointer-events 吃掉。
+    function runLocal(it) {
+      var target = null;
+      if (it.name === 'file') {
+        // 与 composer 的「＋」同一个按钮（bundle: chat-attach-btn aria-label 添加内容）。
+        target = document.querySelector('.chat-attach-btn[aria-label="添加内容"]');
+      } else if (it.name === 'model') {
+        // 与 composer 的模型 pill 同一个入口：优先用本插件已有的模型按钮（它会
+        // 直接打开底部「模型与思考强度」抽屉），没有就退回原生 pill。
+        target = document.getElementById('dm-model-btn');
+        if (!target) target = document.querySelector('.chat-pill[aria-label^="切换模型"]');
+      }
+      if (!target) {
+        setStatus('当前页面没有「' + (it.label || it.name) + '」入口', 'err');
+        return;
+      }
+      setStatus('');
+      closePanel();
+      window.setTimeout(function () {
+        try { target.click(); } catch (e) {}
+      }, 220);
+      try { document.body.setAttribute('data-dm-cmd-local-last', it.name); } catch (e) {}
+    }
+
+    // 技能选中 = 插入字面文本（桌面 ui-skill client.js:468 的 onPick 返回
+    // { text: '/' + candidate.name + ' ' }）。不发送、不执行、不加载 body。
+    function pickSkill(it) {
+      if (!panel || it.disabled) return;
+      if (!insertComposer('/' + it.name + ' ')) {
+        setStatus('当前不在输入框页面，无法插入技能', 'err');
+        return;
+      }
+      closePanel();
+      try { document.body.setAttribute('data-dm-cmd-last-skill', it.name); } catch (e) {}
+    }
+
+    // 往 composer 落文本：bundle 的 textarea 是受控组件，必须用原生 value setter +
+    // input 事件（与本插件「停止→排队发送」清空输入框同一手法）。
+    function insertComposer(text) {
+      var ta = document.querySelector('textarea.chat-input');
+      if (!ta) return false;
+      var current = ta.value || '';
+      var prefix = current === '' || /\s$/.test(current) ? '' : ' ';
+      var next = current + prefix + text;
+      try {
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, next);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (e) {
+        ta.value = next;
+        try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+      }
+      try {
+        ta.focus();
+        var end = ta.value.length;
+        ta.setSelectionRange(end, end);
+      } catch (e) {}
+      return true;
     }
 
     function toggleArg(it, row) {
@@ -5706,7 +5891,10 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       if (!panel) return Promise.resolve();
       state.items = [];
       state.reason = '';
+      state.skillsReason = '';
       state.busy = false;
+      state.hostCount = 0;
+      state.skillCount = 0;
       panel.body.innerHTML = '';
       panel.body.appendChild(el('p', 'dm-perm-hint dm-perm-loading', '加载中…'));
       setStatus('');
@@ -5716,32 +5904,62 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         paint();
         return Promise.resolve();
       }
-      return rpc('mobile.commands', { sessionId: sid }).then(function (res) {
+      // 两个数据源并行取，一次绘制：宿主命令注册表 + 宿主技能目录。
+      var commandsReq = rpc('mobile.commands', { sessionId: sid }).catch(function () { return null; });
+      var skillsReq = rpc('mobile.skills', { sessionId: sid }).catch(function () { return null; });
+      return Promise.all([commandsReq, skillsReq]).then(function (both) {
         if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
-        if (!res || !res.ok) {
-          state.items = [];
-          state.reason = (res && res.error && res.error.message) ? res.error.message : '命令列表加载失败';
-          paint();
-          return;
+        var cmdRes = both[0];
+        var skillRes = both[1];
+        var hostItems = [];
+        var skillItems = [];
+        var live = false;
+        var cmdOk = !!(cmdRes && cmdRes.ok);
+        if (cmdOk) {
+          var cv = cmdRes.value || {};
+          hostItems = Array.isArray(cv.items) ? cv.items : [];
+          state.reason = typeof cv.reason === 'string' ? cv.reason : '';
+          live = cv.live === true;
+          if (cv.available === false && state.reason === '') state.reason = '宿主命令服务不可用';
+        } else {
+          state.reason = (cmdRes && cmdRes.error && cmdRes.error.message) ? cmdRes.error.message : '命令列表加载失败';
         }
-        var v = res.value || {};
-        state.items = Array.isArray(v.items) ? v.items : [];
-        state.reason = typeof v.reason === 'string' ? v.reason : '';
-        // DOM 证据：条目数落在 data-* 上，人工与自动化都能直接核对「面板条数 = RPC 条数」。
+        var skillOk = !!(skillRes && skillRes.ok);
+        if (skillOk) {
+          var sv = skillRes.value || {};
+          skillItems = Array.isArray(sv.items) ? sv.items : [];
+          if (sv.available === false) {
+            state.skillsReason = typeof sv.reason === 'string' && sv.reason !== '' ? sv.reason : '宿主技能目录不可用';
+          }
+        } else {
+          state.skillsReason = (skillRes && skillRes.error && skillRes.error.message) ? skillRes.error.message : '技能目录加载失败';
+        }
+        state.hostCount = hostItems.length;
+        state.skillCount = skillItems.length;
+        state.items = mergeItems(hostItems, skillItems);
+        // DOM 证据：三类来源分别计数，自动化可直接核对
+        // 「技能组条数 = mobile.skills 返回条数」「宿主命令 = mobile.commands 条数」。
         try {
           panel.back.setAttribute('data-dm-cmd-count', String(state.items.length));
           document.body.setAttribute('data-dm-cmd-count', String(state.items.length));
-          document.body.setAttribute('data-dm-cmd-live', v.live === true ? '1' : '0');
+          document.body.setAttribute('data-dm-host-count', String(state.hostCount));
+          document.body.setAttribute('data-dm-skill-count', String(state.skillCount));
+          document.body.setAttribute('data-dm-local-count', String(LOCAL_ACTIONS.length));
+          document.body.setAttribute('data-dm-cmd-live', live ? '1' : '0');
         } catch (e) {}
-        if (v.available === false) {
+        if (state.skillsReason !== '') {
+          setStatus('技能目录不可用：' + state.skillsReason, 'err');
+        } else if (!cmdOk) {
           setStatus(state.reason || '宿主命令服务不可用', 'err');
-        } else if (v.live !== true) {
+        } else if (!live) {
           setStatus('该会话当前没有活动 Agent：执行命令时会先唤醒它', '');
         }
         paint();
       }).catch(function () {
         if (!panel) return;
-        state.items = [];
+        state.items = mergeItems([], []);
+        state.hostCount = 0;
+        state.skillCount = 0;
         state.reason = '命令列表加载失败，请重试';
         paint();
       });
@@ -10263,6 +10481,73 @@ export function apply(ctx, config) {
     }
   }
   /**
+   * 当前会话的「技能」目录 —— 桌面 `/` 菜单「技能」组的同源实现。
+   *
+   * 桌面实现（asar 依据，写进代码便于日后核对）：
+   *   · client：@deepseek-ai/dsh-client-ui-skill/lib/client.js:419-471 注册 `/` source，
+   *     candidates() 调 `ctx.remote.skills.list({ sessionId })`，onPick 只返回
+   *     `{ text: '/name ' }`（落进草稿，不直接发消息）。
+   *   · host：@deepseek-ai/dsh-api-session-controller/lib/index.js:2344
+   *     `SessionSkillCatalog.list({ sessionId }, signal)`（service 名
+   *     `sessionSkillCatalog`，`super(ctx, "sessionSkillCatalog", { namespace: "skills" })`）
+   *     自己把 sessionId 解析成：cwd（projections.workingDirectory → header.cwd →
+   *     workingDirectory.defaultDirectory，活 Agent 再 ensure）+ 会话 preset 的 skills 层
+   *     （presets.serviceFor(live, 'skills') 或宿主 ctx.get('skills')）+ scope
+   *     （活 Agent 或 preset standing scope lease），最后 filter(isUserInvocable)。
+   *
+   * 手机插件里拿不到 scope key / standing lease（那要 agentPresets.acquireScope），
+   * 所以必须复用这个「按 sessionId 一步到位」的服务，而不是手拼
+   * `ctx.skills.list({ cwd, scope })` —— 后者在冷会话上拿不到 preset 层。
+   *
+   * 返回形状与 Remote 的 SkillListValue 一致（只读投影，不加载 skill body）：
+   *   { name, description, whenToUse?, modelInvocable, path? }
+   * 服务/会话不可用时如实返回错误，不拿空列表冒充成功。
+   */
+  async function skillCatalog(payload) {
+    const sessionId = payload && typeof payload.sessionId === 'string' ? payload.sessionId : ''
+    const catalog = hostService('sessionSkillCatalog')
+    if (!catalog || typeof catalog.list !== 'function') {
+      return serviceUnavailable('sessionSkillCatalog', '宿主未装配技能目录服务（sessionSkillCatalog）')
+    }
+    if (sessionId === '') {
+      return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId，无法确定技能视图' } }
+    }
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), SKILL_CATALOG_TIMEOUT_MS)
+    try {
+      const result = await catalog.list({ sessionId }, abort.signal)
+      const skills = result && Array.isArray(result.skills) ? result.skills : []
+      const items = []
+      for (const skill of skills) {
+        const name = skill && typeof skill.name === 'string' ? skill.name : ''
+        if (name === '') continue
+        // 只投影手机需要的字段；modelInvocable 决定面板描述前缀（桌面同款「仅用户 · 」）。
+        items.push({
+          name,
+          description: typeof skill.description === 'string' ? skill.description : '',
+          whenToUse: typeof skill.whenToUse === 'string' ? skill.whenToUse : '',
+          modelInvocable: skill.modelInvocable !== false,
+          path: typeof skill.path === 'string' ? skill.path : '',
+        })
+      }
+      return { ok: true, value: { available: true, items, sessionId } }
+    } catch (err) {
+      if (abort.signal.aborted) {
+        return { ok: true, value: { available: false, items: [], reason: '技能目录读取超时' } }
+      }
+      return {
+        ok: true,
+        value: {
+          available: false,
+          items: [],
+          reason: `技能目录读取失败：${err && err.message ? err.message : String(err)}`,
+        },
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  /**
    * 惰性读取宿主服务（不写进静态 inject）。
    *
    * cordis 的 ctx.get 是明确的「不需要 inject 的读取入口」
@@ -11975,6 +12260,12 @@ export function apply(ctx, config) {
       case 'mobile.commandExec': {
         const executed = await commandExecute(payload)
         return executed
+      }
+      // 技能目录：桌面 `/` 菜单「技能」组的数据源（宿主 sessionSkillCatalog）。
+      // 与 mobile.commands 分开两个 RPC —— 命令注册表与技能目录是两套来源，
+      // 面板要按来源分组，不能混成一个数组。
+      case 'mobile.skills': {
+        return await skillCatalog(payload)
       }
       // ── 权限预设（手机工具栏「权限」按钮） ──────────────────────────────
       // bundle 自带的权限面板走两条通道：会话投影 projections.values.permissions
