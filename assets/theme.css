@@ -1978,7 +1978,21 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
   letter-spacing: 0.02em;
 }
 
-/* 一行命令：/name + 中文别名 + 描述；右侧是参数提示角标。 */
+/* 一行命令：行首宿主同款图标 + /name + 中文别名 + 描述；右侧是参数提示角标。 */
+.dm-cmd-iconbox {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-cmd-iconbox .dm-cmd-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
 .dm-cmd-nameline {
   display: flex;
   align-items: baseline;
