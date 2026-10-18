@@ -4640,6 +4640,13 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
     var ctx = canvas.getContext('2d');
     var cache = {};   // 字体 + 文本 → 墨迹中心相对基线的偏移
     var DEBUG = /[?&]dmdebug=1/.test(location.search);
+    // 用户可调的最终微调（px）：?dmiconshift=1.5 让所有图标整体下移 1.5px。
+    // 给"换一台设备/换一个字体仍差一点"留一个不用改代码的旋钮。
+    var SHIFT = 0;
+    try {
+      var shiftMatch = /[?&]dmiconshift=(-?[0-9.]+)/.exec(location.search);
+      if (shiftMatch) SHIFT = parseFloat(shiftMatch[1]) || 0;
+    } catch (e) {}
 
     // 把这段文字用**当前元素的实际字体**画到 canvas 上，逐像素扫出墨迹上下边界，
     // 得到「墨迹中心相对基线」的偏移（px，基线以上为负）。
@@ -4704,7 +4711,7 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
       icon.style.transform = 'none';
       var ir = icon.getBoundingClientRect();
       if (!(ir.height > 0)) return null;
-      var delta = targetCenter - (ir.top + ir.height / 2);
+      var delta = targetCenter - (ir.top + ir.height / 2) + SHIFT;
       if (!isFinite(delta) || Math.abs(delta) > 8) return null;
       var v = (Math.round(delta * 10) / 10) + 'px';
       if (delta !== 0) icon.style.transform = 'translateY(' + v + ')';
