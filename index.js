@@ -3783,12 +3783,20 @@ const CHAT_STATUS_HTML = `<script>
         var head = heads[i];
         var state = head.querySelector(PROC_STATE);
         var cur = head.querySelector(CUR_LINE);
-        if (!state || !cur) continue;
-        // 运行中（有当前步骤行）就隐藏状态词：整个 head 只留**一行**动态状态，
-        // 由 §4b 把它写成「思考中 / 调用工具中 / 写入文件中 …」，图标随步骤变。
-        // 回合结束后 bundle 会把 .chat-proc-current 整个移除，这里自然回到
-        // 「已完成 / 用时 N 秒」的原样，不用额外判断。
-        if (!state.classList.contains(DUP)) state.classList.add(DUP);
+        if (!state) continue;
+        // 运行中（有当前步骤行）时，把第一行**整行**藏起来 —— 那一行是
+        // 「沙漏图标 + 状态词 + 用时」，运行中只留下面那行动态状态（图标随步骤变），
+        // 否则会出现「沙漏占一行 + 动态行又一行」的两层图标。
+        // 回合结束后 bundle 会移除 .chat-proc-current，这里自然回到
+        // 「✓ 已完成 · 用时 N 秒」的原样；两种状态下 head 都是一行高，不会跳。
+        var line = state;
+        while (line && line.nodeType === 1 && !line.classList.contains('chat-proc-label')) {
+          line = line.parentNode;
+        }
+        if (!line || line.nodeType !== 1) line = null;
+        var target = line || state;
+        if (cur && !target.classList.contains(DUP)) target.classList.add(DUP);
+        else if (!cur && target.classList.contains(DUP)) target.classList.remove(DUP);
       }
     }
 

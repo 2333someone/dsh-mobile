@@ -1558,11 +1558,13 @@ body {
 /* 保存提示：复用 bundle 自带的 settings-saved 样式，不新增全局样式。 */
 
 
-/* 过程卡里重复的「思考中」：由 CHAT_STATUS_HTML 注入脚本给**第一行那个状态词**
-   加 .dm-proc-dup 后隐藏。
-   注意隐藏的是状态词本身，不是整行 —— 第一行的图标与「用时 N 秒」仍在，行高不变，
-   所以思考阶段（两行都是「思考中」）到工具阶段（第二行变成「运行命令」）切换时
-   卡片高度不会跳动。 */
+/* 过程卡运行时只显示「动态状态」一行：CHAT_STATUS_HTML 给第一行
+   （沙漏图标 + 状态词 + 用时）挂 .dm-proc-dup 后整行隐藏。
+   运行中 head 只剩下面那行动态状态（图标随步骤变），不会出现「沙漏占一行 +
+   动态行又一行」的两层图标；回合结束后 bundle 移除 .chat-proc-current，
+   第一行自动回来显示「✓ 已完成 · 用时 N 秒」。
+   两种状态下 head 都是一行高，卡片高度不跳。 */
+.chat-proc-line.chat-proc-label.dm-proc-dup,
 .chat-proc-state.dm-proc-dup {
   display: none !important;
 }
