@@ -4638,76 +4638,79 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
 
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext('2d');
-    var cache = {};   // 字体 + 文本 → 偏移
+    var cache = {};   // 字体 + 文本 → 墨迹中心相对基线的偏移
     var DEBUG = /[?&]dmdebug=1/.test(location.search);
 
-    // 把这段文字按**当前元素的实际字体**画到 canvas 上，再逐像素扫出墨迹的
-    // 上下边界 —— 这样量到的是这台设备真实渲染出来的墨迹，不依赖字体度量表的
-    // 假设（measureText 的 fontBoundingBox 在各引擎上并不一致，实测误差可达 1px）。
-    // 返回：墨迹中心相对基线的偏移（px，向上为负）；失败返回 null。
+    // 把这段文字用**当前元素的实际字体**画到 canvas 上，逐像素扫出墨迹上下边界，
+    // 得到「墨迹中心相对基线」的偏移（px，基线以上为负）。
+    // 不依赖 fontBoundingBox 等各引擎不一致的度量字段。
     function inkCenterFromBaseline(font, text, fontSize) {
       var key = font + '|' + text;
       if (cache[key] !== undefined) return cache[key];
-      var pad = Math.ceil(fontSize * 2);
-      var w = Math.ceil(ctx.measureText ? 0 : 0);
+      var pad = Math.ceil(fontSize * 3);
       ctx.font = font;
       var m;
-      try { m = ctx.measureText(text); } catch (e) { return null; }
-      w = Math.ceil(m.width) + pad * 2;
-      var h = Math.ceil(fontSize * 4) + pad * 2;
-      if (w <= 0 || h <= 0 || w > 4096) return null;
+      try { m = ctx.measureText(text); } catch (e) { cache[key] = null; return null; }
+      var w = Math.ceil(m.width) + pad * 2;
+      var h = Math.ceil(fontSize * 5) + pad * 2;
+      if (w <= 0 || h <= 0 || w > 4096) { cache[key] = null; return null; }
       canvas.width = w;
       canvas.height = h;
-      // 重设尺寸会清空状态，必须重新设置字体
-      ctx.font = font;
+      ctx.font = font;                 // 改尺寸会重置状态
       ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = '#000';
-      var baselineY = pad + fontSize * 2;   // 给上下都留足空间
-      try { ctx.fillText(text, pad, baselineY); } catch (e) { return null; }
+      var baselineY = pad + fontSize * 2;
+      try { ctx.fillText(text, pad, baselineY); } catch (e) { cache[key] = null; return null; }
       var data;
-      try { data = ctx.getImageData(0, 0, w, h).data; } catch (e) { return null; }
+      try { data = ctx.getImageData(0, 0, w, h).data; } catch (e) { cache[key] = null; return null; }
       var top = -1, bottom = -1;
       for (var y = 0; y < h; y++) {
-        var rowHas = false;
-        for (var x = 0; x < w; x++) {
-          if (data[(y * w + x) * 4 + 3] > 24) { rowHas = true; break; }
-        }
-        if (rowHas) { if (top < 0) top = y; bottom = y; }
+        var has = false;
+        for (var x = 0; x < w; x++) { if (data[(y * w + x) * 4 + 3] > 24) { has = true; break; } }
+        if (has) { if (top < 0) top = y; bottom = y; }
       }
       var result = (top < 0) ? null : ((top + bottom) / 2 - baselineY);
       cache[key] = result;
       return result;
     }
 
-    // 返回「墨迹中心相对行盒中心」的偏移（px，向下为正）；算不出返回 null。
-    function inkOffset(el) {
-      var cs = window.getComputedStyle(el);
-      var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (text === '') return null;
-      var fontSize = parseFloat(cs.fontSize) || 13;
-      var lineHeight = cs.lineHeight === 'normal' ? fontSize * 1.2 : parseFloat(cs.lineHeight);
-      if (!(lineHeight > 0)) return null;
-      var font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
-
-      var inkRelBaseline = inkCenterFromBaseline(font, text, fontSize);
-      if (inkRelBaseline === null) return null;
-
-      // 基线在行盒里的位置：半行距 + 字体 ascent。
-      // ascent/descent 用 measureText 的 fontBoundingBox；引擎不支持时按 0.8/0.2 估。
-      ctx.font = font;
-      var mm;
-      try { mm = ctx.measureText(text); } catch (e) { return null; }
-      var FA = mm.fontBoundingBoxAscent, FD = mm.fontBoundingBoxDescent;
-      if (!(FA > 0) || !(FD >= 0)) { FA = fontSize * 0.8; FD = fontSize * 0.2; }
-      var halfLeading = (lineHeight - (FA + FD)) / 2;
-      var baseline = halfLeading + FA;
-      var inkCenter = baseline + inkRelBaseline;
-      var offset = inkCenter - lineHeight / 2;
-      if (!isFinite(offset) || Math.abs(offset) > 3) offset = null;
-      return offset;
+    // 零宽探针：inline-block 的底边正好落在文字基线上。
+    // 用它把「基线在页面上的绝对 Y」量出来 —— 不再依赖任何字体度量推算。
+    function baselineOf(textEl) {
+      var probe = textEl.__dmBaselineProbe;
+      if (!probe || !probe.isConnected || probe.parentNode !== textEl) {
+        probe = document.createElement('span');
+        probe.setAttribute('aria-hidden', 'true');
+        probe.style.cssText = 'display:inline-block;width:0;height:0;overflow:hidden;vertical-align:baseline';
+        textEl.appendChild(probe);
+        textEl.__dmBaselineProbe = probe;
+      }
+      var r = probe.getBoundingClientRect();
+      return r.bottom;
     }
 
-    // 调试：在页面上直接标出每处偏差，方便在手机上读数（?dmdebug=1）
+    // 让一个图标以「同行文字的墨迹中心」为准做垂直对齐。
+    function alignOne(icon, textEl) {
+      var cs = window.getComputedStyle(textEl);
+      var text = (textEl.textContent || '').replace(/[ \\t\\r\\n]+/g, ' ').trim();
+      if (text === '') return null;
+      var fontSize = parseFloat(cs.fontSize) || 13;
+      var font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      var inkRel = inkCenterFromBaseline(font, text, fontSize);
+      if (inkRel === null) return null;
+      var baselineY = baselineOf(textEl);
+      var targetCenter = baselineY + inkRel;
+      // 先清掉自己上次的位移，再量当前位置，避免累积
+      icon.style.transform = 'none';
+      var ir = icon.getBoundingClientRect();
+      if (!(ir.height > 0)) return null;
+      var delta = targetCenter - (ir.top + ir.height / 2);
+      if (!isFinite(delta) || Math.abs(delta) > 8) return null;
+      var v = (Math.round(delta * 10) / 10) + 'px';
+      if (delta !== 0) icon.style.transform = 'translateY(' + v + ')';
+      return delta;
+    }
+
     function paintDebug(deltas) {
       if (!DEBUG) return;
       try {
@@ -4718,7 +4721,7 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
           box.style.cssText = 'position:fixed;left:6px;top:6px;z-index:99999;background:rgba(0,0,0,.82);color:#ff5c5c;font:11px/1.5 monospace;padding:6px 8px;border-radius:8px;white-space:pre;pointer-events:none';
           document.body.appendChild(box);
         }
-        box.textContent = deltas.length ? deltas.join('\\n') : 'no rows';
+        box.textContent = deltas.length ? deltas.join(String.fromCharCode(10)) : 'no rows';
       } catch (e) {}
     }
 
@@ -4731,22 +4734,14 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
           var icon = row.querySelector(PAIRS[p][1]);
           var text = row.querySelector(PAIRS[p][2]);
           if (!icon || !text) continue;
-          var off = inkOffset(text);
-          if (off === null) continue;
-          var v = (Math.round(off * 10) / 10) + 'px';
-          if (icon.style.transform !== 'translateY(' + v + ')') {
-            icon.style.transform = 'translateY(' + v + ')';
-          }
+          var d = alignOne(icon, text);
+          if (d === null) continue;
           if (DEBUG && deltas.length < 6) {
-            deltas.push((off >= 0 ? '+' : '') + (Math.round(off * 100) / 100) + '  ' + ((text.textContent || '').trim().slice(0, 10) || '(empty)') + '  ' + fontSizeOf(text));
+            deltas.push((d >= 0 ? '+' : '') + (Math.round(d * 100) / 100) + '  ' + ((text.textContent || '').trim().slice(0, 10) || '(empty)') + '  ' + window.getComputedStyle(text).fontSize);
           }
         }
       }
       paintDebug(deltas);
-    }
-
-    function fontSizeOf(el) {
-      try { return window.getComputedStyle(el).fontSize; } catch (e) { return '?'; }
     }
 
     var queued = false;
