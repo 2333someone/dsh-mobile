@@ -528,6 +528,19 @@ function firstNumericWallet(list) {
  * 也就不存在「多带一个 token 字段就顺手下发给手机」的可能。
  * @returns `1.23 CNY` 形式的展示串；拿不到合法形状时 undefined。
  */
+/**
+ * 余额展示串：与官方余额卡一致，用货币符号而不是币种代码。
+ *   13.75 CNY → ¥13.75
+ *   13.75 USD → $13.75
+ * 未知币种保留 "13.75 XXX" 的通用写法，绝不丢单位。
+ */
+function formatBalanceAmount(digits, currency) {
+  const num = digits.toFixed(2)
+  if (currency === 'CNY' || currency === 'RMB') return '¥' + num
+  if (currency === 'USD') return '$' + num
+  return num + ' ' + currency
+}
+
 function balanceRow(list) {
   const wallet = firstNumericWallet(list)
   if (wallet === undefined) return undefined
@@ -536,7 +549,7 @@ function balanceRow(list) {
   const digits = Number(amount)
   if (!Number.isFinite(digits)) return undefined
   const currency = typeof wallet.currency === 'string' && wallet.currency !== '' ? wallet.currency : 'CNY'
-  return `${digits.toFixed(2)} ${currency}`
+  return formatBalanceAmount(digits, currency)
 }
 
 /** 按 (ctx, ref-name) 解析命中的 API Key。CredentialRef 是 `/^[A-Za-z_][A-Za-z0-9_]*$/` 品牌的字符串。 */
@@ -571,7 +584,7 @@ async function queryOfficialBalance(apiKey) {
   }
   const digits = Number(infos.total_balance)
   if (!Number.isFinite(digits)) throw new Error('DeepSeek balance response total_balance is not numeric')
-  return `${digits.toFixed(2)} ${currency}`
+  return formatBalanceAmount(digits, currency)
 }
 
 // 从宿主 `deepseekAccount` 服务读取平台登录态下的余额，返回 Row（展示串）或 undefined。
