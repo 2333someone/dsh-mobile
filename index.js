@@ -5863,6 +5863,10 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
 <header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回插件列表" data-dm-cfg-back="1"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title" data-dm-cfg-title>内置插件配置</h1><button class="dm-page-iconbtn" type="button" aria-label="重新读取配置" data-dm-cfg-refresh="1"><svg class="dm-page-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.49 8.66A8.2 8.2 0 1 1 11.71 3.80"/><path d="M16.31 3.64L11.64 1.56L11.79 6.05Z" fill="currentColor" stroke="currentColor" stroke-width="0.55" stroke-linejoin="round"/></svg></button></header>
 <div class="dm-page-body" data-dm-cfg-body><p class="dm-page-state">加载中…</p></div>
 </section>
+<section id="dm-page-models" class="dm-page dm-page-models" hidden aria-label="模型">
+<header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回设置" data-dm-mc-back="1"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title" data-dm-mc-title>模型</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新模型" data-dm-mc-refresh="1"><svg class="dm-page-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.49 8.66A8.2 8.2 0 1 1 11.71 3.80"/><path d="M16.31 3.64L11.64 1.56L11.79 6.05Z" fill="currentColor" stroke="currentColor" stroke-width="0.55" stroke-linejoin="round"/></svg></button></header>
+<div class="dm-page-body" data-dm-mc-body><p class="dm-page-state">加载中…</p></div>
+</section>
 </div>
 <div class="dm-toast" id="dm-toast" role="status" aria-live="polite" hidden></div>
 <script>
@@ -7345,6 +7349,332 @@ const BUILTIN_CONFIG_HTML = `<script>
 })();
 </script>`
 
+// ── 设置 → 主机配置 → 模型：只保留「模型」行 + 自绘模型页 ──────────────────
+// 隐藏只在「主机配置」组内按行标题精确匹配（不改 settings.read：bundle 的
+// ui-theme/分组详情页共用同一份 namespaces）；点「模型」行由本脚本接管，
+// 打开下面这个页面。数据全部来自宿主 RPC mobile.modelsCenter.get。
+const MODELS_CENTER_HTML = `<script>
+(function () {
+  'use strict';
+
+  // ── 设置页「主机配置」：只保留「模型」一行 ────────────────────────────────
+  //
+  // 为什么是 DOM 隐藏而不是过滤 settings.read：bundle 里 settings.read 的 namespaces
+  // 被多处共用（分组行、分组详情页、**主题偏好** ui-theme）。按组过滤会连带把
+  // ui-theme 等拿掉，主题与详情页都会坏。这里只在该 settings-group 内按行标题精确
+  // 匹配隐藏，MutationObserver 在 React 重渲染后补隐藏，绝不碰其它分组。
+  var GROUP_TITLE = '主机配置';
+  var KEEP_ROW = '模型';
+  var GROUP_DESC = '模型提供方 · 密钥 · 默认模型';
+  var hideHits = 0;
+
+  function settingsGroup() {
+    var groups = document.querySelectorAll('.settings-group');
+    for (var i = 0; i < groups.length; i++) {
+      var title = groups[i].querySelector('.settings-groupTitle');
+      if (title && String(title.textContent || '').indexOf(GROUP_TITLE) === 0) return groups[i];
+    }
+    return null;
+  }
+
+  function applySettingsFilter() {
+    var group = settingsGroup();
+    if (!group) return;
+    var rows = group.querySelectorAll(':scope > li');
+    for (var i = 0; i < rows.length; i++) {
+      var li = rows[i];
+      var button = li.querySelector('.mobile-row');
+      if (!button) continue;
+      var titleEl = button.querySelector('.card-titleText');
+      var title = String(titleEl && titleEl.textContent ? titleEl.textContent : '').trim();
+      if (title === KEEP_ROW) {
+        if (li.style.display === 'none') li.style.display = '';
+        li.setAttribute('data-dm-models-row', '1');
+      } else {
+        if (li.style.display !== 'none') li.style.display = 'none';
+        li.removeAttribute('data-dm-models-row');
+      }
+    }
+    var desc = group.querySelector('.settings-groupDesc');
+    if (desc && desc.textContent !== GROUP_DESC) desc.textContent = GROUP_DESC;
+    hideHits += 1;
+  }
+
+  var filterQueued = false;
+  function scheduleSettingsFilter() {
+    if (filterQueued) return;
+    filterQueued = true;
+    window.setTimeout(function () {
+      filterQueued = false;
+      try { applySettingsFilter(); } catch (e) {}
+    }, 60);
+  }
+  try {
+    new MutationObserver(scheduleSettingsFilter).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
+  window.setInterval(function () { try { applySettingsFilter(); } catch (e) {} }, 1000);
+  applySettingsFilter();
+
+  // ── 模型页（自绘，数据全部来自宿主）──────────────────────────────────────
+  var PAGE = document.getElementById('dm-page-models');
+  if (!PAGE) return;
+  var BODY = PAGE.querySelector('[data-dm-mc-body]');
+  var TITLE = PAGE.querySelector('[data-dm-mc-title]');
+  var opened = false;
+  var loading = false;
+  var data = null;
+  var errorText = null;
+  var status = null;
+  var loadNonce = 0;
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rpcId: 'dm-mc-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+        payload: payload || {},
+      }),
+    }).then(function (res) {
+      return res.json().catch(function () { return null; });
+    }).then(function (json) {
+      if (!json || !json.result) throw new Error('宿主没有返回 RPC 结果（连接可能因插件重载中断）');
+      return json.result;
+    });
+  }
+
+  function renderState(text, cls, withRetry) {
+    BODY.innerHTML = '<div class="dm-page-state ' + (cls || '') + '">' +
+      '<p class="dm-page-stateText">' + esc(text) + '</p>' +
+      (withRetry ? '<button class="dm-page-retry" type="button" data-dm-mc-retry="1">重试</button>' : '') +
+      '</div>';
+  }
+
+  function setStatus(kind, text) {
+    status = text ? { kind: kind, text: text } : null;
+    var el = BODY.querySelector('[data-dm-mc-status]');
+    if (!el) return;
+    if (!status) { el.textContent = ''; el.className = 'dm-cfg-status'; return; }
+    el.textContent = status.text;
+    el.className = 'dm-cfg-status is-' + status.kind;
+  }
+
+  function badge(text, tone) {
+    return '<span class="dm-cfg-badge' + (tone ? ' ' + tone : '') + '">' + esc(text) + '</span>';
+  }
+
+  function sourceLabel(item) {
+    if (item.source === 'account') return 'DeepSeek 账号';
+    if (item.source === 'deepseek') return 'DeepSeek 官方 API';
+    if (item.source === 'profile') return '已配置';
+    if (item.source === 'registered') return '已注册';
+    return '目录可选';
+  }
+
+  function providerCard(item) {
+    var badges = '';
+    if (item.registered) badges += badge('已注册', 'is-on');
+    if (item.configured) badges += badge('已配置', 'is-on');
+    if (!item.registered && !item.configured) badges += badge('目录', 'is-off');
+    if (item.error) badges += badge('异常', 'is-off');
+    var meta = [];
+    if (item.credential) meta.push(item.credential.configured ? 'API Key 已配置' : 'API Key 未配置');
+    if (item.models && item.models.length > 0) meta.push(item.models.length + ' 个模型');
+    if (item.api) meta.push(item.api);
+    var endpoint = item.baseURL ? String(item.baseURL) : '';
+    var html = '<div class="dm-mc-card" data-dm-mc-provider="' + esc(item.provider) + '">' +
+      '<div class="dm-mc-head"><span class="dm-mc-name">' + esc(item.displayName || item.provider) + '</span>' +
+      '<span class="dm-mc-badges">' + badges + '</span></div>' +
+      '<div class="dm-mc-sub">' + esc(item.provider) + ' · ' + esc(sourceLabel(item)) + '</div>';
+    if (meta.length > 0) html += '<div class="dm-mc-meta">' + esc(meta.join(' · ')) + '</div>';
+    if (endpoint !== '') html += '<div class="dm-mc-meta dm-mc-endpoint">' + esc(endpoint) + '</div>';
+    if (item.modelsError) html += '<p class="dm-cfg-hint dm-cfg-warn">模型清单读取失败：' + esc(item.modelsError) + '</p>';
+    if (item.error) html += '<p class="dm-cfg-hint dm-cfg-warn">' + esc(item.error) + '</p>';
+    html += '</div>';
+    return html;
+  }
+
+  function render() {
+    if (!data) {
+      renderState('还没有模型数据', 'dm-page-empty', true);
+      return;
+    }
+    if (data.available !== true) {
+      renderState(data.reason || '宿主没有提供模型服务', 'dm-page-error', true);
+      return;
+    }
+    var html = '';
+    // DeepSeek 账号
+    html += '<div class="dm-mc-section"><h2 class="dm-cfg-sectionTitle">DeepSeek 账号</h2>';
+    var account = data.account || { available: false };
+    if (account.available !== true) {
+      html += '<div class="dm-mc-card"><p class="dm-cfg-hint">' + esc(account.reason || '宿主账号服务不可用') + '</p></div>';
+    } else {
+      var signedIn = account.status === 'signed-in';
+      html += '<div class="dm-mc-card"><div class="dm-mc-head"><span class="dm-mc-name">DeepSeek 账号</span>' +
+        (signedIn ? badge('已登录', 'is-on') : badge('未登录', 'is-off')) + '</div>' +
+        '<p class="dm-cfg-hint">' + (signedIn ? '已在本机保存 DeepSeek 账号授权，可直接使用账号模型。' : '尚未登录。手机端暂不支持登录/退出，请在桌面端操作。') + '</p>';
+      if (account.attempt && account.attempt.phase) {
+        html += '<p class="dm-cfg-hint dm-cfg-warn">登录进行中：' + esc(account.attempt.phase) + '</p>';
+      }
+      var links = [];
+      if (account.links && account.links.usageUrl) links.push('<a class="dm-cfg-link" href="' + esc(account.links.usageUrl) + '" target="_blank" rel="noopener noreferrer">用量</a>');
+      if (account.links && account.links.topUpUrl) links.push('<a class="dm-cfg-link" href="' + esc(account.links.topUpUrl) + '" target="_blank" rel="noopener noreferrer">充值</a>');
+      if (links.length > 0) html += '<div class="dm-mc-links">' + links.join('<span class="dm-mc-sep">·</span>') + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // 默认模型
+    html += '<div class="dm-mc-section"><h2 class="dm-cfg-sectionTitle">默认模型</h2>';
+    var model = data.defaultModel;
+    if (!model) {
+      html += '<div class="dm-mc-card"><p class="dm-cfg-hint">宿主没有返回默认模型。</p></div>';
+    } else {
+      html += '<div class="dm-mc-card"><div class="dm-mc-head"><span class="dm-mc-name">' + esc(model.provider) + ' / ' + esc(model.model) + '</span>' +
+        (model.overridden ? badge('已覆盖') : '') + '</div>' +
+        '<div class="dm-mc-sub">推理强度：' + esc(model.reasoningEffort || '默认') + '</div></div>';
+    }
+    html += '</div>';
+
+    // 提供商列表
+    var providers = Array.isArray(data.providers) ? data.providers : [];
+    html += '<div class="dm-mc-section"><h2 class="dm-cfg-sectionTitle">提供商（' + providers.length + ' 个）</h2>';
+    if (providers.length === 0) {
+      html += '<div class="dm-mc-card"><p class="dm-cfg-hint">宿主当前没有可用的模型提供商。</p></div>';
+    } else {
+      for (var i = 0; i < providers.length; i++) html += providerCard(providers[i]);
+    }
+    html += '</div>';
+
+    html += '<p class="dm-cfg-footnote">数据来自宿主 llm / credentials / deepseekAccount / agentDefaultModel 的实时读取。' +
+      (data.readOnly ? '当前部署的设置文档只读。' : '当前为只读视图：编辑 Key、添加提供商、修改默认模型将在下一阶段接入。') +
+      '</p>';
+    html += '<div class="dm-cfg-footer"><p class="dm-cfg-status" data-dm-mc-status="1"></p></div>';
+    BODY.innerHTML = html;
+    setStatus(status && status.kind, status && status.text);
+  }
+
+  function load() {
+    var nonce = ++loadNonce;
+    loading = true;
+    errorText = null;
+    setStatus(null, '');
+    renderState('读取宿主模型目录…', 'dm-page-loading');
+    rpc('mobile.modelsCenter.get').then(function (result) {
+      if (nonce !== loadNonce || !opened) return;
+      loading = false;
+      if (!result || result.ok !== true) {
+        errorText = (result && result.error && result.error.message) || '宿主没有返回模型数据';
+        renderState('读取失败：' + errorText, 'dm-page-error', true);
+        return;
+      }
+      data = result.value;
+      render();
+    }).catch(function (err) {
+      if (nonce !== loadNonce || !opened) return;
+      loading = false;
+      errorText = (err && err.message) || String(err);
+      renderState('读取失败：' + errorText, 'dm-page-error', true);
+    });
+  }
+
+  function openModelsPage() {
+    if (opened) { load(); return; }
+    opened = true;
+    PAGE.hidden = false;
+    if (TITLE) TITLE.textContent = '模型';
+    try { history.pushState({ dmModels: 1 }, '', '#/dm-models'); } catch (e) {}
+    renderState('加载中…', 'dm-page-loading');
+    load();
+  }
+
+  function closeModelsPage(fromPop) {
+    if (!opened) return;
+    opened = false;
+    PAGE.hidden = true;
+    if (!fromPop) { try { history.back(); } catch (e) {} }
+  }
+
+  PAGE.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest('[data-dm-mc-back]')) {
+      event.preventDefault();
+      closeModelsPage(false);
+      return;
+    }
+    if (target.closest('[data-dm-mc-refresh]') || target.closest('[data-dm-mc-retry]')) {
+      event.preventDefault();
+      load();
+    }
+  });
+
+  window.addEventListener('popstate', function (event) {
+    var stateValue = event && event.state;
+    if (opened && (!stateValue || stateValue.dmModels !== 1)) closeModelsPage(true);
+  });
+
+  // 只拦「主机配置」组里标题为「模型」的那一行；其它行/其它分组不碰。
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    var row = target.closest('.mobile-row');
+    if (!row) return;
+    var group = row.closest('.settings-group');
+    if (!group) return;
+    var groupTitle = group.querySelector('.settings-groupTitle');
+    if (!groupTitle || String(groupTitle.textContent || '').indexOf(GROUP_TITLE) !== 0) return;
+    var titleEl = row.querySelector('.card-titleText');
+    if (String(titleEl && titleEl.textContent ? titleEl.textContent : '').trim() !== KEEP_ROW) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openModelsPage();
+  }, true);
+
+  // 测试/排查入口（只读快照 + 显式打开）
+  window.__dmModelsPage = {
+    open: openModelsPage,
+    close: closeModelsPage,
+    refresh: load,
+    state: function () {
+      return {
+        opened: opened,
+        loading: loading,
+        error: errorText,
+        hideHits: hideHits,
+        visibleRows: (function () {
+          var group = settingsGroup();
+          if (!group) return null;
+          var out = [];
+          var rows = group.querySelectorAll(':scope > li');
+          for (var i = 0; i < rows.length; i++) {
+            var button = rows[i].querySelector('.mobile-row');
+            if (!button) continue;
+            if (rows[i].style.display === 'none') continue;
+            var titleEl = button.querySelector('.card-titleText');
+            out.push(String(titleEl && titleEl.textContent ? titleEl.textContent : '').trim());
+          }
+          return out;
+        })(),
+        data: data ? {
+          available: data.available,
+          counts: data.counts,
+          account: data.account,
+          defaultModel: data.defaultModel,
+        } : null,
+      };
+    },
+  };
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -7389,6 +7719,7 @@ function mobilePageHtml() {
     USAGE_INLINE_HTML,
     HOST_PAGES_HTML,
     BUILTIN_CONFIG_HTML,
+    MODELS_CENTER_HTML,
     COMMAND_PANEL_HTML,
     DEVICE_INFO_HTML,
     NOTIFY_LAYOUT_HTML,
@@ -9516,6 +9847,306 @@ export function apply(ctx, config) {
     },
   }
 
+    // ══ 模型中心（设置 → 主机配置 → 模型）══════════════════════════════════════
+    //
+    // 桌面「模型」页（@deepseek-ai/dsh-client-ui-settings-models）用的同一组宿主能力：
+    //   · llm.listProviders() / listModels()        —— 已注册路由 + 实际可用模型
+    //   · llm.listConfigurableProviders()           —— 内置目录（pi-ai 42 个）+ 已配置 profile
+    //   · credentials.describe / set / unset        —— provider API Key（refs 半，绝不取值）
+    //   · deepseekAccount.getState()                —— DeepSeek 账号登录态（grant 存在 credentials.records）
+    //   · agentDefaultModel.currentSelection()      —— 默认模型
+    //
+    // 写路径（阶段二）：settings.mutate('llm-pi-ai', …)、credentials.set/unset、
+    // agentDefaultModel.saveSelection()；三者都经 callOutsideHmr（configEditor.edit
+    // 内部会 hmr.runExclusive，嵌套会被宿主拒绝）。
+    const MODELS_PI_AI_NS = 'llm-pi-ai'
+    const MODELS_DEEPSEEK_NS = 'llm-deepseek'
+    const MODELS_DEFAULT_NS = 'agent-default-model'
+    const MODELS_ROUTE_DEEPSEEK = 'deepseek-official'
+    const MODELS_ROUTE_ACCOUNT = 'deepseek-account'
+    const MODELS_DEFAULT_DEEPSEEK_REF = 'DEEPSEEK_API_KEY'
+    const MODELS_PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages']
+    // 与桌面自定义表单同一规则（asar: dsh-client-ui-settings-models 里 ROUTE_PATTERN）。
+    const MODELS_PROVIDER_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+
+    /** 桌面同款：没声明 apiKeyEnv 的 route 按 `<PROVIDER>_API_KEY` 派生凭据引用。 */
+    function modelsKeyRef(provider) {
+      return `${String(provider).toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
+    }
+
+    function modelsObjectOf(value) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    }
+
+    function modelsStringsOf(value) {
+      return Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []
+    }
+
+    function modelsModelViews(value) {
+      if (!Array.isArray(value)) return []
+      const out = []
+      for (const model of value) {
+        if (!model || typeof model.id !== 'string' || model.id === '') continue
+        out.push({ id: model.id, name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id })
+      }
+      return out
+    }
+
+    function modelsErrText(error) {
+      if (error === undefined || error === null) return null
+      if (typeof error === 'string') return error
+      if (typeof error.message === 'string' && error.message !== '') return error.message
+      return String(error)
+    }
+
+    /** 只回答「配置了没有 / 能不能写」，绝不把值带回手机。 */
+    async function modelsCredentialInfo(credentials, ref) {
+      if (!credentials || typeof credentials.describe !== 'function') {
+        return { ref, available: false, configured: false, writable: false }
+      }
+      try {
+        const info = await credentials.describe(ref)
+        return {
+          ref,
+          available: true,
+          configured: info !== undefined && info !== null && info.configured === true,
+          writable: info === undefined || info === null || info.writable !== false,
+        }
+      } catch (err) {
+        return { ref, available: false, configured: false, writable: false, error: modelsErrText(err) }
+      }
+    }
+
+    /** DeepSeek 账号：只读快照（status + links + 登录进度），不做手机端登录/退出。 */
+    async function modelsAccountView() {
+      const account = hostService('deepseekAccount')
+      if (!account || typeof account.getState !== 'function') {
+        return { available: false, reason: '宿主 deepseekAccount 服务不可用' }
+      }
+      try {
+        const state = await account.getState()
+        const view = {
+          available: true,
+          status: state && state.status === 'credential-stored' ? 'signed-in' : 'signed-out',
+          links: {
+            usageUrl: state && state.links && typeof state.links.usageUrl === 'string' ? state.links.usageUrl : null,
+            topUpUrl: state && state.links && typeof state.links.topUpUrl === 'string' ? state.links.topUpUrl : null,
+          },
+        }
+        if (state && state.attempt && typeof state.attempt === 'object' && typeof state.attempt.phase === 'string') {
+          view.attempt = { phase: state.attempt.phase }
+        }
+        return view
+      } catch (err) {
+        return { available: false, reason: modelsErrText(err) }
+      }
+    }
+
+    function modelsSelectionView(selection) {
+      if (!selection || typeof selection !== 'object') return null
+      const provider = typeof selection.provider === 'string' ? selection.provider : ''
+      const model = typeof selection.model === 'string' ? selection.model : ''
+      if (provider === '' || model === '') return null
+      return {
+        provider,
+        model,
+        reasoningEffort: typeof selection.reasoningEffort === 'string' ? selection.reasoningEffort : null,
+        overridden: false,
+      }
+    }
+
+    /** 页面排序与桌面一致：DeepSeek 账号 → DeepSeek 官方 → 已配置 → 其它已注册。 */
+    function modelsProviderOrder(left, right) {
+      const rank = (item) => (item.provider === MODELS_ROUTE_ACCOUNT ? 0 : item.provider === MODELS_ROUTE_DEEPSEEK ? 1 : item.configured ? 2 : 3)
+      const diff = rank(left) - rank(right)
+      return diff !== 0 ? diff : left.provider.localeCompare(right.provider)
+    }
+
+    /** 模型中心整页快照：全部来自宿主，绝不写死目录或默认值。 */
+    async function modelsCenterPayload() {
+      const llm = hostService('llm')
+      if (!llm || typeof llm.listProviders !== 'function') {
+        return {
+          available: false,
+          reason: '宿主 llm 服务不可用（profile 未加载 llm 插件）',
+          providers: [],
+          catalog: [],
+        }
+      }
+      const rows = builtinSettingsRows()
+      const piRow = rows ? rows.get(MODELS_PI_AI_NS) : undefined
+      const piValue = modelsObjectOf(piRow && piRow.value)
+      const piUser = modelsObjectOf(piRow && piRow.user)
+      const profiles = modelsObjectOf(piValue.providers)
+      const userProfiles = modelsObjectOf(piUser.providers)
+      const deepseekRow = rows ? rows.get(MODELS_DEEPSEEK_NS) : undefined
+      const deepseekValue = modelsObjectOf(deepseekRow && deepseekRow.value)
+
+      let directory = []
+      try {
+        directory = typeof llm.listConfigurableProviders === 'function' ? llm.listConfigurableProviders() : []
+      } catch {
+        directory = []
+      }
+      let registered = []
+      try {
+        registered = llm.listProviders()
+      } catch {
+        registered = []
+      }
+
+      const providerMap = new Map()
+      const ensure = (id) => {
+        if (!providerMap.has(id)) {
+          providerMap.set(id, {
+            provider: id,
+            displayName: id,
+            registered: false,
+            configured: false,
+            declared: false,
+            editable: false,
+            removable: false,
+            settingsNs: '',
+            settingsPath: [],
+            apiKeyRef: null,
+            api: null,
+            baseURL: null,
+            defaultBaseURL: null,
+            baseURLEnv: [],
+            nativeAuth: null,
+            models: [],
+            modelsError: null,
+            credential: null,
+            source: 'catalog',
+            error: null,
+          })
+        }
+        return providerMap.get(id)
+      }
+
+      for (const entry of Array.isArray(directory) ? directory : []) {
+        if (!entry || typeof entry.provider !== 'string' || entry.provider === '') continue
+        const item = ensure(entry.provider)
+        if (typeof entry.displayName === 'string' && entry.displayName !== '') item.displayName = entry.displayName
+        if (typeof entry.settingsNs === 'string') item.settingsNs = entry.settingsNs
+        if (Array.isArray(entry.settingsPath)) {
+          item.settingsPath = entry.settingsPath.filter((key) => typeof key === 'string')
+        }
+        if (entry.declared === true) item.declared = true
+        if (typeof entry.defaultBaseURL === 'string' && entry.defaultBaseURL !== '') item.defaultBaseURL = entry.defaultBaseURL
+        item.baseURLEnv = modelsStringsOf(entry.baseURLEnv)
+        if (entry.nativeAuth && typeof entry.nativeAuth === 'object') {
+          item.nativeAuth = { env: modelsStringsOf(entry.nativeAuth.env), oauth: entry.nativeAuth.oauth === true }
+        }
+        if (entry.error !== undefined && entry.error !== null) item.error = modelsErrText(entry.error)
+      }
+
+      for (const info of Array.isArray(registered) ? registered : []) {
+        if (!info || typeof info.id !== 'string' || info.id === '') continue
+        const item = ensure(info.id)
+        item.registered = true
+        if (typeof info.name === 'string' && info.name !== '') item.displayName = info.name
+      }
+
+      for (const item of providerMap.values()) {
+        if (item.provider === MODELS_ROUTE_ACCOUNT) {
+          item.source = 'account'
+          item.displayName = item.displayName || 'DeepSeek Account'
+          item.configured = true
+          continue
+        }
+        if (item.provider === MODELS_ROUTE_DEEPSEEK) {
+          item.source = 'deepseek'
+          item.configured = true
+          item.editable = true
+          item.settingsNs = MODELS_DEEPSEEK_NS
+          item.settingsPath = []
+          item.apiKeyRef = typeof deepseekValue.apiKeyEnv === 'string' && deepseekValue.apiKeyEnv !== ''
+            ? deepseekValue.apiKeyEnv
+            : MODELS_DEFAULT_DEEPSEEK_REF
+          item.baseURL = typeof deepseekValue.baseURL === 'string' && deepseekValue.baseURL !== '' ? deepseekValue.baseURL : null
+          item.models = modelsModelViews(deepseekValue.models)
+          continue
+        }
+        const profile = modelsObjectOf(profiles[item.provider])
+        const hasProfile = Object.prototype.hasOwnProperty.call(profiles, item.provider)
+        item.configured = hasProfile
+        item.removable = hasProfile && Object.prototype.hasOwnProperty.call(userProfiles, item.provider)
+        item.editable = item.registered || hasProfile || item.settingsPath.length > 0
+        item.apiKeyRef = typeof profile.apiKeyEnv === 'string' && profile.apiKeyEnv !== ''
+          ? profile.apiKeyEnv
+          : modelsKeyRef(item.provider)
+        if (typeof profile.api === 'string' && MODELS_PROTOCOLS.includes(profile.api)) item.api = profile.api
+        item.baseURL = typeof profile.baseURL === 'string' && profile.baseURL !== '' ? profile.baseURL : item.defaultBaseURL
+        const profileModels = modelsModelViews(profile.models)
+        if (profileModels.length > 0) item.models = profileModels
+        item.source = hasProfile ? 'profile' : (item.registered ? 'registered' : 'catalog')
+      }
+
+      // 已注册路由以 llm.listModels() 的实际清单为准（覆盖 profile 里手写的目录）。
+      for (const item of providerMap.values()) {
+        if (!item.registered) continue
+        try {
+          const models = await llm.listModels(item.provider)
+          item.models = modelsModelViews(models)
+        } catch (err) {
+          item.modelsError = modelsErrText(err)
+        }
+      }
+
+      const credentials = hostService('credentials')
+      const refCache = new Map()
+      for (const item of providerMap.values()) {
+        if (typeof item.apiKeyRef !== 'string' || item.apiKeyRef === '') continue
+        if (!refCache.has(item.apiKeyRef)) refCache.set(item.apiKeyRef, await modelsCredentialInfo(credentials, item.apiKeyRef))
+        item.credential = refCache.get(item.apiKeyRef)
+      }
+
+      const account = await modelsAccountView()
+      let defaultModel = null
+      const defaultService = hostService('agentDefaultModel')
+      if (defaultService && typeof defaultService.currentSelection === 'function') {
+        try {
+          defaultModel = modelsSelectionView(defaultService.currentSelection())
+        } catch {
+          defaultModel = null
+        }
+      }
+      if (defaultModel !== null && rows && rows.has(MODELS_DEFAULT_NS)) {
+        const row = rows.get(MODELS_DEFAULT_NS)
+        const user = modelsObjectOf(row && row.user)
+        defaultModel.overridden = typeof user.provider === 'string' && user.provider !== ''
+      }
+
+      // 页面列表只列「已注册或已配置」的；完整目录单独给「添加」用。
+      const providers = [...providerMap.values()].filter((item) => item.registered || item.configured)
+      const catalog = [...providerMap.values()].filter((item) => item.registered !== true)
+      providers.sort(modelsProviderOrder)
+      catalog.sort((left, right) => left.provider.localeCompare(right.provider))
+
+      const settings = hostService('settings')
+      return {
+        available: true,
+        // 阶段二才会真正写；这里如实告诉客户端当前宿主能不能写。
+        readOnly: !(settings && typeof settings.mutate === 'function'),
+        account,
+        defaultModel,
+        providers,
+        catalog,
+        counts: {
+          providers: providers.length,
+          catalog: catalog.length,
+          configured: providers.filter((item) => item.configured).length,
+          registered: providers.filter((item) => item.registered).length,
+        },
+        protocols: MODELS_PROTOCOLS,
+      }
+    }
+
+    const MODELS_CENTER_CASES = {
+      'mobile.modelsCenter.get': async () => ({ ok: true, value: await modelsCenterPayload() }),
+    }
+
   /**
    * 在 HMR 事务上下文之外执行回调。
    *
@@ -10404,6 +11035,15 @@ export function apply(ctx, config) {
         const handle = BUILTIN_CONFIG_CASES[method]
         if (typeof handle !== 'function') {
           return { ok: false, error: { code: 'unknown-method', message: `未知的内置插件配置方法：${method}` } }
+        }
+        return handle(payload)
+      }
+
+      // ── 模型中心：设置 → 主机配置 → 模型 ───────────────────────────────────
+      case 'mobile.modelsCenter.get': {
+        const handle = MODELS_CENTER_CASES[method]
+        if (typeof handle !== 'function') {
+          return { ok: false, error: { code: 'unknown-method', message: `未知的模型中心方法：${method}` } }
         }
         return handle(payload)
       }

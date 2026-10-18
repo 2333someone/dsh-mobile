@@ -2826,3 +2826,65 @@ html.dm-host-page-open body {
 .dm-card-icon-art { background: transparent; }
 .dm-card-icon-art svg { display: block; width: 32px; height: 32px; }
 .dm-card-icon-art.dm-card-icon-lg svg { width: 46px; height: 46px; }
+
+/* ── 设置 → 主机配置 → 模型页（自绘）────────────────────────────────────────
+   复用 .dm-cfg-* 的表单/徽标/底部状态样式，这里只补模型卡片本身。
+   卡片与 .dm-cfg-section 同圆角同描边，深浅主题自动跟随。 */
+.dm-page-models {
+  z-index: 78;
+}
+.dm-mc-section {
+  margin-bottom: 12px;
+}
+.dm-mc-card {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-radius: 12px;
+  background: var(--bg-surface, #ffffff);
+}
+.dm-mc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dm-mc-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary, #1a1a2e);
+  overflow-wrap: anywhere;
+}
+.dm-mc-badges {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+}
+.dm-mc-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-tertiary, #6a6a7a);
+  word-break: break-all;
+}
+.dm-mc-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary, #4a4a5a);
+  word-break: break-all;
+}
+.dm-mc-endpoint {
+  color: var(--text-tertiary, #6a6a7a);
+}
+.dm-mc-links {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dm-mc-sep {
+  color: var(--text-tertiary, #6a6a7a);
+}
