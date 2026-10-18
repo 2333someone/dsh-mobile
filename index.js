@@ -71,6 +71,9 @@ const DEFAULT_MOBILE_PORT = 19387
 const DEFAULT_PAIR_CODE = '123456'
 const SMALL_BODY = 64 * 1024
 const PROMPT_BODY = 2 * 1024 * 1024
+// 手机点命令后的单次执行上限：bundle 侧 mobile.commandExec 的 fetch 超时是 180s，
+// 宿主这里留 30s 余量，避免「前端已放弃、宿主还在 await」的悬挂。
+const COMMAND_EXEC_TIMEOUT_MS = 150 * 1000
 
 // ── 权限预设中文化 ────────────────────────────────────────────────────────
 // 宿主 permissionPresets.catalog() 返回的 options 是原始英文。实测返回：
@@ -5046,6 +5049,402 @@ const USAGE_INLINE_HTML = `<script>
 })();
 </script>`
 
+const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="button" aria-label="命令" title="命令（/）"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 4 8.8 20"/><path d="M19.5 5.6h-4"/><path d="M8.5 18.4h-4"/></svg></button><script>
+(function () {
+  try {
+    if (window.__dmCommandPanel) return;
+    window.__dmCommandPanel = true;
+    var btn = document.getElementById('dm-cmd-btn');
+    if (!btn) return;
+
+    // 命令面板：数据全部来自宿主命令注册表（RPC：mobile.commands / mobile.commandExec），
+    // 这里只做呈现与过滤，不内置任何命令名 —— 宿主没注册的命令不会出现在面板里。
+    var panel = null;
+    var state = { items: [], reason: '', filter: '', busy: false };
+    var lastSessionId = '';
+
+    // 与 MODEL_BUTTON_HTML 同一手法：拦截 RPC 请求，自动记住当前会话 id。
+    var origFetch = window.fetch;
+    if (typeof origFetch === 'function') {
+      window.fetch = function (input, init) {
+        try {
+          var url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+            var body = JSON.parse(init.body);
+            if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
+              lastSessionId = body.payload.sessionId;
+            }
+          }
+        } catch (e) {}
+        return origFetch.apply(this, arguments);
+      };
+    }
+
+    function currentSession() {
+      try {
+        var s = new URL(location.href).searchParams.get('session');
+        if (s) return s;
+      } catch (e) {}
+      return lastSessionId;
+    }
+
+    function rpc(method, payload) {
+      var id = 'dm-cmd-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+      return fetch('/m/api/' + method, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rpcId: id, payload: payload })
+      }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+    }
+
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text !== undefined && text !== null) n.textContent = String(text);
+      return n;
+    }
+
+    function build() {
+      var back = document.createElement('div');
+      back.className = 'dm-perm-backdrop dm-cmd-backdrop';
+      var sheet = document.createElement('div');
+      sheet.className = 'dm-perm-sheet dm-cmd-sheet';
+      var head = document.createElement('div');
+      head.className = 'dm-perm-head dm-cmd-head';
+      var title = el('div', 'dm-perm-title', '命令');
+      var close = el('button', 'dm-perm-close', '✕');
+      close.type = 'button';
+      close.setAttribute('aria-label', '关闭');
+      head.appendChild(title);
+      head.appendChild(close);
+
+      var searchRow = el('div', 'dm-cmd-searchrow');
+      var search = document.createElement('input');
+      search.className = 'dm-cmd-search';
+      search.type = 'search';
+      search.autocomplete = 'off';
+      search.setAttribute('placeholder', '搜索命令');
+      search.setAttribute('aria-label', '搜索命令');
+      searchRow.appendChild(search);
+
+      var body = el('div', 'dm-perm-body dm-cmd-body');
+      var status = el('div', 'dm-perm-status');
+
+      sheet.appendChild(head);
+      sheet.appendChild(searchRow);
+      sheet.appendChild(body);
+      sheet.appendChild(status);
+      back.appendChild(sheet);
+      document.body.appendChild(back);
+
+      back.addEventListener('click', function (e) { if (e.target === back) closePanel(); });
+      close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
+      search.addEventListener('input', function () {
+        state.filter = search.value || '';
+        paint();
+      });
+
+      // 下滑关闭：只监听头部，避免和列表本身的滚动抢触摸事件。
+      var startY = 0;
+      head.addEventListener('touchstart', function (e) {
+        if (e.touches && e.touches.length === 1) startY = e.touches[0].clientY;
+      }, { passive: true });
+      head.addEventListener('touchmove', function (e) {
+        if (!e.touches || e.touches.length !== 1) return;
+        if (e.touches[0].clientY - startY > 70) {
+          startY = 1e9;
+          closePanel();
+        }
+      }, { passive: true });
+
+      panel = { back: back, body: body, status: status, search: search };
+      return panel;
+    }
+
+    function setStatus(text, kind) {
+      if (!panel) return;
+      var cls = 'dm-perm-status';
+      if (text) cls += ' dm-perm-status-show';
+      if (kind) cls += ' dm-perm-status-' + kind;
+      panel.status.className = cls;
+      panel.status.textContent = text || '';
+    }
+
+    function haystack(it) {
+      var parts = [it.name || '', it.label || '', it.description || ''];
+      var kw = it.keywords;
+      if (kw && kw.length) parts = parts.concat(kw);
+      return parts.join(' ').toLowerCase();
+    }
+
+    function rowOf(it) {
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'dm-perm-row dm-cmd-row';
+      row.setAttribute('data-name', it.name);
+      var main = el('div', 'dm-perm-main');
+      var nameLine = el('div', 'dm-perm-name dm-cmd-nameline');
+      nameLine.appendChild(el('span', 'dm-cmd-code', '/' + it.name));
+      if (it.label && it.label !== it.name) nameLine.appendChild(el('span', 'dm-cmd-label', it.label));
+      main.appendChild(nameLine);
+      if (it.description) main.appendChild(el('div', 'dm-perm-sub', it.description));
+      row.appendChild(main);
+      if (it.needsInput && it.hint) row.appendChild(el('span', 'dm-cmd-hint', it.hint));
+      row.addEventListener('click', function (e) { e.preventDefault(); pick(it, row); });
+      return row;
+    }
+
+    function paint() {
+      if (!panel) return;
+      var body = panel.body;
+      body.innerHTML = '';
+      var q = String(state.filter || '').trim().toLowerCase();
+      var groups = [];
+      var index = {};
+      var shown = 0;
+      for (var i = 0; i < state.items.length; i++) {
+        var it = state.items[i];
+        if (!it || typeof it.name !== 'string' || it.name === '') continue;
+        if (q !== '' && haystack(it).indexOf(q) < 0) continue;
+        var g = typeof it.group === 'string' && it.group !== '' ? it.group : '其它';
+        if (!index[g]) {
+          index[g] = { label: g, items: [] };
+          groups.push(index[g]);
+        }
+        index[g].items.push(it);
+        shown += 1;
+      }
+      body.setAttribute('data-dm-cmd-shown', String(shown));
+      if (state.items.length === 0) {
+        body.appendChild(el('p', 'dm-perm-hint', state.reason || '宿主没有返回任何命令'));
+        return;
+      }
+      if (shown === 0) {
+        body.appendChild(el('p', 'dm-perm-hint', '没有匹配「' + q + '」的命令'));
+        return;
+      }
+      for (var gi = 0; gi < groups.length; gi++) {
+        body.appendChild(el('div', 'dm-cmd-group', groups[gi].label));
+        for (var ri = 0; ri < groups[gi].items.length; ri++) body.appendChild(rowOf(groups[gi].items[ri]));
+      }
+    }
+
+    function pick(it, row) {
+      if (state.busy) return;
+      // 带参数的命令：先展开一个参数输入框，由用户补完再执行（尊重宿主 input.hint，
+      // 绝不替用户猜参数）；不带参数的命令直接执行。
+      if (it.needsInput) {
+        toggleArg(it, row);
+        return;
+      }
+      execCommand(it.name, '');
+    }
+
+    function toggleArg(it, row) {
+      if (!panel) return;
+      var open = panel.body.querySelectorAll('.dm-cmd-argbox');
+      for (var i = 0; i < open.length; i++) {
+        if (open[i].parentNode) open[i].parentNode.removeChild(open[i]);
+      }
+      var wasOpen = row.getAttribute('data-argopen') === '1';
+      var all = panel.body.querySelectorAll('.dm-cmd-row');
+      for (var j = 0; j < all.length; j++) all[j].removeAttribute('data-argopen');
+      if (wasOpen) return;
+      row.setAttribute('data-argopen', '1');
+      var box = el('div', 'dm-cmd-argbox');
+      var input = document.createElement('input');
+      input.className = 'dm-cmd-arginput';
+      input.type = 'text';
+      input.autocomplete = 'off';
+      input.setAttribute('placeholder', it.hint || '参数');
+      input.setAttribute('aria-label', '/' + it.name + ' 参数');
+      var runBtn = el('button', 'dm-cmd-run', '执行');
+      runBtn.type = 'button';
+      runBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (runBtn.disabled) return;
+        runBtn.disabled = true;
+        execCommand(it.name, input.value || '').then(function () { runBtn.disabled = false; });
+      });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          runBtn.click();
+        }
+      });
+      box.appendChild(input);
+      box.appendChild(runBtn);
+      if (row.nextSibling) row.parentNode.insertBefore(box, row.nextSibling);
+      else row.parentNode.appendChild(box);
+      window.setTimeout(function () { try { input.focus(); } catch (e) {} }, 30);
+    }
+
+    function markRow(name, ok) {
+      if (!panel) return;
+      var rows = panel.body.querySelectorAll('.dm-cmd-row');
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-name') !== name) continue;
+        rows[i].classList.remove('dm-cmd-row-ok', 'dm-cmd-row-err');
+        rows[i].classList.add(ok ? 'dm-cmd-row-ok' : 'dm-cmd-row-err');
+        break;
+      }
+    }
+
+    function execCommand(name, args) {
+      if (state.busy) return Promise.resolve();
+      var sid = currentSession();
+      if (!sid) {
+        setStatus('拿不到当前会话，无法执行', 'err');
+        return Promise.resolve();
+      }
+      state.busy = true;
+      setStatus('执行中… /' + name);
+      return rpc('mobile.commandExec', { sessionId: sid, name: name, args: args }).then(function (res) {
+        state.busy = false;
+        if (!res || !res.ok) {
+          var msg = (res && res.error && res.error.message) ? res.error.message : '命令执行失败';
+          setStatus('执行失败：' + msg, 'err');
+          markRow(name, false);
+          return;
+        }
+        var v = res.value || {};
+        var kind = v.kind === 'success' ? 'success' : 'error';
+        var text = v.text || (kind === 'success' ? '已执行' : '命令返回失败');
+        setStatus('/' + name + '：' + text, kind === 'success' ? 'ok' : 'err');
+        markRow(name, kind === 'success');
+        // DOM 证据：最后一次执行结果（只有命令名与结果类型，没有会话内容）。
+        try {
+          document.body.setAttribute('data-dm-cmd-last', name);
+          document.body.setAttribute('data-dm-cmd-kind', kind);
+        } catch (e) {}
+      }).catch(function () {
+        state.busy = false;
+        setStatus('执行失败：网络异常', 'err');
+        markRow(name, false);
+      });
+    }
+
+    function load() {
+      if (!panel) return Promise.resolve();
+      state.items = [];
+      state.reason = '';
+      state.busy = false;
+      panel.body.innerHTML = '';
+      panel.body.appendChild(el('p', 'dm-perm-hint dm-perm-loading', '加载中…'));
+      setStatus('');
+      var sid = currentSession();
+      if (!sid) {
+        state.reason = '当前不在会话里，没有可用的命令';
+        paint();
+        return Promise.resolve();
+      }
+      return rpc('mobile.commands', { sessionId: sid }).then(function (res) {
+        if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+        if (!res || !res.ok) {
+          state.items = [];
+          state.reason = (res && res.error && res.error.message) ? res.error.message : '命令列表加载失败';
+          paint();
+          return;
+        }
+        var v = res.value || {};
+        state.items = Array.isArray(v.items) ? v.items : [];
+        state.reason = typeof v.reason === 'string' ? v.reason : '';
+        // DOM 证据：条目数落在 data-* 上，人工与自动化都能直接核对「面板条数 = RPC 条数」。
+        try {
+          panel.back.setAttribute('data-dm-cmd-count', String(state.items.length));
+          document.body.setAttribute('data-dm-cmd-count', String(state.items.length));
+          document.body.setAttribute('data-dm-cmd-live', v.live === true ? '1' : '0');
+        } catch (e) {}
+        if (v.available === false) {
+          setStatus(state.reason || '宿主命令服务不可用', 'err');
+        } else if (v.live !== true) {
+          setStatus('该会话当前没有活动 Agent：执行命令时会先唤醒它', '');
+        }
+        paint();
+      }).catch(function () {
+        if (!panel) return;
+        state.items = [];
+        state.reason = '命令列表加载失败，请重试';
+        paint();
+      });
+    }
+
+    function open() {
+      if (!panel) build();
+      state.filter = '';
+      if (panel.search) panel.search.value = '';
+      panel.back.classList.add('dm-perm-open');
+      panel.back.removeAttribute('data-dm-closing');
+      load();
+    }
+
+    function isOpen() {
+      return !!(panel && panel.back.classList.contains('dm-perm-open'));
+    }
+
+    function closePanel() {
+      if (!panel) return;
+      var back = panel.back;
+      if (!back.classList.contains('dm-perm-open')) { setStatus(''); return; }
+      if (back.getAttribute('data-dm-closing') === '1') return;
+      back.setAttribute('data-dm-closing', '1');
+      back.classList.add('dm-closing');
+      var sheet = back.querySelector('.dm-cmd-sheet');
+      if (sheet) sheet.classList.add('dm-closing');
+      window.setTimeout(function () {
+        back.classList.remove('dm-perm-open');
+        back.classList.remove('dm-closing');
+        back.removeAttribute('data-dm-closing');
+        if (sheet) sheet.classList.remove('dm-closing');
+        setStatus('');
+      }, 200);
+    }
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isOpen()) closePanel();
+      else open();
+    });
+
+    // 只在聊天页显示：判据与权限/子代理按钮一致，外加 #dm-tools 行存在。
+    function isChatPage() {
+      var slots = document.querySelectorAll('.mobile-headerSlot-right');
+      for (var i = 0; i < slots.length; i++) {
+        if (slots[i].querySelector('button[aria-label="更多"]')) return true;
+      }
+      return false;
+    }
+
+    function ensure() {
+      var row = document.getElementById('dm-tools');
+      var tools = document.querySelector('.chat-tools');
+      if (!row || !tools || !isChatPage()) {
+        if (btn.parentNode) btn.parentNode.removeChild(btn);
+        if (isOpen()) closePanel();
+        return;
+      }
+      // 只负责「在不在这一行」：其他按钮各自用 insertBefore 抢自己的锚点，
+      // 这里 appendChild 到行尾，不和他们争顺序（否则会互相来回搬）。
+      if (btn.parentNode !== row) row.appendChild(btn);
+    }
+
+    var pending = false;
+    function schedule() {
+      if (pending) return;
+      pending = true;
+      window.setTimeout(function () { pending = false; ensure(); }, 60);
+    }
+    try {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    } catch (e) {}
+    setInterval(ensure, 400);
+    ensure();
+  } catch (e) {}
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -5088,6 +5487,7 @@ function mobilePageHtml() {
     CHAT_AUTOSCROLL_HTML,
     ICON_OPTICAL_ALIGN_HTML,
     USAGE_INLINE_HTML,
+    COMMAND_PANEL_HTML,
     DEVICE_INFO_HTML,
     '</body>',
     '</html>',
@@ -6212,6 +6612,201 @@ export function apply(ctx, config) {
     return { options, currentValue, available: true, defaultPreset }
   }
 
+  // ── 宿主命令（工具栏「/」面板） ───────────────────────────────────────────
+  // 真实契约（@deepseek-ai/dsh-commands：asar 内 lib/index.js + typert 的 Service 反射）：
+  //   · ctx.commands.list(agent) -> readonly CommandDescriptor[]
+  //       CommandDescriptor = { definitionId?, name, description, input?: { hint, attachments? } }
+  //     入参 agent 不是 sessionId，而是宿主 registry 里的活 Agent（Agent = { id, session, ctx, inbox, ... }）；
+  //     它同时是「作用域键」：全局层 + 该 Agent 作用域链上的覆盖层合并后按 name 排序返回。
+  //   · ctx.commands.execute(agent, line, submittedAttachments, signal)
+  //       -> Promise<CommandExecution | undefined>
+  //       CommandExecution = { commandId, result: { kind:'success', text?, sourceEventSeq? }
+  //                                            | { kind:'error', text } }
+  //     行首必须是 /name（parseCommand 用 /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/）；
+  //     名字未知或语法不合法时返回 undefined；execute 内部拿 agent.session 追加
+  //     command/run、command/done 两条生命周期事件 —— 所以 agent 必须是真 Agent，
+  //     伪造对象（只有 id）会在 appendLifecycle 处炸掉。
+  // 结论：手机端点条目走「真执行」，而不是「把 /name 插进输入框」——
+  //   宿主只在 UI 适配器里解析斜杠命令（bundle 的 session.prompt 是纯 prompt 通道、
+  //   不解析斜杠），插进输入框只会把 /compact 当普通文本发给模型，什么也不会发生。
+  /** 宿主命令服务（没装配 @deepseek-ai/dsh-commands 时为 undefined）。 */
+  function commandService() {
+    const svc = typeof ctx.get === 'function' ? ctx.get('commands') : undefined
+    return svc && typeof svc.list === 'function' ? svc : undefined
+  }
+
+  /** sessionId → 活 Agent（只认 registry 里真实存在的；冷会话返回 undefined）。 */
+  function liveAgentOf(sessionId) {
+    const id = String(sessionId || '')
+    if (id === '') return undefined
+    const store = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+    if (!store || typeof store.get !== 'function') return undefined
+    try {
+      return store.get(id)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 命令来源分组：definitionId 是命令包自己给的稳定身份
+   * （`CommandDefinitionId("@deepseek-ai/dsh-command-compact")` 这类）。
+   * 这里只做「包名 → 中文分组名」的展示映射，未知包原样显示包名 ——
+   * 不猜、不硬编码任何命令。
+   */
+  const COMMAND_SOURCE_LABELS = {
+    'dsh-command-compact': '核心指令',
+    'dsh-command-feedback': '核心指令',
+    'dsh-command-goal': '核心指令',
+    'dsh-permission-presets': '权限',
+    'dsh-plan-mode': '计划',
+    'dsh-session-log-export': '导出',
+  }
+
+  /**
+   * 中文检索别名：取自宿主各命令包自带的 locale/zh.json 的 meta.title
+   * （例如 @deepseek-ai/dsh-command-compact 的「上下文压缩命令」）。
+   * 只影响手机端的展示与搜索；命令是否存在、叫什么、能不能执行一律由
+   * ctx.commands.list() 决定 —— 注册表里没有的命令这里也变不出来。
+   */
+  const COMMAND_ALIASES = {
+    compact: { label: '压缩', keywords: ['上下文压缩', '压缩上下文'] },
+    feedback: { label: '反馈', keywords: ['记录反馈', '会话反馈'] },
+    goal: { label: '目标', keywords: ['长任务目标', '长期任务'] },
+    permission: { label: '权限', keywords: ['权限预设', '沙箱模式'] },
+    plan: { label: '计划', keywords: ['计划模式'] },
+    export: { label: '导出', keywords: ['下载会话日志', '会话日志'] },
+  }
+
+  function commandSourceOf(definitionId) {
+    const raw = typeof definitionId === 'string' ? definitionId : ''
+    if (raw === '') return { key: '', label: '未标注来源' }
+    const pkg = raw.startsWith('@deepseek-ai/') ? raw.slice('@deepseek-ai/'.length) : raw
+    return { key: pkg, label: COMMAND_SOURCE_LABELS[pkg] || pkg }
+  }
+
+  /**
+   * 当前会话可用的宿主命令目录。
+   * available=false 表示宿主根本没装配命令服务（如实上报，不拿空列表冒充成功）。
+   * live=false 表示会话还没有活 Agent：此时 list 读到的就是全局命令层
+   * （作用域层只能由活 Agent 的 ctx 注册出来，所以这个结果是精确的而非近似）。
+   */
+  function commandCatalog(payload) {
+    const svc = commandService()
+    if (!svc) {
+      return { available: false, items: [], live: false, reason: '宿主未装配命令服务（@deepseek-ai/dsh-commands）' }
+    }
+    const sessionId = payload && typeof payload.sessionId === 'string' ? payload.sessionId : ''
+    if (sessionId === '') {
+      return { available: false, items: [], live: false, reason: '缺少 sessionId，无法确定命令作用域' }
+    }
+    const agent = liveAgentOf(sessionId)
+    let descriptors = []
+    try {
+      descriptors = svc.list(agent || { id: sessionId })
+    } catch (err) {
+      return {
+        available: false,
+        items: [],
+        live: agent !== undefined,
+        reason: `读取命令列表失败：${err && err.message ? err.message : String(err)}`,
+      }
+    }
+    const items = []
+    const seen = new Set()
+    for (const descriptor of Array.isArray(descriptors) ? descriptors : []) {
+      const name = descriptor && typeof descriptor.name === 'string' ? descriptor.name : ''
+      if (name === '' || seen.has(name)) continue
+      seen.add(name)
+      const alias = COMMAND_ALIASES[name] || {}
+      const hint = descriptor.input && typeof descriptor.input.hint === 'string' ? descriptor.input.hint : ''
+      const source = commandSourceOf(descriptor.definitionId)
+      items.push({
+        name,
+        label: alias.label || name,
+        description: typeof descriptor.description === 'string' ? descriptor.description : '',
+        hint,
+        needsInput: hint !== '',
+        keywords: Array.isArray(alias.keywords) ? alias.keywords.slice() : [],
+        source: source.key,
+        group: source.label,
+      })
+    }
+    return { available: true, items, live: agent !== undefined, sessionId }
+  }
+
+  /**
+   * 执行一条宿主命令。
+   * 冷会话（手机只是打开看历史、没有活 Agent）先走 sessionController.resolveAgent()
+   * 现挂一个 Agent —— 与桌面端点开会话是同一条路，不是伪造对象。
+   */
+  async function commandExecute(payload) {
+    const svc = commandService()
+    if (!svc || typeof svc.execute !== 'function') {
+      return { ok: false, error: { code: 'unavailable', message: '宿主未装配命令服务，无法执行' } }
+    }
+    const sessionId = payload && typeof payload.sessionId === 'string' ? payload.sessionId : ''
+    if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+    let line = payload && typeof payload.line === 'string' ? payload.line : ''
+    if (line === '') {
+      const name = payload && typeof payload.name === 'string' ? payload.name.trim() : ''
+      if (!/^[a-z][a-z0-9_-]*$/.test(name)) {
+        return { ok: false, error: { code: 'bad-request', message: '命令名不合法' } }
+      }
+      const args = payload.args === undefined || payload.args === null ? '' : String(payload.args)
+      line = args === '' ? `/${name}` : `/${name} ${args}`
+    }
+    let agent = liveAgentOf(sessionId)
+    if (!agent) {
+      const sessionController = sc()
+      if (!sessionController || typeof sessionController.resolveAgent !== 'function') {
+        return { ok: false, error: { code: 'no-agent', message: '会话当前没有活动 Agent，无法执行命令' } }
+      }
+      try {
+        const resolved = await sessionController.resolveAgent(sessionId)
+        agent = resolved && resolved.agent ? resolved.agent : resolved && resolved.id ? resolved : undefined
+      } catch (err) {
+        return {
+          ok: false,
+          error: {
+            code: (err && err.code) || 'session-unavailable',
+            message: `无法激活该会话：${err && err.message ? err.message : String(err)}`,
+          },
+        }
+      }
+    }
+    if (!agent) return { ok: false, error: { code: 'no-agent', message: '会话当前没有活动 Agent，无法执行命令' } }
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), COMMAND_EXEC_TIMEOUT_MS)
+    try {
+      const execution = await svc.execute(agent, line, [], abort.signal)
+      if (execution === undefined) {
+        return {
+          ok: false,
+          error: { code: 'unknown-command', message: `宿主没有可执行的命令 ${line.split(/\s/)[0]}` },
+        }
+      }
+      const result = (execution && execution.result) || {}
+      return {
+        ok: true,
+        value: {
+          commandId: execution && execution.commandId !== undefined ? String(execution.commandId) : '',
+          kind: result.kind === 'success' ? 'success' : 'error',
+          text: typeof result.text === 'string' ? result.text : '',
+        },
+      }
+    } catch (err) {
+      if (abort.signal.aborted) {
+        return { ok: false, error: { code: 'timeout', message: '命令执行超时（宿主未在时限内返回）' } }
+      }
+      return {
+        ok: false,
+        error: { code: 'command-failed', message: err && err.message ? String(err.message) : '命令执行失败' },
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     switch (method) {
@@ -6691,10 +7286,11 @@ export function apply(ctx, config) {
       }
       // ── 命令 / 搜索 ──
       case 'mobile.commands': {
-        return { ok: true, value: { items: [] } }
+        return { ok: true, value: commandCatalog(payload) }
       }
       case 'mobile.commandExec': {
-        return { ok: false, error: { code: 'not-supported', message: '命令执行暂未开放' } }
+        const executed = await commandExecute(payload)
+        return executed
       }
       // ── 权限预设（手机工具栏「权限」按钮） ──────────────────────────────
       // bundle 自带的权限面板走两条通道：会话投影 projections.values.permissions
