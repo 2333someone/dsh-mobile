@@ -5877,6 +5877,19 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
   // 宿主图标 path 原文（16×16 描边；来自 web shell 的 primitives 图标组件）。
   var ICON_PINWHEEL = '<svg class="dm-clock" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M7.84457 5.06199C11.6605 4.93876 14.7962 6.14848 14.8484 7.76397C14.8875 8.97461 13.1838 10.0696 10.7215 10.5942"/><path d="M5.12742 8.07731C5.00419 4.26138 6.21391 1.12568 7.8294 1.07351C9.04004 1.03441 10.135 2.73808 10.6596 5.20037"/><path d="M8.02457 10.6802C4.20865 10.8034 1.07294 9.5937 1.02077 7.97821C0.981678 6.76758 2.68535 5.67262 5.14763 5.14798"/><path d="M10.7476 7.89535C10.8708 11.7113 9.66109 14.847 8.0456 14.8991C6.83496 14.9382 5.74 13.2346 5.21536 10.7723"/></svg>';
   var ICON_CLOCK = '<svg class="dm-clock" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M8 14C11.3137 14 14 11.3137 14 8C14 4.68629 11.3137 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14Z"/><path d="M8 4.31V8.46L11 10.08"/></svg>';
+  // 内置插件配置四行的图标：宿主 web shell 的 PluginArtwork* 组件（36×36 多色 SVG），
+  // 从 asar 的 @deepseek-ai/dsh-client-ui-primitives（打包进 dsh-web-frontend 的
+  // index-*.js）提取，path/gradient/fill 原样，仅由 CSS 缩放到列表/详情尺寸。
+  //   subagent  = PluginArtworkSubagent  (蓝绿方块渐变)
+  //   web-search= PluginArtworkSearch    (彩色放大镜)
+  //   agent-loop= PluginArtworkLoop      (紫色循环)
+  //   shell     = PluginArtworkTerminal  (蓝色 >_)
+  var CONFIG_ART = {
+    'subagent': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="14.9893" y="15.1877" width="12.2365" height="12.2365" rx="2" fill="url(#dsh_plugin_art_CU_0a)" fill-opacity="0.8"></rect><rect x="8.87109" y="9.0697" width="12.2365" height="12.2365" rx="2" fill="url(#dsh_plugin_art_CU_0b)" fill-opacity="0.8"></rect><defs><linearGradient id="dsh_plugin_art_CU_0a" x1="21.1075" y1="15.1877" x2="21.1075" y2="27.4243" gradientUnits="userSpaceOnUse"><stop stop-color="#45E7A4"></stop><stop offset="1" stop-color="#05909D"></stop></linearGradient><linearGradient id="dsh_plugin_art_CU_0b" x1="14.9894" y1="9.0697" x2="14.9894" y2="21.3063" gradientUnits="userSpaceOnUse"><stop stop-color="#69B9FF"></stop><stop offset="1" stop-color="#324DE2"></stop></linearGradient></defs></svg>',
+    'web-search': 'undefined',
+    'agent-loop': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18.0486 28.4901C12.0858 28.4901 7.25195 23.6562 7.25195 17.6934C13.2148 17.6934 18.0486 22.5272 18.0486 28.4901Z" fill="#A797FC"></path><path d="M18.0486 6.89667C12.0858 6.89667 7.25195 11.7305 7.25195 17.6934C13.2148 17.6934 18.0486 12.8595 18.0486 6.89667Z" fill="url(#dsh_plugin_art_bU_0a)"></path><path d="M18.0485 28.4901C24.0114 28.4901 28.8452 23.6562 28.8452 17.6934C22.8824 17.6934 18.0485 22.5272 18.0485 28.4901Z" fill="#4561EE"></path><path d="M18.0485 6.89667C24.0114 6.89667 28.8452 11.7305 28.8452 17.6934C22.8824 17.6934 18.0485 12.8595 18.0485 6.89667Z" fill="#658EFF"></path><defs><linearGradient id="dsh_plugin_art_bU_0a" x1="16.7911" y1="16.1655" x2="8.98192" y2="8.74289" gradientUnits="userSpaceOnUse"><stop stop-color="#A23AE7"></stop><stop offset="1" stop-color="#E2E2E2"></stop></linearGradient></defs></svg>',
+    'shell': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M10 11L16.606 17.606C16.6841 17.6841 16.6841 17.8107 16.606 17.8888L10 24.4948" stroke="#679EFE" stroke-width="3.5"></path><path d="M20.1211 24.4946H26.8685" stroke="#679EFE" stroke-width="3.5"></path></svg>'
+  };
 
   var current = null;      // { kind, el } —— 当前打开的信息页（列表层）
   var detailName = null;   // 当前打开的插件详情（bundle name 或 entry:entryId）
@@ -6125,6 +6138,14 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     }
     return '<span class="' + cls + ' dm-card-icon-letter" aria-hidden="true">' + esc(firstChar(title)) + '</span>';
   }
+  /** 内置配置页四行：优先用宿主原始彩色图标，没有再退回 meta.icon / 首字母。 */
+  function configArtIcon(configPage, icon, title, size) {
+    var svg = configPage && CONFIG_ART[configPage] ? CONFIG_ART[configPage] : '';
+    if (svg) {
+      return '<span class="dm-card-icon dm-card-icon-art' + (size === 'lg' ? ' dm-card-icon-lg' : '') + '" aria-hidden="true">' + svg + '</span>';
+    }
+    return iconHtml(icon, title, size);
+  }
 
   function switchHtml(checked, attrs, disabled, label) {
     return '<button class="dm-switch" type="button" role="switch" aria-checked="' + (checked ? 'true' : 'false') + '" aria-label="' + esc(label || '启停') + '"' +
@@ -6169,7 +6190,7 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
         : 'data-open-entry="' + esc(item.entryId) + '"';
       var badge = item.configPage ? '<span class="dm-badge-config">可配置</span>' : '';
       return '<div class="dm-card" ' + openAttr + ' role="button" tabindex="0">' +
-        iconHtml(item.meta && item.meta.icon, title) +
+        configArtIcon(item.configPage, item.meta && item.meta.icon, title) +
         '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span>' + badge + '</div>' +
         (description ? '<div class="dm-card-desc">' + esc(description) + '</div>' : '') +
         '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
@@ -6235,7 +6256,7 @@ const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-he
     var running = item.enabled === true;
     var readOnly = typeof item.readOnlyReason === 'string' && item.readOnlyReason !== '';
     var toggle = switchHtml(running, ' data-toggle-entry="' + esc(item.entryId) + '"', readOnly, '启停 ' + title);
-    var html = '<div class="dm-detail-hero">' + iconHtml(item.meta && item.meta.icon, title, 'lg') +
+    var html = '<div class="dm-detail-hero">' + configArtIcon(item.configPage, item.meta && item.meta.icon, title, 'lg') +
       '<div class="dm-detail-head"><div class="dm-card-titleRow"><span class="dm-detail-title">' + esc(title) + '</span>' +
       '<span class="dm-badge ' + (running ? 'dm-badge-on' : 'dm-badge-off') + '">' + (running ? '运行中' : '已停用') + '</span></div>' +
       '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
@@ -8903,6 +8924,28 @@ export function apply(ctx, config) {
       ],
     },
     {
+      key: 'agent-loop',
+      title: 'Agent 循环',
+      description: '控制 Agent 派发工具调用的方式。',
+      requires: ['agent-loop'],
+      sections: [
+        {
+          ns: 'agent-loop',
+          title: null,
+          fields: [
+            {
+              key: 'maxParallelToolCalls',
+              kind: 'int',
+              min: 1,
+              label: '并行工具调用数',
+              hint: '同一步内最多同时运行多少个可并行的调用。',
+              invalid: '请输入不小于 1 的整数。',
+            },
+          ],
+        },
+      ],
+    },
+    {
       key: 'web-search',
       title: '网页搜索',
       description: '设置 DeepSeek 的搜索提供方。',
@@ -10067,13 +10110,14 @@ export function apply(ctx, config) {
           '@deepseek-ai/dsh-experimental-auto-review',
           '@deepseek-ai/dsh-experimental-inspector-profile',
         ]
-        // 「内置插件配置」里各行的显示顺序（桌面插件页 basic 分组的视觉顺序）。
-        // Agent 循环按用户要求不做（配置页与列表都不出现），这里不再保留它的排序位。
+        // 「内置插件配置」里各行的显示顺序（与桌面插件页 basic 分组一致）：
+        // 子智能体 / 网页搜索 / Agent 循环 / 终端。
         // 注意：listPlugins 的 moduleName 是 scoped 包名（@deepseek-ai/dsh-client-ui-…），
         // 所以下面统一按「最后一段包名」匹配，别写 endsWith('/ui-settings-…')（永远 false）。
         const BASIC_ORDER = [
           'dsh-client-ui-settings-subagent',
           'dsh-client-ui-settings-web-search',
+          'dsh-client-ui-settings-agent-loop',
           'dsh-client-ui-settings-shell',
         ]
         // 最后一段包名 → 手机端内置配置页的 page key。
@@ -10082,10 +10126,9 @@ export function apply(ctx, config) {
         const BASIC_CONFIG_PAGE = {
           'dsh-client-ui-settings-subagent': 'subagent',
           'dsh-client-ui-settings-web-search': 'web-search',
+          'dsh-client-ui-settings-agent-loop': 'agent-loop',
           'dsh-client-ui-settings-shell': 'shell',
         }
-        // 用户明确要求：Agent 循环页不做，列表里也不要出现。
-        const BASIC_HIDDEN = ['dsh-client-ui-settings-agent-loop']
         const moduleSegment = (moduleName) => {
           const text = typeof moduleName === 'string' ? moduleName : ''
           const cut = text.lastIndexOf('/')
@@ -10171,10 +10214,6 @@ export function apply(ctx, config) {
             const meta = entry && entry.meta
             const description = meta && meta.description
             return description && typeof description === 'object' && typeof description.en === 'string' && description.en.includes("web client's Plugins page")
-          })
-          .filter((entry) => {
-            const segment = moduleSegment(entry && entry.moduleName)
-            return !BASIC_HIDDEN.includes(segment)
           })
           .map((entry) => {
             const segment = moduleSegment(entry && entry.moduleName)

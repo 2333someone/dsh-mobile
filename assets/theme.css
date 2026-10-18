@@ -2821,3 +2821,8 @@ html.dm-host-page-open body {
     animation: none;
   }
 }
+
+/* 内置插件配置的宿主彩色图标（PluginArtwork*，36×36 原图，按卡片尺寸缩放）。 */
+.dm-card-icon-art { background: transparent; }
+.dm-card-icon-art svg { display: block; width: 32px; height: 32px; }
+.dm-card-icon-art.dm-card-icon-lg svg { width: 46px; height: 46px; }
