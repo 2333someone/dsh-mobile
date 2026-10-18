@@ -12204,6 +12204,21 @@ export function apply(ctx, config) {
           (block) => block !== null && typeof block === 'object' && block.type !== 'text',
         )
         const mode = requestedMode === SEND_MODE_STEER && hasNonTextBlock ? SEND_MODE_QUEUE : requestedMode
+        // ── 发消息前先登记「这台设备在看这个会话」────────────────────────
+        // 现象：部分会话发出消息后气泡不即时出现，退出重进才看到。
+        // 根因：本 case 原来只调 controller.prompt + emitQueue，没有登记观察；
+        // 而移动端气泡靠 SSE（events.mux）推 session/event，宿主流只会跟随
+        // observers 里登记过的会话。没在这里登记时，设备收不到该会话的帧，
+        // 直到退出重进走 session.history(subscribe:true) 才补登记 —— 于是表现为
+        // 「发完不出现，重进才见」。
+        // 用 addObservationExtra（并集）而不是 addObservation（赋值）：prompt 可能
+        // 发往当前会话之外的会话（如多会话并行），不能把设备正在看的会话覆盖掉；
+        // ensureFollow 幂等，已在跟随时直接复用。
+        if (rpcContext && typeof rpcContext.deviceId === 'string' && payload.sessionId) {
+          const sid = String(payload.sessionId)
+          addObservationExtra(rpcContext.deviceId, sid)
+          ensureFollow(sid)
+        }
         await controller.prompt(
           {
             requestId,
