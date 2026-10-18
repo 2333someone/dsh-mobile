@@ -244,7 +244,10 @@ body:has(> #dm-model-btn) #dm-model-btn {
    用 :has(>) 精确命中「还在 body 流里的那个实例」：被搬进目标容器后选择器
    自然失效，聊天页上的显示与点击完全不受影响。 */
 body:has(> #dm-perm-btn) #dm-perm-btn,
-body:has(> #dm-subagent-btn) #dm-subagent-btn {
+body:has(> #dm-subagent-btn) #dm-subagent-btn,
+/* 聊天模式按钮（PRESET_BTN_HTML）同款：先以裸站位写进 <body>，再由注入脚本
+   搬进 #dm-tools。没搬走前必须 display:none，否则会以 32px 撑高文档流。 */
+body:has(> #dm-preset-btn) #dm-preset-btn {
   display: none !important;
 }
 #dm-tools {
@@ -294,6 +297,22 @@ body:has(> #dm-subagent-btn) #dm-subagent-btn {
 }
 .chat-context:active {
   background: var(--bg-hover, rgba(127, 127, 127, 0.12)) !important;
+}
+/* 空白会话（还没有用量投影）时 bundle 只渲染裸文本「上下文 --」，没有圆环；
+   上面 font-size:0 又把这段文字藏掉了 —— 于是 32px 的按钮看上去完全空白，
+   这就是用户报的「新会话里用量图标不显示」。这里用伪元素补一个同样尺寸的空环
+   （0%，只有轨道），**不碰 React 管理的子节点**：一旦 bundle 渲染出真正的
+   .chat-context-ring，:has() 让这条规则自动失效，不会叠成两个环。
+   环宽按 26 viewBox / 16px 显示折算（3.5 → ≈2.15px），取 2px 与原生环对齐。 */
+.chat-context:not(:has(.chat-context-ring))::before {
+  content: '';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.35;
 }
 .chat-context .chat-context-ring {
   width: 16px !important;
@@ -1084,12 +1103,14 @@ body:has(> #dm-subagent-status-btn) #dm-subagent-status-btn {
 }
 
 /* 显隐（JS 加/去 .dm-icon-hidden）：
-   审批提醒 —— 有待处理审批/提问才亮；子代理状态 —— 当前会话有子代理才亮。
+   审批提醒 —— 有待处理审批/提问才亮；子代理状态 —— 当前会话有子代理才亮；
+   聊天模式 —— 只在空白会话（还没有第一条消息）显示，发出消息后立即隐藏。
    用 display:none 而不是 opacity，隐藏时彻底退出布局，不占工具行的一格、
    不吃触摸事件，也不会撑高文档流。绝不使用全局 overflow:hidden（会破坏
-   消息区与列表滚动），这里只针对这两个按钮自身。 */
+   消息区与列表滚动），这里只针对这几个按钮自身。 */
 #dm-approval-btn.dm-icon-hidden,
-#dm-subagent-status-btn.dm-icon-hidden {
+#dm-subagent-status-btn.dm-icon-hidden,
+#dm-preset-btn.dm-icon-hidden {
   display: none !important;
 }
 

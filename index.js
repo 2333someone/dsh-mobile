@@ -200,6 +200,28 @@ const FOLLOW_ASSISTANT_STREAM = true
  * 一轮正常是几百到几千个 chunk；封顶是为了长回复下不去无界增长。
  */
 const STREAM_SEEN_INDEX_MAX = 5000
+/**
+ * 合成 chunk seq 的「小数槽」数：seq = startedAfterSeq + (index+1)/STREAM_SEQ_SLOTS。
+ *
+ * **必须是小数，不能是整数**，这是「手机上只显示半截」的根因，别改回去：
+ *
+ * ① bundle 的事件存储 `Dt.fold()` 只接受 `seq > state.maxSeq` 的事件
+ *   （`for (let e of t) e.seq <= n || Ke(state, e)`），而 `Ke()` 每帧都把
+ *   `maxSeq = max(maxSeq, seq)`。也就是说任何 seq 不大于已见最大值的帧都会被**静默丢弃**。
+ * ② 宿主给「已落盘事件」分配的 seq 是**整数且连续**的：一轮开始时最后一个是
+ *   startedAfterSeq = B，那这一轮的第一条 assistant/message 就是 B+1、tool/call 是 B+2……
+ *   而 chunk 是在 message **落盘之前**推送的。
+ * ③ 若 chunk 取整数 seq（旧实现 B+index+1），2298 个 chunk 会把手机端的 maxSeq
+ *   顶到 B+2298；随后真正的 assistant/message(B+1)、tool/call(B+2)、step/end、
+ *   turn/end(B+N) 全部因 `seq <= maxSeq` 被丢 —— 手机永远收不到最终消息与工具步骤，
+ *   气泡停在「思考中 / 正在回答」，正文只有流式残段。（SSE 侧还有同样语义的
+ *   seqWatermark，见 openMux：那一层也会把真事件当重复丢掉。）
+ * ④ 因此 chunk 的 seq 必须落在开区间 (B, B+1) 里：既大于历史（fold 不会丢），
+ *   又严格小于这一轮任何已落盘事件（真事件永远能通过）。用 index 做分子、
+ *   1e6 做分母：5000 个 chunk 只占 0.005，离 1 还很远；index 就算异常大也钳到 999999，
+ *   保证永不越界（越界就又回到被丢弃的老毛病）。
+ */
+const STREAM_SEQ_SLOTS = 1e6
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -827,6 +849,74 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
     e.preventDefault();
     e.stopPropagation();
     queueSend(text);
+  }, true);
+
+  // 空白会话还没有用量投影：bundle 只渲染裸文本「上下文 --」（被 CSS 的 font-size:0
+  // 藏掉），于是 32px 的用量按钮看上去是空的 —— 用户报的「用量图标不见了」就是它，
+  // 不是被我们的 CSS 主动 display:none 掉的。两个补丁各管一半：
+  //   · theme.css 用 .chat-context:not(:has(.chat-context-ring))::before 补一个 0% 空环；
+  //   · 这里补点击：bundle 的 onClick 在 li===undefined 时什么都不做（pi()），
+  //     点开一个只有「0 / 暂无用量」的面板，不伪造任何数字。
+  // 有真用量后 bundle 会渲染出 .chat-context-ring，这段逻辑自动让位给它的原生抽屉。
+  var ctxPanel = null;
+  function closeCtxPanel() {
+    if (ctxPanel) ctxPanel.classList.remove('dm-perm-open');
+  }
+  function openCtxPanel() {
+    if (!ctxPanel) {
+      var back = document.createElement('div');
+      back.className = 'dm-perm-backdrop';
+      var sheet = document.createElement('div');
+      sheet.className = 'dm-perm-sheet';
+      var head = document.createElement('div');
+      head.className = 'dm-perm-head';
+      var title = document.createElement('div');
+      title.className = 'dm-perm-title';
+      title.textContent = '上下文用量';
+      var close = document.createElement('button');
+      close.className = 'dm-perm-close';
+      close.type = 'button';
+      close.textContent = '✕';
+      close.setAttribute('aria-label', '关闭');
+      close.onclick = function (e) { e.preventDefault(); closeCtxPanel(); };
+      head.appendChild(title);
+      head.appendChild(close);
+      var body = document.createElement('div');
+      body.className = 'dm-perm-body';
+      var row = document.createElement('div');
+      row.className = 'dm-perm-row';
+      var main = document.createElement('div');
+      main.className = 'dm-perm-main';
+      var name = document.createElement('div');
+      name.className = 'dm-perm-name';
+      name.textContent = '已使用 0%';
+      var sub = document.createElement('div');
+      sub.className = 'dm-perm-sub';
+      sub.textContent = '会话还没有发出第一条消息，暂无上下文用量。发一条消息后，这里会显示真实的占用比例。';
+      main.appendChild(name);
+      main.appendChild(sub);
+      row.appendChild(main);
+      body.appendChild(row);
+      sheet.appendChild(head);
+      sheet.appendChild(body);
+      back.appendChild(sheet);
+      back.addEventListener('click', function (e) { if (e.target === back) closeCtxPanel(); });
+      document.body.appendChild(back);
+      ctxPanel = back;
+    }
+    ctxPanel.classList.add('dm-perm-open');
+  }
+
+  // 捕获阶段拦截：只有「没有真圆环」的空白会话才归我们处理；
+  // 有圆环时原样放行，交给 bundle 自己的用量抽屉（含它自己的收起动画）。
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var ring = t && t.closest ? t.closest('.chat-context') : null;
+    if (!ring) return;
+    if (ring.querySelector('.chat-context-ring')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openCtxPanel();
   }, true);
 
   setInterval(ensureTools, 120);
@@ -2708,6 +2798,334 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
 })();
 </script>`
 
+// 聊天模式（Agent 预设）按钮：**只在还没有发出第一条消息的空白会话里出现**。
+//
+// 为什么需要它：bundle 只在「新建会话」时把 agentPreset 带进 session.create
+// （`ae({workspaceId, agentPreset: D})`），会话一旦建好就再没有切换入口；手机
+// 会话页连宿主自带的预设卡片也没有。宿主侧 agentPresets.select(agent, preset)
+// 恰好支持「首条消息之前」改绑（它自己读 turnBoundary 投影：已开轮次就抛
+// agent-preset/locked，不会静默改一个已经聊起来的会话），所以这里只在空白
+// 会话显示按钮，选中时走专用 RPC mobile.setAgentPreset。
+//
+// 显隐判据用 DOM（轻量，不发 RPC、不读历史）：
+//   .chat-scroll 里没有任何 .chat-msg（含 pending 的）→ 还没有消息；
+//   历史仍在加载（.chat-typing 的文案不是「还没有消息…」）时先不显示，
+//   避免进页面的一瞬间闪一下再消失。
+// 选项列表来自 agentPreset.list（宿主 agentPresets.remoteExportList），
+// 不硬编码任何预设名 —— 宿主没给 name 就显示 id。
+const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="button" aria-label="聊天模式" title="聊天模式"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4 3.6 7.6 12 11.8l8.4-4.2z"/><path d="M3.6 12.1 12 16.3l8.4-4.2"/><path d="M3.6 16.6 12 20.8l8.4-4.2"/></svg></button><script>
+(function () {
+  var btn = document.getElementById('dm-preset-btn');
+  if (!btn) return;
+
+  var lastSessionId = '';
+  var panel = null;
+  var busy = false;
+  var currentPreset = '';
+  var toastTimer = 0;
+
+  // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id（手机页路由不带 query）。
+  var origFetch = window.fetch;
+  if (typeof origFetch === 'function') {
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body);
+          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
+            lastSessionId = body.payload.sessionId;
+          }
+        }
+      } catch (e) {}
+      return origFetch.apply(this, arguments);
+    };
+  }
+
+  function currentSession() {
+    try {
+      var s = new URL(location.href).searchParams.get('session');
+      if (s) return s;
+    } catch (e) {}
+    return lastSessionId;
+  }
+
+  function rpc(method, payload) {
+    return fetch('/m/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rpcId: 'dm-preset-' + Date.now(), payload: payload })
+    }).then(function (r) { return r.json(); }).then(function (j) { return j ? j.result : null; });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function el(tag, cls, html) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  }
+
+  // 轻提示：复用 bundle 自己的 .toast-host / .toast，样式跟原生保持一致。
+  function toast(text) {
+    try {
+      var host = document.createElement('div');
+      host.className = 'toast-host';
+      host.setAttribute('role', 'status');
+      var item = document.createElement('div');
+      item.className = 'toast';
+      item.textContent = text;
+      host.appendChild(item);
+      document.body.appendChild(host);
+      if (toastTimer) window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(function () {
+        try { if (host.parentNode) host.parentNode.removeChild(host); } catch (e) {}
+      }, 2200);
+    } catch (e) {}
+  }
+
+  // 面板容器沿用 .dm-perm-* 那套浮层（同一风格、颜色全走主题变量），
+  // 只有行用 data-preset 标记；权限面板的全局点击处理只认 .dm-perm-row[data-value]，
+  // 不会误吃这里的点击。
+  function build() {
+    var back = el('div', 'dm-perm-backdrop');
+    var sheet = el('div', 'dm-perm-sheet');
+    var head = el('div', 'dm-perm-head');
+    var title = el('div', 'dm-perm-title', '聊天模式');
+    var close = el('button', 'dm-perm-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭');
+    head.appendChild(title);
+    head.appendChild(close);
+    var body = el('div', 'dm-perm-body');
+    var status = el('div', 'dm-perm-status');
+    sheet.appendChild(head);
+    sheet.appendChild(body);
+    sheet.appendChild(status);
+    back.appendChild(sheet);
+    document.body.appendChild(back);
+
+    back.addEventListener('click', function (e) {
+      if (e.target !== back) return;   // 点面板内部不关
+      closePanel();
+    });
+    close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
+
+    panel = { back: back, body: body, status: status, list: [] };
+    return panel;
+  }
+
+  function setStatus(text, kind) {
+    if (!panel) return;
+    var cls = 'dm-perm-status';
+    if (text) cls += ' dm-perm-status-show';
+    if (kind) cls += ' dm-perm-status-' + kind;
+    panel.status.className = cls;
+    panel.status.textContent = text || '';
+  }
+
+  function labelOf(id) {
+    var list = (panel && Array.isArray(panel.list)) ? panel.list : [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) {
+        return (typeof list[i].name === 'string' && list[i].name !== '') ? list[i].name : id;
+      }
+    }
+    return id;
+  }
+
+  function render() {
+    if (!panel) return;
+    var body = panel.body;
+    body.innerHTML = '';
+    var list = Array.isArray(panel.list) ? panel.list : [];
+    if (list.length === 0) {
+      body.appendChild(el('p', 'dm-perm-hint', '宿主没有注册任何 Agent 预设'));
+      return;
+    }
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p || typeof p.id !== 'string' || p.id === '') continue;
+      var label = (typeof p.name === 'string' && p.name !== '') ? p.name : p.id;
+      var on = p.id === currentPreset;
+      var row = el('button', 'dm-perm-row' + (on ? ' dm-perm-row-on' : ''));
+      row.type = 'button';
+      row.setAttribute('data-preset', p.id);
+      row.setAttribute('data-label', label);
+      if (typeof p.broken === 'string' && p.broken !== '') {
+        row.disabled = true;
+        row.setAttribute('data-broken', '1');
+      }
+      var main = el('div', 'dm-perm-main');
+      // 「（默认）」是宿主 roster 里的 isDefault，不是前端猜的。
+      main.appendChild(el('div', 'dm-perm-name', esc(label) + (p.isDefault === true ? '（默认）' : '')));
+      if (typeof p.description === 'string' && p.description !== '') {
+        main.appendChild(el('div', 'dm-perm-sub', esc(p.description)));
+      } else if (typeof p.broken === 'string' && p.broken !== '') {
+        main.appendChild(el('div', 'dm-perm-sub', '不可用：' + esc(p.broken)));
+      }
+      row.appendChild(main);
+      if (on) row.appendChild(el('span', 'dm-perm-check', '✓'));
+      body.appendChild(row);
+    }
+  }
+
+  function paint(res) {
+    if (!panel) return;
+    if (!res || !res.ok || !res.value) {
+      panel.list = [];
+      render();
+      panel.body.appendChild(el('p', 'dm-perm-hint', '加载失败，请重试'));
+      return;
+    }
+    panel.list = Array.isArray(res.value.presets) ? res.value.presets : [];
+    if (typeof res.value.current === 'string' && res.value.current !== '') currentPreset = res.value.current;
+    render();
+  }
+
+  function rememberButtonLabel(id) {
+    var label = labelOf(id);
+    btn.setAttribute('title', '聊天模式：' + label);
+    btn.setAttribute('aria-label', '聊天模式：' + label);
+    return label;
+  }
+
+  function open() {
+    if (!panel) build();
+    panel.back.classList.add('dm-perm-open');
+    setStatus('');
+    load();
+  }
+
+  function closePanel() {
+    if (!panel) return;
+    panel.back.classList.remove('dm-perm-open');
+    setStatus('');
+  }
+
+  function load() {
+    if (!panel) return;
+    panel.body.innerHTML = '';
+    panel.body.appendChild(el('p', 'dm-perm-hint dm-perm-loading', '加载中…'));
+    setStatus('');
+    return rpc('agentPreset.list', { sessionId: currentSession() }).then(function (res) {
+      if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+      paint(res);
+    }).catch(function () {
+      if (!panel || !panel.back.classList.contains('dm-perm-open')) return;
+      panel.body.innerHTML = '';
+      panel.body.appendChild(el('p', 'dm-perm-hint', '加载失败，请重试'));
+    });
+  }
+
+  function select(id, fallbackLabel) {
+    if (busy) return;
+    var sid = currentSession();
+    if (sid === '') { setStatus('拿不到会话 ID，请重新进入该会话', 'err'); return; }
+    busy = true;
+    setStatus('切换中…');
+    rpc('mobile.setAgentPreset', { sessionId: sid, agentPreset: id }).then(function (res) {
+      busy = false;
+      if (!panel) return;
+      if (!res || !res.ok) {
+        var msg = (res && res.error && res.error.message) ? res.error.message : '切换失败';
+        setStatus(msg, 'err');
+        return;
+      }
+      currentPreset = (res.value && typeof res.value.agentPreset === 'string' && res.value.agentPreset !== '')
+        ? res.value.agentPreset
+        : id;
+      render();
+      var shown = rememberButtonLabel(currentPreset) || fallbackLabel || id;
+      setStatus('已切换：' + shown, 'ok');
+      toast('已切换聊天模式：' + shown);
+      window.setTimeout(closePanel, 900);
+    }).catch(function () {
+      busy = false;
+      if (!panel) return;
+      setStatus('切换失败', 'err');
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var row = t.closest('.dm-perm-row[data-preset]');
+    if (!row) return;
+    e.preventDefault();
+    var id = row.getAttribute('data-preset');
+    if (!id) return;
+    if (row.classList.contains('dm-perm-row-on')) { closePanel(); return; }
+    select(id, row.getAttribute('data-label') || '');
+  });
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (panel && panel.back.classList.contains('dm-perm-open')) closePanel();
+    else open();
+  });
+
+  // ── 只在「聊天页 + 空白会话」显示 ──
+  function isChatPage() {
+    var slots = document.querySelectorAll('.mobile-headerSlot-right');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].querySelector('button[aria-label="更多"]')) return true;
+    }
+    return false;
+  }
+
+  // 空白 = 聊天页里一条消息节点都没有，且空态文案已经出现（历史加载完成）。
+  function isBlankChat() {
+    var scroll = document.querySelector('.chat-scroll');
+    if (!scroll) return false;
+    if (scroll.querySelector('.chat-msg')) return false;
+    var typing = scroll.querySelector('.chat-typing');
+    if (!typing) return false;
+    return String(typing.textContent || '').indexOf('还没有消息') >= 0;
+  }
+
+  function ensure() {
+    var row = document.getElementById('dm-tools');
+    var tools = document.querySelector('.chat-tools');
+    if (!row || !tools || !isChatPage()) {
+      if (btn.parentNode) btn.parentNode.removeChild(btn);
+      if (panel && panel.back.classList.contains('dm-perm-open')) closePanel();
+      return;
+    }
+    // 落位：上下文用量按钮左边（模式紧挨着模型/用量）。只在不在行内时搬一次，
+    // 之后不再抢位置 —— 权限按钮也按「紧跟 .chat-context」自我排序，反复
+    // insertBefore 会互相把对方拽着来回跳。
+    if (btn.parentNode !== row) {
+      var ctxEl = row.querySelector('.chat-context');
+      if (ctxEl && ctxEl.parentNode === row) row.insertBefore(btn, ctxEl);
+      else row.appendChild(btn);
+    }
+    var blank = isBlankChat();
+    btn.classList.toggle('dm-icon-hidden', !blank);
+    if (blank) btn.removeAttribute('aria-hidden');
+    else btn.setAttribute('aria-hidden', 'true');
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    window.setTimeout(function () { pending = false; ensure(); }, 60);
+  }
+  try {
+    var mo = new MutationObserver(schedule);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(ensure, 300);
+  ensure();
+})();
+</script>`
+
 // 发送模式（需求 B 的前端侧）：按设置改写 session.prompt 的 mode。
 //
 // bundle 里 ce() 把 mode 写死成 `queue`（`await m('session.prompt',{sessionId:e,mode:'queue',content:t})`），
@@ -2996,6 +3414,12 @@ const QUEUE_DOCK_PLACE_HTML = `<script>
 //    「后台处理中 / 连接中断」不显示。鲸鱼尾复用 .dm-whale 的 mask + currentColor
 //    （见 theme.css），颜色自动继承该行的 var(--accent)。
 //
+// 3) 工具栏上方的运行状态条 .chat-status-strip 会把「子代理 N 个运行中」拼进
+//    .chat-status-text（bundle: parts.push('子代理 ' + i + ' 个运行中')）。工具栏
+//    已经有带数字角标的子代理图标，这段文字冗余：按 ` · ` 拆段后丢掉「子代理 …」
+//    段，其余（任务 x/y、后台任务 N 个）原样拼回；若过滤后整条为空，则隐藏整条
+//    strip。React 重渲染把原文案写回来时，Observer 会再过滤一遍。
+//
 // 全程幂等：每次 flush 先看现状再动 DOM，自己触发的 mutation 不会造成循环。
 const CHAT_STATUS_HTML = `<script>
 (function () {
@@ -3072,10 +3496,90 @@ const CHAT_STATUS_HTML = `<script>
       }
     }
 
+    // ── 3) 状态条去掉「子代理 N 个运行中」段 ──────────────────────────────
+    // 只认 bundle 的固定文案：以「子代理 」开头，且以「 个运行中」或「 个」结尾。
+    // 「任务 1/2」「后台任务 1 个(运行中)」不以这个前缀开头，原样保留。
+    var STATUS_TEXT = '.chat-status-text';
+    var STATUS_STRIP = '.chat-status-strip';
+    var STATUS_SEP = ' · ';
+    var STATUS_HIDDEN = 'data-dm-status-hidden';
+
+    function isSubagentPart(part) {
+      return part.indexOf('子代理 ') === 0 &&
+        (/ 个运行中$/.test(part) || / 个$/.test(part));
+    }
+
+    // null = 没有子代理段（不用动 DOM）；'' = 整条都该去掉；其它 = 过滤后的文本。
+    function filterStatus(raw) {
+      var parts = raw.split(STATUS_SEP);
+      var kept = [];
+      var dropped = false;
+      for (var i = 0; i < parts.length; i++) {
+        if (isSubagentPart(parts[i])) {
+          dropped = true;
+          continue;
+        }
+        kept.push(parts[i]);
+      }
+      if (!dropped) return null;
+      return kept.length ? kept.join(STATUS_SEP) : '';
+    }
+
+    // 只改 React 持有的那个文本节点的 nodeValue；不 replaceChild、不写 textContent，
+    // 否则 React 之后的重渲染会写到被摘掉的旧节点上，DOM 就再也不更新了。
+    function writeStatusText(el, text) {
+      var first = null;
+      var kids = el.childNodes;
+      for (var i = 0; i < kids.length; i++) {
+        if (kids[i].nodeType !== 3) continue;
+        if (!first) first = kids[i];
+        else if (kids[i].nodeValue) kids[i].nodeValue = '';
+      }
+      if (first) {
+        if (first.nodeValue !== text) first.nodeValue = text;
+      } else if (text) {
+        el.appendChild(document.createTextNode(text));
+      }
+    }
+
+    // 显隐只撤销自己设的那一次，避免和 bundle / CSS 自己的显示规则打架。
+    function setStripHidden(strip, hide) {
+      if (!strip) return;
+      if (hide) {
+        if (strip.style.display !== 'none') strip.style.display = 'none';
+        if (strip.getAttribute(STATUS_HIDDEN) === null) {
+          strip.setAttribute(STATUS_HIDDEN, '');
+        }
+      } else if (strip.getAttribute(STATUS_HIDDEN) !== null) {
+        strip.style.display = '';
+        strip.removeAttribute(STATUS_HIDDEN);
+      }
+    }
+
+    // 幂等：自己写回的文本不含「子代理 」，下一轮什么都不做；React 若把原文案
+    // 写回来，Observer 会再进来过滤一次，两边不会互相触发成死循环。
+    function syncStatusText() {
+      var list = document.querySelectorAll(STATUS_TEXT);
+      for (var i = 0; i < list.length; i++) {
+        var el = list[i];
+        var raw = el.textContent || '';
+        var next = filterStatus(raw);
+        var strip = el.closest ? el.closest(STATUS_STRIP) : null;
+        if (next === null) {
+          // 已经是不含子代理段的文案：若之前整条被藏起来，这时恢复显示。
+          if (raw) setStripHidden(strip, false);
+          continue;
+        }
+        writeStatusText(el, next);
+        setStripHidden(strip, next === '');
+      }
+    }
+
     function flush() {
       queued = false;
       try { renameProcState(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
+      try { syncStatusText(); } catch (e) {}
     }
 
     var queued = false;
@@ -3097,6 +3601,240 @@ const CHAT_STATUS_HTML = `<script>
       attributeFilter: ['aria-label']
     });
     schedule();
+  } catch (e) {}
+})();
+</script>`
+
+// ── 发送时的「图片解码竞态」守卫（注入脚本，必须在 bundle 之前执行）───────────
+// bundle 选图后是异步解码/压缩的（FileReader → Image → canvas 重编码到 256KB 内）：
+//     ni = useCallback(e => { qi(e).then(({ image }) => Qe(t => [...t, image])) }, [])
+// 而发送回调 ri() 读的是「此刻」已附加的数组 Ze。用户在解码完成前点发送时：
+//   · 有文字 → ri() 照常发送，content 里只有 text，图片静默丢失（连 toast 都没有）；
+//   · 没文字 → ri() 直接 return，这一下点击完全没有反应。
+// 实测（CPU 6x 节流模拟手机）：3.1MB 照片解码+压缩 ~0.9s，14MB 高熵图 ~3.0s；
+// 选图后 20–30ms 内点发送，请求体 content 就只有 ["text"]。手机上「选完图顺手点
+// 发送」是常见操作，所以这条路径会间歇性丢图 —— 而且比「误报离线」更隐蔽，
+// 因为它不弹任何提示。
+//
+// 注入脚本改不了 bundle 的内部状态，但可以拦住「发送」这个动作本身：
+//   · 选图（file input 的 change）或粘贴图片时，把待解码张数记在 pending 里；
+//   · 待发送栏 .chat-attach-item 每出现一张，pending 减一；解码失败的 toast
+//     （「该图片无法解码」「最多附加 4 张图片」）也减一，避免永久挂住；
+//   · pending > 0 时在 window 捕获阶段吞掉「发送」点击 / 回车，解码完成后自动
+//     重放一次点击（btn.click() 是真实 DOM 事件，React 的委托监听照样收得到）。
+// 代价：解码期间点发送会晚 1~3 秒才真正发出（超过 10s 兜底放行，不会卡死）；
+// 等待超过 0.4s 才插一条 toast 说明原因。解码已完成（绝大多数情况）时 pending
+// 为 0，这层拦截完全不介入，行为与原来一致。
+// 注意：整段是模板字面量，里面不要出现反引号和反斜杠（`\` 会被吞掉）。
+const SEND_DECODE_GUARD_HTML = `<script>
+(function () {
+  try {
+    // 解码迟迟不回来（超大图/低端机）也要把消息放出去，不能永久卡住发送。
+    var MAX_HOLD_MS = 10000;
+    // 等这么久还没发出去才插说明，小图几十毫秒就解码完，不要闪一下。
+    var HINT_AFTER_MS = 400;
+    var pending = 0;
+    var pendingAt = 0;
+    var baseline = 0;
+    var polling = false;
+    var waiting = false;
+    var replaying = false;
+    var hint = null;
+    var seenToasts = typeof WeakSet === 'function' ? new WeakSet() : null;
+
+    function attachCount() {
+      try {
+        return document.querySelectorAll('.chat-attach-item').length;
+      } catch (e) {
+        return baseline;
+      }
+    }
+
+    function syncAttach() {
+      var now = attachCount();
+      if (now > baseline) pending = Math.max(0, pending - (now - baseline));
+      baseline = now;
+    }
+
+    function scanToasts() {
+      if (seenToasts === null) return;
+      var list = document.querySelectorAll('.toast');
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i];
+        if (seenToasts.has(t)) continue;
+        seenToasts.add(t);
+        var s = t.textContent || '';
+        if (s.indexOf('无法解码') >= 0 || s.indexOf('最多附加') >= 0) {
+          pending = Math.max(0, pending - 1);
+        }
+      }
+    }
+
+    function startPoll() {
+      if (polling) return;
+      polling = true;
+      var timer = setInterval(function () {
+        syncAttach();
+        scanToasts();
+        // 切走会话 / 退出聊天页时待发送栏整个消失，解码结果不会再来 ——
+        // 不能把它当成「仍在解码」，否则下一条消息会被一直挂住。
+        if (composerGone()) pending = 0;
+        if (pending <= 0) {
+          clearInterval(timer);
+          polling = false;
+        }
+      }, 120);
+    }
+
+    function composerGone() {
+      try {
+        return document.querySelector('textarea.chat-input') === null;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function addPending(n) {
+      if (!(n > 0)) return;
+      syncAttach();
+      pending += n;
+      pendingAt = Date.now();
+      startPoll();
+    }
+
+    // 选图和「粘贴图片」都走 bundle 里同一个异步解码函数 ni()。
+    document.addEventListener('change', function (e) {
+      var t = e.target;
+      if (t === null || t.tagName !== 'INPUT' || t.type !== 'file') return;
+      addPending(t.files === null || t.files === undefined ? 0 : t.files.length);
+    }, true);
+
+    document.addEventListener('paste', function (e) {
+      try {
+        var dt = e.clipboardData;
+        if (dt === null || dt === undefined || dt.items === null || dt.items === undefined) return;
+        var n = 0;
+        for (var i = 0; i < dt.items.length; i++) {
+          var it = dt.items[i];
+          if (it !== null && it.kind === 'file' && (it.type || '').indexOf('image/') === 0) n++;
+        }
+        addPending(n);
+      } catch (err) {}
+    }, true);
+
+    function isPending() {
+      if (pending <= 0) return false;
+      if (Date.now() - pendingAt > MAX_HOLD_MS) {
+        pending = 0;
+        return false;
+      }
+      return true;
+    }
+
+    function sendButton() {
+      try {
+        var b = document.querySelector('.chat-send');
+        if (b === null) return null;
+        // 会话在跑的时候这个按钮是「停止」，绝不能拦。
+        if (b.getAttribute('aria-label') !== '发送') return null;
+        return b;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function showHint() {
+      if (hint !== null) return;
+      try {
+        var host = document.createElement('div');
+        host.className = 'toast-host';
+        host.setAttribute('role', 'status');
+        var item = document.createElement('div');
+        item.className = 'toast';
+        item.textContent = '图片处理中，马上发送…';
+        host.appendChild(item);
+        document.body.appendChild(host);
+        hint = host;
+      } catch (e) {
+        hint = null;
+      }
+    }
+
+    function hideHint() {
+      if (hint === null) return;
+      try {
+        if (hint.parentNode !== null) hint.parentNode.removeChild(hint);
+      } catch (e) {}
+      hint = null;
+    }
+
+    function holdAndSend() {
+      if (waiting) return;
+      waiting = true;
+      var started = Date.now();
+      var hintTimer = setTimeout(function () {
+        if (waiting) showHint();
+      }, HINT_AFTER_MS);
+      var tick = function () {
+        // 等下去之前先确认「发送」按钮还在：会话被切走、或这一轮已经跑起来变成
+        // 「停止」键时，这次拦截就没有意义了，立刻收手，别留下一个幽灵 toast。
+        var guardBtn = sendButton();
+        if (guardBtn === null) {
+          waiting = false;
+          clearTimeout(hintTimer);
+          hideHint();
+          return;
+        }
+        if (isPending() && Date.now() - started <= MAX_HOLD_MS + 500) {
+          setTimeout(tick, 80);
+          return;
+        }
+        waiting = false;
+        clearTimeout(hintTimer);
+        hideHint();
+        // 重放前重新查一次：等待期间 React 可能已经换过节点。
+        var btn = sendButton();
+        if (btn === null) return;
+        replaying = true;
+        try {
+          btn.click();
+        } finally {
+          replaying = false;
+        }
+      };
+      setTimeout(tick, 80);
+    }
+
+    window.addEventListener('click', function (e) {
+      try {
+        if (replaying) return;
+        var t = e.target;
+        if (t === null || typeof t.closest !== 'function') return;
+        if (t.closest('.chat-send') === null) return;
+        if (sendButton() === null) return;
+        if (!isPending()) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        holdAndSend();
+      } catch (err) {}
+    }, true);
+
+    // 回车发送（设置项 mobileEnterToSend）：bundle 把该设置写进了 textarea 的
+    // enterkeyhint（send / enter），用它判断这一下回车到底是不是「发送」。
+    window.addEventListener('keydown', function (e) {
+      try {
+        if (replaying) return;
+        if (e.key !== 'Enter' || e.shiftKey === true || e.isComposing === true) return;
+        var t = e.target;
+        if (t === null || t.tagName !== 'TEXTAREA') return;
+        if (String(t.className).indexOf('chat-input') < 0) return;
+        if (t.getAttribute('enterkeyhint') !== 'send') return;
+        if (!isPending()) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        holdAndSend();
+      } catch (err) {}
+    }, true);
   } catch (e) {}
 })();
 </script>`
@@ -3123,6 +3861,8 @@ function mobilePageHtml() {
     '</head>',
     '<body>',
     '<div id="root"></div>',
+    // 在 bundle 之前注册：拦住「图片还没解码完就点发送」的一次点击，解码完成后自动重发。
+    SEND_DECODE_GUARD_HTML,
     '<script type="module" src="/m/mobile.js"></script>',
     VIEWPORT_VH_HTML,
     MODEL_BUTTON_HTML,
@@ -3133,6 +3873,7 @@ function mobilePageHtml() {
     PERMISSION_BTN_HTML,
     APPROVAL_BTN_HTML,
     SUBAGENT_STATUS_BTN_HTML,
+    PRESET_BTN_HTML,
     SEND_MODE_HTML,
     SEND_MODE_SETTINGS_HTML,
     QUEUE_DOCK_PLACE_HTML,
@@ -4356,9 +5097,111 @@ export function apply(ctx, config) {
         persistDevices(cfg.devicesFile, devices)
         return { ok: true, value: { ok: true } }
       }
-      // ── 预设 / 子代理 ──
+      // ── 预设 / 子代理 ──────────────────────────────────────────────────
+      //
+      // agentPreset.list 的真实数据面。bundle（assets/mobile.bundle.js，禁止改）
+      // 对这个返回值的消费点只有两处，字段就是它们读到的那些：
+      //   ① 会话页：`ie().then(t => { let n = t.presets.filter(e => e.broken === void 0);
+      //        O((n.find(e => e.isDefault) ?? n[0])?.id) })` —— 读 presets[]、id、name、
+      //      description、isDefault（`broken` 的行会被过滤掉，`trust` 只用于显示「本地」）。
+      //   ② 设置页 `zu()`：`agent-presets.default` 的候选值就是 `t.map(e => e.id)`。
+      // 所以必须给真实 presets，且 isDefault 只能由宿主算：registry 的 list() 不带它，
+      // 带它的是 remoteExportList()（也就是 Remote 名 list 的那个方法）。
+      // 服务缺失/读失败一律 ok:true + 空数组 —— bundle 的 .then 必须能安全跑完。
       case 'agentPreset.list': {
-        return { ok: true, value: { presets: [], authorable: false, hasDocument: false } }
+        const svc = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
+        if (!svc || (typeof svc.remoteExportList !== 'function' && typeof svc.list !== 'function')) {
+          return { ok: true, value: { presets: [], authorable: false, hasDocument: false } }
+        }
+        try {
+          const defaultId = typeof svc.defaultId === 'string' ? svc.defaultId : ''
+          let rows
+          if (typeof svc.remoteExportList === 'function') {
+            const roster = await svc.remoteExportList()
+            rows = roster && Array.isArray(roster.presets) ? roster.presets : []
+          } else {
+            rows = await svc.list()
+          }
+          const presets = (Array.isArray(rows) ? rows : [])
+            .map((row) => {
+              const r = row && typeof row === 'object' ? row : {}
+              const id = r.id === undefined ? '' : String(r.id)
+              return {
+                id,
+                ...(typeof r.name === 'string' && r.name !== '' ? { name: r.name } : {}),
+                ...(typeof r.description === 'string' && r.description !== '' ? { description: r.description } : {}),
+                ...(typeof r.order === 'number' ? { order: r.order } : {}),
+                isDefault: id !== '' && (r.isDefault === true || id === defaultId),
+                ...(typeof r.broken === 'string' && r.broken !== '' ? { broken: r.broken } : {}),
+              }
+            })
+            .filter((row) => row.id !== '')
+          // 当前会话绑定的预设（只有活着的 Agent 读得到；拿不到就不返回这个字段）。
+          let current
+          const sidForRead = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+          if (sidForRead !== '' && typeof svc.composedPreset === 'function') {
+            try {
+              const agents = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+              const agent = agents && typeof agents.get === 'function' ? agents.get(sidForRead) : undefined
+              const id = agent ? svc.composedPreset(agent.ctx) : undefined
+              if (typeof id === 'string' && id !== '') current = id
+            } catch {
+              /* 读不到就省略：不给前端伪造一个「当前模式」 */
+            }
+          }
+          return {
+            ok: true,
+            value: { presets, authorable: false, hasDocument: false, ...(current ? { current } : {}) },
+          }
+        } catch {
+          return { ok: true, value: { presets: [], authorable: false, hasDocument: false } }
+        }
+      }
+      // 切换某个**空白会话**的 Agent 预设（手机工具栏「聊天模式」按钮）。
+      // 宿主 agentPresets.select(agent, preset) 自己读 turnBoundary 投影：首条消息
+      // 之前才允许改绑，已开轮次抛 agent-preset/locked —— 这里不重复判断，只把
+      // 真实结果（成功的新 id / 失败的 code+message）如实回传，前端不猜。
+      case 'mobile.setAgentPreset': {
+        const sid = String(payload && payload.sessionId ? payload.sessionId : '')
+        const wanted = String(payload && payload.agentPreset ? payload.agentPreset : '').trim()
+        if (sid === '' || wanted === '') {
+          return { ok: false, error: { code: 'bad-request', message: '缺少会话或模式标识' } }
+        }
+        const svc = typeof ctx.get === 'function' ? ctx.get('agentPresets') : undefined
+        if (!svc || typeof svc.select !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '宿主未提供 Agent 预设服务，无法在已建会话上切换模式' } }
+        }
+        let agent
+        try {
+          const agents = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+          agent = agents && typeof agents.get === 'function' ? agents.get(sid) : undefined
+          if (!agent) {
+            const ctrl = sc()
+            if (!ctrl || typeof ctrl.resolveAgent !== 'function') {
+              return { ok: false, error: { code: 'unavailable', message: '会话控制器不可用，无法切到该会话' } }
+            }
+            const found = await ctrl.resolveAgent(sid)
+            if (found && found.error) {
+              return { ok: false, error: { code: found.error.code || 'not-found', message: found.error.message || '会话不可用' } }
+            }
+            agent = found && found.agent
+          }
+        } catch (err) {
+          return { ok: false, error: { code: 'internal', message: String((err && err.message) || err) } }
+        }
+        if (!agent) return { ok: false, error: { code: 'not-found', message: '会话没有可用的 Agent' } }
+        try {
+          const selected = await svc.select(agent, wanted)
+          return { ok: true, value: { sessionId: sid, agentPreset: selected } }
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: err && err.code ? String(err.code) : 'error',
+              message: err && err.message ? String(err.message) : '切换失败',
+            },
+          }
+        }
       }
       case 'subagent.list': {
         const parentSessionId = typeof payload?.parentSessionId === 'string' ? payload.parentSessionId : ''
@@ -4871,6 +5714,20 @@ export function apply(ctx, config) {
   const streamStates = new Map()
 
   /**
+   * sessionId -> 已经流经本服务的最大「已落盘事件」seq（整数，宿主分配）。
+   *
+   * 只用于给合成 chunk 选一个合法 seq 区间：手机 bundle 的 fold() 只接受
+   * `seq > maxSeq` 的事件（见 STREAM_SEQ_SLOTS 注释），而 chunk 又必须排在
+   * 「下一条会落盘的事件」之前。所以每个 chunk 的 seq 取
+   * `lastPersisted + slot/1e6`，落在 (lastPersisted, lastPersisted+1) 里：
+   * 既比手机已见过的所有事件新，又比下一条真事件（整数 lastPersisted+1）旧。
+   *
+   * follow 的 snapshot / event 帧都要更新它 —— 漏一帧，后续 chunk 就会落到
+   * 真事件后面被 bundle 丢弃。
+   */
+  const lastPersistedSeq = new Map()
+
+  /**
    * 取（必要时新建）某会话当前 attempt 的流式状态。
    *
    * **只按 (sessionId, attemptId) 取，不把 revision 当身份的一部分。**
@@ -4972,18 +5829,25 @@ export function apply(ctx, config) {
     if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return undefined
     if (typeof chunk.text !== 'string' || chunk.text === '') return undefined
 
-    // 合成 assistant/chunk 事件。seq 必须严格落在「历史之后」且轮内单调递增：
-    // bundle 的 fold() 是 `[...e].sort((a,b)=>a.seq-b.seq)`，seq 太小会把气泡排错位置。
-    // 基准 = startedAfterSeq（上一轮最后一个已落盘 seq），偏移 = index+1。
-    const offset = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index + 1 : ++st.seq
-    const seq = st.seqBase + offset
-    if (typeof frame.index === 'number' && Number.isFinite(frame.index)) st.seq = offset
+    // 合成 assistant/chunk 事件。seq 必须落在 (lastPersisted, lastPersisted+1)
+    // 这个**开区间**里 —— 见 STREAM_SEQ_SLOTS 的注释：用整数（旧实现 startedAfterSeq+index+1）
+    // 会把手机端的 maxSeq 顶到真事件之后，随后落盘的 assistant/message、tool/call、
+    // step/end、turn/end 全部被 bundle 的 fold() 当「旧事件」丢掉，手机只剩半截流式文本。
+    // 基准取「已经流过去的真事件里最大的 seq」而不是只取 startedAfterSeq：宿主一轮里
+    // 会连续落盘多条事件，每落一条水位就抬一次，chunk 必须跟着抬，否则会被判旧。
+    let slot = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index + 1 : ++st.seq
+    if (!Number.isFinite(slot) || slot < 1) slot = ++st.seq
+    if (slot > STREAM_SEQ_SLOTS - 1) slot = STREAM_SEQ_SLOTS - 1
+    const base = Math.max(st.seqBase, lastPersistedSeq.get(sessionId) ?? 0)
+    const seq = base + slot / STREAM_SEQ_SLOTS
+    st.seq = slot
     const time = typeof frame.time === 'number' && Number.isFinite(frame.time) ? frame.time : Date.now()
     const data = { chunk: { type: chunk.type, text: chunk.text } }
     if (st.turn !== undefined) data.turn = st.turn
     if (st.step !== undefined) data.step = st.step
     return { type: 'assistant/chunk', seq, time, data }
   }
+
 
   /** 起（或复用）某会话的 follow 单例。幂等。 */
   function ensureFollow(sessionId) {
@@ -5004,14 +5868,28 @@ export function apply(ctx, config) {
             if (ref.signal.aborted) return
             if (!f) continue
             if (f.type === 'snapshot') {
+            } else if (f.type === 'event' && f.event) {
+            } else if (f.type === 'assistant-stream' && f.frame) {
+              const fr = f.frame
+            } else {
+            }
+            if (f.type === 'snapshot') {
               // 快照里的 records 是已经存在的历史，不重推（聊天窗自己读过历史）。
               // 只告诉手机「从 lastSeq 起之后的事件会实时到达」，bundle 据此刷新缓存。
               if (typeof f.cursor === 'number') {
+                // 合成 chunk 的 seq 基准：订阅那一刻会话的最后一个已落盘 seq。
+                lastPersistedSeq.set(sessionId, f.cursor)
                 emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
               }
               continue
             }
             if (f.type === 'event' && f.event) {
+              // 真事件把水位往前推：后续 chunk 的 seq 必须落在它之后、
+              // 下一条真事件之前（见 STREAM_SEQ_SLOTS）。
+              if (typeof f.event.seq === 'number') {
+                const prev = lastPersistedSeq.get(sessionId)
+                if (prev === undefined || f.event.seq > prev) lastPersistedSeq.set(sessionId, f.event.seq)
+              }
               emitMux({ type: 'session/event', sessionId, event: f.event })
               continue
             }
@@ -5026,7 +5904,7 @@ export function apply(ctx, config) {
           if (!anyoneObserving(sessionId)) return
           restarts += 1
           await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
-        } catch {
+        } catch (err) {
           if (ref.signal.aborted) return
           // 没认过父的子代理会在这里撞上 session/agent-busy：认父后重试一次。
           if (!triedParentLookup && !subagentParent.has(sessionId)) {
@@ -5532,6 +6410,13 @@ export function apply(ctx, config) {
       return ctx.on('session/event', (session, event) => {
         if (!session || typeof session.id !== 'string') return
         if (!event || typeof event !== 'object') return
+        // 总线与 follow 是两条独立来源，谁先到不确定。这里也必须推进「已落盘 seq」水位：
+        // 否则总线先送来 seq 20，随后 follow 里的 chunk 仍按旧基准算 seq（< 20），
+        // 会被手机 bundle 的 fold() 当旧事件丢掉，流式就断在半路。
+        if (typeof event.seq === 'number') {
+          const prev = lastPersistedSeq.get(session.id)
+          if (prev === undefined || event.seq > prev) lastPersistedSeq.set(session.id, event.seq)
+        }
         emitMux({ type: 'session/event', sessionId: session.id, event })
       }, { global: true })
     } catch {
