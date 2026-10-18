@@ -2822,6 +2822,9 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
   var panel = null;
   var busy = false;
   var currentPreset = '';
+  // 宿主确认过「这个会话已经开过轮次」的 id：一旦确认就一直隐藏（比 DOM 判据硬，
+  // 换会话时自动失效）。
+  var startedSession = '';
   var toastTimer = 0;
 
   // 与 MODEL_BUTTON_HTML 同一手法：拦截 fetch 记住当前会话 id（手机页路由不带 query）。
@@ -2984,6 +2987,14 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
     }
     panel.list = Array.isArray(res.value.presets) ? res.value.presets : [];
     if (typeof res.value.current === 'string' && res.value.current !== '') currentPreset = res.value.current;
+    // 宿主用 turnBoundary 投影算出来的权威判据：blank === false 说明已经开过
+    // 轮次，立刻收起按钮，不再依赖聊天 DOM 是否已经渲染出消息节点。
+    if (res.value.blank === false) {
+      var sid = currentSession();
+      if (sid !== '') startedSession = sid;
+      btn.classList.add('dm-icon-hidden');
+      btn.setAttribute('aria-hidden', 'true');
+    }
     render();
   }
 
@@ -3080,10 +3091,14 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
   }
 
   // 空白 = 聊天页里一条消息节点都没有，且空态文案已经出现（历史加载完成）。
+  // 另加两条「正忙」判据：一轮在跑（停止按钮/输出中状态行）时也不算空白 ——
+  // 手机端偶发消息节点晚一拍才渲染，这几条能保证发出一瞬间按钮就消失。
   function isBlankChat() {
     var scroll = document.querySelector('.chat-scroll');
     if (!scroll) return false;
     if (scroll.querySelector('.chat-msg')) return false;
+    if (document.querySelector('.chat-send-stop')) return false;    // 正在生成
+    if (document.querySelector('.chat-turn-status')) return false;  // 「输出中」状态行
     var typing = scroll.querySelector('.chat-typing');
     if (!typing) return false;
     return String(typing.textContent || '').indexOf('还没有消息') >= 0;
@@ -3105,7 +3120,9 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
       if (ctxEl && ctxEl.parentNode === row) row.insertBefore(btn, ctxEl);
       else row.appendChild(btn);
     }
-    var blank = isBlankChat();
+    var sid = currentSession();
+    if (startedSession !== '' && sid !== startedSession) startedSession = '';  // 换会话：重置
+    var blank = isBlankChat() && !(sid !== '' && sid === startedSession);
     btn.classList.toggle('dm-icon-hidden', !blank);
     if (blank) btn.removeAttribute('aria-hidden');
     else btn.setAttribute('aria-hidden', 'true');
@@ -3575,9 +3592,46 @@ const CHAT_STATUS_HTML = `<script>
       }
     }
 
+    // ── 4) 去掉过程卡里重复的「思考中」第二行 ─────────────────────────────
+    // 第一行 .chat-proc-state（状态词，已被上面改成「思考中」）之后，bundle 还会
+    // 渲染第二行 .chat-proc-current > .chat-proc-current-text 表示「当前这一步在
+    // 做什么」，思考阶段它也是「思考中」—— 整个折叠块讲的就是思考过程，于是同一个
+    // 词出现两次。只在这一行文字**恰好等于**状态词时隐藏它；一旦变成「正在回答」
+    // 「运行命令」等真实步骤文字，就恢复显示（那些信息有用，不能一起藏掉）。
+    // 做法是挂一个自己的 class + CSS display:none，不动 React 的节点与文字。
+    var CUR_LINE = '.chat-proc-current';
+    var CUR_TEXT = '.chat-proc-current-text';
+    var DUP = 'dm-proc-dup';
+
+    function dedupeProcCurrent() {
+      var states = document.querySelectorAll(PROC_STATE);
+      for (var i = 0; i < states.length; i++) {
+        var state = states[i];
+        var stateText = trim(state.textContent || '');
+        if (stateText !== TO) continue;
+        var head = state.parentNode;
+        while (head && head.nodeType === 1 && !head.classList.contains('chat-proc-head')) {
+          head = head.parentNode;
+        }
+        var scope = head && head.nodeType === 1 ? head : document;
+        var lines = scope.querySelectorAll(CUR_LINE);
+        for (var k = 0; k < lines.length; k++) {
+          var cur = lines[k];
+          var curText = cur.querySelector(CUR_TEXT) || cur;
+          var same = trim(curText.textContent || '') === stateText;
+          if (same) {
+            if (!cur.classList.contains(DUP)) cur.classList.add(DUP);
+          } else if (cur.classList.contains(DUP)) {
+            cur.classList.remove(DUP);
+          }
+        }
+      }
+    }
+
     function flush() {
       queued = false;
       try { renameProcState(); } catch (e) {}
+      try { dedupeProcCurrent(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
       try { syncStatusText(); } catch (e) {}
     }
@@ -5136,22 +5190,45 @@ export function apply(ctx, config) {
               }
             })
             .filter((row) => row.id !== '')
-          // 当前会话绑定的预设（只有活着的 Agent 读得到；拿不到就不返回这个字段）。
+          // 当前会话绑定的预设 + 是否还是空白会话（都只有活着的 Agent 读得到；
+          // 读不到就不返回这两个字段，前端会退回 DOM 判据，绝不猜）。
           let current
+          let blank
           const sidForRead = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
-          if (sidForRead !== '' && typeof svc.composedPreset === 'function') {
+          if (sidForRead !== '') {
             try {
               const agents = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
               const agent = agents && typeof agents.get === 'function' ? agents.get(sidForRead) : undefined
-              const id = agent ? svc.composedPreset(agent.ctx) : undefined
-              if (typeof id === 'string' && id !== '') current = id
+              if (agent) {
+                if (typeof svc.composedPreset === 'function') {
+                  const id = svc.composedPreset(agent.ctx)
+                  if (typeof id === 'string' && id !== '') current = id
+                }
+                // 与 agentPresets.select() 同一条判据：turnBoundary 有开着的轮次
+                // 或已经跑过轮次，就不再是「首条消息之前」。
+                const projections = typeof ctx.get === 'function' ? ctx.get('sessionProjections') : undefined
+                if (projections && typeof projections.stateOf === 'function') {
+                  const boundary = projections.stateOf(agent.session, 'turnBoundary')
+                  if (boundary && typeof boundary === 'object') {
+                    const open = boundary.openTurnStartSeq !== null && boundary.openTurnStartSeq !== undefined
+                    const ran = typeof boundary.lastTurn === 'number' && boundary.lastTurn > 0
+                    blank = !open && !ran
+                  }
+                }
+              }
             } catch {
-              /* 读不到就省略：不给前端伪造一个「当前模式」 */
+              /* 读不到就省略：不给前端伪造一个「当前模式」或「空白」 */
             }
           }
           return {
             ok: true,
-            value: { presets, authorable: false, hasDocument: false, ...(current ? { current } : {}) },
+            value: {
+              presets,
+              authorable: false,
+              hasDocument: false,
+              ...(current ? { current } : {}),
+              ...(blank === undefined ? {} : { blank }),
+            },
           }
         } catch {
           return { ok: true, value: { presets: [], authorable: false, hasDocument: false } }

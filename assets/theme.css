@@ -1540,3 +1540,11 @@ body {
 
 /* 保存提示：复用 bundle 自带的 settings-saved 样式，不新增全局样式。 */
 
+
+/* 过程卡里重复的「思考中」第二行：由 CHAT_STATUS_HTML 注入脚本加 .dm-proc-dup
+   后隐藏。只在第二行的文字与第一行状态词完全相同时生效；一旦它变成「正在回答」
+   「运行命令」这类真实步骤文字，脚本会把 class 摘掉，这一行照常显示（那是有用的
+   信息，不能一路藏掉）。 */
+.chat-proc-current.dm-proc-dup {
+  display: none !important;
+}
