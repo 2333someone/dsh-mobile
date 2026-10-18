@@ -5395,7 +5395,7 @@ const USAGE_INLINE_HTML = `<script>
 })();
 </script>`
 
-const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="button" aria-label="命令" title="命令（/）"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 4 8.8 20"/><path d="M19.5 5.6h-4"/><path d="M8.5 18.4h-4"/></svg></button><script>
+const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="button" aria-label="命令" title="命令（/）"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 4 8.8 20"/></svg></button><script>
 (function () {
   try {
     if (window.__dmCommandPanel) return;
