@@ -1548,6 +1548,20 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     return out.join(' ').trim();
   }
 
+  // 只取推理块：子代理的某些步骤 only-reasoning（没有 text 块），
+  // 面板里如果只认 text 就会显示「(无文本)」，等于把过程信息丢了。
+  function reasoningOf(content) {
+    if (!Array.isArray(content)) return '';
+    var out = [];
+    for (var i = 0; i < content.length; i++) {
+      var p = content[i];
+      if (!p || p.type !== 'reasoning') continue;
+      out.push(String(p.text || ''));
+    }
+    return out.join('');
+  }
+
+
   function el(tag, cls, html) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -1955,9 +1969,28 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
           items.push({ role: 'user', text: excerpt(textOf(data.content), 120) });
         } else if (ev.type === 'assistant/message') {
           var m = (data.message && typeof data.message === 'object') ? data.message : data;
-          items.push({ role: 'assistant', text: excerpt(textOf(m.content), 160) });
+          // 先取正文；没有正文的步骤（只产出了推理）用 reasoning 兜底，
+          // 否则整行只剩「(无文本)」，过程信息等于没显示。
+          var body = textOf(m.content);
+          if (!body) body = reasoningOf(m.content);
+          items.push({ role: 'assistant', text: excerpt(body, 220) });
         } else if (ev.type === 'tool/call') {
-          items.push({ role: 'tool', text: String(data.name || '工具') });
+          // 工具行带上参数摘要：只显示工具名的话，用户看不出这一步到底在干什么。
+          var toolName = String(data.name || '工具');
+          var argText = '';
+          try {
+            var rawArgs = data.arguments;
+            var parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+            if (parsed && typeof parsed === 'object') {
+              var keys = Object.keys(parsed).slice(0, 2);
+              argText = keys.map(function (k) {
+                var v = parsed[k];
+                var str = typeof v === 'string' ? v : JSON.stringify(v);
+                return k + '=' + String(str == null ? '' : str).replace(/\s+/g, ' ').slice(0, 60);
+              }).join(' ');
+            }
+          } catch (e) {}
+          items.push({ role: 'tool', text: toolName + (argText ? ' · ' + argText : '') });
         }
       }
       if (items.length === 0) {
