@@ -1058,7 +1058,11 @@ const EMOJI_ICON_HTML = `<script>
       failed: '<path d="M6.6 6.6 17.4 17.4"/><path d="M17.4 6.6 6.6 17.4"/>',
       stopped: '<rect x="5.6" y="5.6" width="12.8" height="12.8" rx="2.4"/>',
       done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
-      warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>'
+      warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>',
+      // 思考中（原 💭 emoji）：云朵状思维气泡 + 三个实心点。
+      // 与其它工具图标同一套 24×24 / stroke=currentColor / 1.8 / 圆头风格，
+      // 但要把「这是思考」和「这是某个工具」在形状上区分开。
+      thinking: '<path d="M8.3 16.5h7.6a3.6 3.6 0 0 0 .5-7.1 4.9 4.9 0 0 0-9.3-1 3.4 3.4 0 0 0 1.2 8.1Z"/><circle cx="9.5" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="12.3" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="15.1" cy="12.7" r=".9" fill="currentColor" stroke="none"/>'
     };
     // [emoji 序列, 图标 key, 作用域 class]：只精确匹配这些序列（含 FE0F 变体选择器），
     // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
@@ -1074,6 +1078,11 @@ const EMOJI_ICON_HTML = `<script>
       ['\\u270F', 'pencil', 'chat-step-icon'],
       ['\\u{1F4BB}', 'code', 'chat-step-icon'],
       ['\\u{1F527}', 'tool', 'chat-step-icon'],
+      // 思考中的 💭：用户要求统一成 SVG，不要 emoji。
+      // thinking 变体同时带 .chat-step-icon 与 .chat-step-icon-thinking 两个 class，
+      // 所以作用域仍用 chat-step-icon 就能命中；气泡本身是工具行的图标位置。
+      ['\\u{1F4AD}\\uFE0F', 'thinking', 'chat-step-icon'],
+      ['\\u{1F4AD}', 'thinking', 'chat-step-icon'],
       // 过程卡状态符号：运行 / 失败 / 中断 / 完成
       ['\\u23F3', 'running', 'chat-proc-lead'],
       ['\\u274C', 'failed', 'chat-proc-lead'],
@@ -1085,8 +1094,8 @@ const EMOJI_ICON_HTML = `<script>
       // 报错计数「⚠ N 处报错」
       ['\\u26A0\\uFE0F', 'warning', 'chat-proc-errors'],
       ['\\u26A0', 'warning', 'chat-proc-errors'],
-      // 思考块（.chat-step-icon-thinking / 💭）刻意不再换图标：鲸鱼尾已经挪到
-      // 底部「输出中」状态行（见 CHAT_STATUS_HTML），折叠块的图标恢复原 emoji。
+      // 思考块（.chat-step-icon-thinking / 💭）也统一换成了 thinking SVG，
+      // 不再保留 emoji（鲸鱼尾仍在底部「输出中」状态行，见 CHAT_STATUS_HTML）。
     ];
 
     function makeIcon(key) {
