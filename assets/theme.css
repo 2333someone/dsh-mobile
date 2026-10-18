@@ -1898,11 +1898,22 @@ body {
   font-size: var(--text-base) !important;
 }
 .usage-card .usage-stats {
-  display: inline-flex !important;
+  /* 照官方余额卡的排版：左侧标签、右侧金额（金额靠右对齐）。
+     stats 占满剩余宽度；它内部的第一个 span 再做成两端对齐的 flex，
+     "账户余额" 文本是匿名 flex 项，<b>13.75 CNY</b> 是第二个项 → 被推到最右。 */
+  display: flex !important;
+  flex: 1 1 auto !important;
   align-items: baseline;
   gap: 6px !important;
-  margin: 0 !important;
+  margin: 0 0 0 10px !important;
   white-space: nowrap;
+}
+.usage-card .usage-stats > span:first-child {
+  display: flex !important;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
 }
 /* 第二个空 span 是 bundle 用来撑开 space-between 的，单行布局里不需要 */
 .usage-card .usage-stats > span:empty {
