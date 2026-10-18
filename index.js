@@ -248,8 +248,10 @@ function sendText(res, status, type, text) {
   send(res, status, { 'Content-Type': type }, text)
 }
 
-function sendBuffer(res, status, type, buf) {
-  send(res, status, { 'Content-Type': type, 'Cache-Control': 'public, max-age=3600' }, buf)
+function sendBuffer(res, status, type, buf, headers) {
+  // headers 可覆盖默认头：bundle 这类会随插件更新的资源必须 no-store，
+  // 否则默认的 public,max-age=3600 会让手机缓存一小时（改了代码也看不到）。
+  send(res, status, { 'Content-Type': type, 'Cache-Control': 'public, max-age=3600', ...(headers || {}) }, buf)
 }
 
 function readBody(req, maxBytes = SMALL_BODY) {
@@ -619,6 +621,11 @@ function asset(name) {
   assetCache.set(name, { mtimeMs, size, data })
   return data
 }
+/** bundle 版本号：用 mtime，bundle 一变 URL 就变，手机不会再用旧模块。 */
+function bundleVersion() {
+  try { return String(Math.floor(statSync(join(__dirname, 'assets', 'mobile.bundle.js')).mtimeMs)) } catch { return '0' }
+}
+
 function assetText(name) {
   return asset(name).toString('utf8')
 }
@@ -4982,7 +4989,7 @@ function mobilePageHtml() {
     '<div id="root"></div>',
     // 在 bundle 之前注册：拦住「图片还没解码完就点发送」的一次点击，解码完成后自动重发。
     SEND_DECODE_GUARD_HTML,
-    '<script type="module" src="/m/mobile.js"></script>',
+    `<script type="module" src="/m/mobile.js?v=${bundleVersion()}"></script>`,
     VIEWPORT_VH_HTML,
     MODEL_BUTTON_HTML,
     SHEET_CLOSE_HTML,
@@ -7914,11 +7921,10 @@ export function apply(ctx, config) {
     // 只读自检：不需要登录/配对，任何能访问到本插件的人都能打开。
     if (path === PUSH_CHECK_URL) return sendHtml(res, 200, pushCheckPageHtml())
     if (path === BUNDLE_URL) {
-      // bundle 会随插件更新（例如把设置行内建进去）。URL 固定为 /m/mobile.js，
-      // 不带 no-store 的话浏览器会按启发式缓存旧模块，刷新也拿不到新内容——
-      // 表现就是"改了 bundle、也重载了插件，手机上还是旧界面"。
-      res.setHeader('Cache-Control', 'no-store')
-      return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'))
+      // bundle 会随插件更新（例如把设置行内建进去）。必须显式 no-store：
+      // 1) sendBuffer 默认 public,max-age=3600，先 setHeader 会被它覆盖；
+      // 2) 浏览器启发式缓存也会留下旧模块。
+      return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'), { 'Cache-Control': 'no-store' })
     }
     if (path === MANIFEST_URL) return sendText(res, 200, 'application/manifest+json', manifestJson())
     if (path === ICON_SVG_URL) return sendBuffer(res, 200, 'image/svg+xml', asset('icon.svg'))
