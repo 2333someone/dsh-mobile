@@ -3500,7 +3500,25 @@ const SEND_MODE_SETTINGS_HTML = `<script>
   }
 
   window.addEventListener('dm:sendmode', paint);
-  setInterval(ensure, 500);
+  // 设置页是 SPA 渲染的：原来靠 500ms 轮询等它出现，所以「发送模式」这一行会
+  // 明显晚一拍才冒出来（用户反馈"单独加载、后面才出现"）。
+  // 改成 MutationObserver：设置页一挂载就（在下一帧）插入，几乎与其它行同时出现；
+  // 保留 2s 的低频兜底，应对极端情况下 observer 没触发的场景。
+  var queued = false;
+  function schedule() {
+    if (queued) return;
+    queued = true;
+    (window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); })(function () {
+      queued = false;
+      try { ensure(); } catch (e) {}
+    });
+  }
+  try {
+    var mo = new MutationObserver(schedule);
+    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(schedule, 2000);
+  ensure();
   ensure();
 })();
 </script>`
