@@ -1573,3 +1573,12 @@ body {
 .mobile-presetHelp {
   display: none !important;
 }
+
+/* 会话模式图标改为**常驻状态展示**（PRESET_STATUS_HTML）：
+   原 PRESET_BTN_HTML 会在首条消息发出后给按钮加 .dm-icon-hidden 隐藏它，
+   但用户要求聊天页一直显示当前模式，所以这里把那条隐藏规则压回去。
+   做法是只覆盖 display，不删除原规则 —— 若将来恢复"仅空白会话显示"，
+   删掉这一段即可。 */
+#dm-preset-btn.dm-icon-hidden {
+  display: inline-flex !important;
+}
