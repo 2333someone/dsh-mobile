@@ -1990,8 +1990,8 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
 }
 .dm-cmd-iconbox .dm-cmd-icon {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 19px;
+  height: 19px;
 }
 /* 行内左侧：图标 + /name + 中文标签；右侧：说明（右对齐、单行省略，约 46%）。 */
 .dm-cmd-left {
