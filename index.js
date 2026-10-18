@@ -1062,7 +1062,18 @@ const EMOJI_ICON_HTML = `<script>
       // 思考中（原 💭 emoji）：云朵状思维气泡 + 三个实心点。
       // 与其它工具图标同一套 24×24 / stroke=currentColor / 1.8 / 圆头风格，
       // 但要把「这是思考」和「这是某个工具」在形状上区分开。
-      thinking: '<path d="M8.3 16.5h7.6a3.6 3.6 0 0 0 .5-7.1 4.9 4.9 0 0 0-9.3-1 3.4 3.4 0 0 0 1.2 8.1Z"/><circle cx="9.5" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="12.3" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="15.1" cy="12.7" r=".9" fill="currentColor" stroke="none"/>'
+      thinking: '<path d="M8.3 16.5h7.6a3.6 3.6 0 0 0 .5-7.1 4.9 4.9 0 0 0-9.3-1 3.4 3.4 0 0 0 1.2 8.1Z"/><circle cx="9.5" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="12.3" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="15.1" cy="12.7" r=".9" fill="currentColor" stroke="none"/>',
+      // ── 宿主唤醒消息卡（.chat-trigger-icon）用的 8 个 emoji ──
+      // bundle 的 wt 表：agent-message 📨 / team-message 👥 / subagent-settled 🧩 /
+      // webhook 🔔 / schedule ⏰ / tool-jobs ⚙️ / cordis-host-runner 🔌 / goal 🎯。
+      // 用户要求聊天页不要出现 emoji，这里逐个换成同风格描边图标。
+      inbox: '<path d="M3.6 7.6h16.8v8.8H3.6z"/><path d="m3.6 8.4 8.4 5.6 8.4-5.6"/>',
+      people: '<circle cx="9" cy="9.2" r="2.6"/><path d="M4.4 18.4a4.6 4.6 0 0 1 9.2 0"/><circle cx="16.6" cy="10.4" r="2"/><path d="M14.9 18.4a4 4 0 0 1 5.1-3.2"/>',
+      puzzle: '<path d="M9.6 4.6h2.1a1.7 1.7 0 0 1 0 3.4h-.4v2.9h2.9v-.4a1.7 1.7 0 0 1 3.4 0v2.1a2 2 0 0 1-2 2h-2.9v3.2a1.7 1.7 0 0 1-3.4 0v-1.6H6.9a2 2 0 0 1-2-2v-2.1a2 2 0 0 1 2-2h1.6V6.6a2 2 0 0 1 1.1-2Z"/>',
+      bell: '<path d="M18 8.6a6 6 0 1 0-12 0c0 4.4-1.5 5.9-2 6.7-.3.5 0 1.2.7 1.2h14.6c.7 0 1-.7.7-1.2-.5-.8-2-2.3-2-6.7z"/><path d="M13.7 19.4a2 2 0 0 1-3.4 0"/>',
+      clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.4V12l3.2 1.9"/>',
+      plug: '<path d="M9 3.6v4.1M15 3.6v4.1"/><path d="M7 7.7h10v2.1a5 5 0 0 1-10 0z"/><path d="M12 14.8v4.6"/>',
+      target: '<circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="3.4"/><circle cx="12" cy="12" r=".7" fill="currentColor" stroke="none"/>'
     };
     // [emoji 序列, 图标 key, 作用域 class]：只精确匹配这些序列（含 FE0F 变体选择器），
     // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
@@ -1083,6 +1094,16 @@ const EMOJI_ICON_HTML = `<script>
       // 所以作用域仍用 chat-step-icon 就能命中；气泡本身是工具行的图标位置。
       ['\\u{1F4AD}\\uFE0F', 'thinking', 'chat-step-icon'],
       ['\\u{1F4AD}', 'thinking', 'chat-step-icon'],
+      // 宿主唤醒消息卡：📨👥🧩🔔⏰⚙️🔌🎯 全换成 SVG（作用域 .chat-trigger-icon）。
+      ['\\u{1F4E8}', 'inbox', 'chat-trigger-icon'],
+      ['\\u{1F465}', 'people', 'chat-trigger-icon'],
+      ['\\u{1F9E9}', 'puzzle', 'chat-trigger-icon'],
+      ['\\u{1F514}', 'bell', 'chat-trigger-icon'],
+      ['\\u{23F0}', 'clock', 'chat-trigger-icon'],
+      ['\\u2699\\uFE0F', 'gear', 'chat-trigger-icon'],
+      ['\\u2699', 'gear', 'chat-trigger-icon'],
+      ['\\u{1F50C}', 'plug', 'chat-trigger-icon'],
+      ['\\u{1F3AF}', 'target', 'chat-trigger-icon'],
       // 过程卡状态符号：运行 / 失败 / 中断 / 完成
       ['\\u23F3', 'running', 'chat-proc-lead'],
       ['\\u274C', 'failed', 'chat-proc-lead'],
