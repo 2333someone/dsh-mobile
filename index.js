@@ -2134,13 +2134,17 @@ const APPROVAL_BTN_HTML = `<button id="dm-approval-btn" class="dm-tool-btn" type
   function paintBadge() {
     var n = count();
     if (n <= 0) {
-      btn.classList.add('dm-icon-hidden');
-      btn.setAttribute('aria-hidden', 'true');
+      // 常驻显示（用户要求）：没有子代理时保留图标本体，只清掉角标并把图标转灰，
+      // 不再加 .dm-icon-hidden / aria-hidden —— 否则工具栏里这个按钮会整块消失。
+      btn.classList.remove('dm-icon-hidden');
+      btn.removeAttribute('aria-hidden');
+      btn.classList.add('dm-icon-idle');
       if (badge) { badge.textContent = ''; badge.classList.remove('dm-icon-badge-show'); }
       return;
     }
     btn.classList.remove('dm-icon-hidden');
     btn.removeAttribute('aria-hidden');
+    btn.classList.remove('dm-icon-idle');
     if (badge) {
       badge.textContent = n > 99 ? '99+' : String(n);
       badge.classList.add('dm-icon-badge-show');

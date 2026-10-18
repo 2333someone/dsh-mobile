@@ -1593,3 +1593,19 @@ body {
   border-left: 3px solid var(--accent, #4d6bfe) !important;
   padding-left: 12px !important;
 }
+
+/* ── 子代理入口调整（用户要求）─────────────────────────────────────────────
+   ① 工具栏里那个「子代理状态」按钮（带数字角标）改为**常驻**：脚本已经不再给
+      它加 .dm-icon-hidden，这里再兜一层，防止其它规则把它藏掉。
+   ② 顶栏（三个点左边）那个「子代理」按钮删掉 —— 入口统一到工具栏那个。
+      注意：SUBAGENT_BTN_HTML 的脚本还负责建子代理面板与 window.__dmSubagentHub，
+      工具栏按钮点开的就是它，所以这里只隐藏**按钮本体**，不删除脚本。 */
+#dm-subagent-status-btn.dm-icon-hidden {
+  display: inline-flex !important;
+}
+#dm-subagent-status-btn.dm-icon-idle {
+  opacity: 0.55;
+}
+#dm-subagent-btn {
+  display: none !important;
+}
