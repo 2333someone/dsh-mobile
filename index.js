@@ -4687,6 +4687,47 @@ const DEVICE_INFO_HTML = `<script>
 })();
 </script>`
 
+/**
+ * 通知设置页标记。
+ *
+ * 通知页（设置 → 通知）由 bundle 渲染，内部用 .settings-field 的竖排结构：
+ * 标题 → 控件 → 说明。用户希望改成「左边标题、右边参数」的横向行，但 bundle
+ * 禁止修改，只能由 theme.css 覆盖。CSS 又没法按页面标题选父级，所以这里在
+ * <body> 上挂一个 .dm-notify-page（当前页标题是「通知」时），theme.css 用
+ * body.dm-notify-page 作用域；挂在 body 上不会被 React 重渲染抹掉。
+ */
+const NOTIFY_LAYOUT_HTML = `<script>
+(function () {
+  try {
+    if (!document.body) return;
+    function mark() {
+      var titles = document.querySelectorAll('.mobile-title');
+      var on = false;
+      for (var i = 0; i < titles.length; i++) {
+        var text = titles[i].textContent || '';
+        if (text.trim() === '通知') { on = true; break; }
+      }
+      var body = document.body;
+      if (on) {
+        if (!body.classList.contains('dm-notify-page')) body.classList.add('dm-notify-page');
+      } else if (body.classList.contains('dm-notify-page')) {
+        body.classList.remove('dm-notify-page');
+      }
+    }
+    mark();
+    var queued = false;
+    var mo = new MutationObserver(function () {
+      if (queued) return;
+      queued = true;
+      var run = function () { queued = false; mark(); };
+      if (window.requestAnimationFrame) window.requestAnimationFrame(run);
+      else window.setTimeout(run, 0);
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+})();
+</script>`
+
 const CHAT_AUTOSCROLL_HTML = `<script>
 (function () {
   try {
@@ -5489,6 +5530,7 @@ function mobilePageHtml() {
     USAGE_INLINE_HTML,
     COMMAND_PANEL_HTML,
     DEVICE_INFO_HTML,
+    NOTIFY_LAYOUT_HTML,
     '</body>',
     '</html>',
   ].join('')

@@ -2056,3 +2056,52 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
 .dm-cmd-row-err {
   box-shadow: inset 3px 0 0 var(--danger, #e5484d);
 }
+/* ── 通知设置页：卡片内的设置项改成「左标题 / 右参数」──────────────────────
+   bundle 的 .settings-field 是竖排（标题 → 控件 → 说明），通知页一屏只能放
+   几项。这里用 body.dm-notify-page（index.js 注入的小脚本按页面标题「通知」
+   打标记，挂在 body 上不怕 React 重渲染）把每一行改成两列 grid：
+
+     启用                     [开关]
+     说明文字（占整行）
+
+     WxPusher SPT             [输入框]
+     说明文字 / 如何获取 SPT（占整行）
+
+   选择器都比 bundle 的单类选择器更具体（body + class + 后代），不需要
+   !important；卡片本身的分组（.settings-card / .settings-cardHead）沿用原样。 */
+body.dm-notify-page .settings-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: center;
+}
+body.dm-notify-page .settings-fieldHead {
+  grid-column: 1;
+  min-width: 0;
+}
+body.dm-notify-page .settings-field > .settings-switch {
+  grid-column: 2;
+  justify-self: end;
+}
+body.dm-notify-page .settings-field > .settings-input {
+  grid-column: 2;
+  justify-self: end;
+  /* 窄屏（390px 左右）也别把左边的中文标题挤到换行：输入框取 44vw，
+     同时不超过 200px；再窄时允许标题自然换行。 */
+  width: min(44vw, 200px);
+  min-width: 110px;
+}
+body.dm-notify-page .settings-field > input[type="number"].settings-input {
+  width: 88px;
+  min-width: 0;
+}
+body.dm-notify-page .settings-field > .settings-fieldDesc,
+body.dm-notify-page .settings-field > .settings-details {
+  grid-column: 1 / -1;
+}
+/* 说明文字跟在控件下面时，别在右侧空出一截：整行排版保持左对齐即可。 */
+body.dm-notify-page .settings-field > .settings-fieldDesc {
+  margin-bottom: 8px;
+}
+
