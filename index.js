@@ -1739,9 +1739,24 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     startTimer();
   }
 
+  // 收起动画：先挂 .dm-closing 让 CSS 反向播放（面板下滑 + 背景淡出），
+  // 动画结束后才真正移除 .dm-subagent-open。用 data 标记防止重复触发。
   function closePanel() {
     stopTimer();
-    if (panel) panel.back.classList.remove('dm-subagent-open');
+    if (!panel) return;
+    var back = panel.back;
+    if (!back.classList.contains('dm-subagent-open')) return;
+    if (back.getAttribute('data-dm-closing') === '1') return;
+    back.setAttribute('data-dm-closing', '1');
+    back.classList.add('dm-closing');
+    var sheet = back.querySelector('.dm-subagent-sheet');
+    if (sheet) sheet.classList.add('dm-closing');
+    window.setTimeout(function () {
+      back.classList.remove('dm-subagent-open');
+      back.classList.remove('dm-closing');
+      back.removeAttribute('data-dm-closing');
+      if (sheet) sheet.classList.remove('dm-closing');
+    }, 200);
   }
 
   function startTimer() {
@@ -2196,10 +2211,23 @@ const APPROVAL_BTN_HTML = `<button id="dm-approval-btn" class="dm-tool-btn" type
     paint();
     refresh();
   }
+  // 收起动画（同子代理面板）：先反向播放动画，结束再移除 open。
   function closePanel() {
     if (!panel) return;
-    panel.back.classList.remove('dm-approval-open');
-    setStatus('');
+    var back = panel.back;
+    if (!back.classList.contains('dm-approval-open')) { setStatus(''); return; }
+    if (back.getAttribute('data-dm-closing') === '1') return;
+    back.setAttribute('data-dm-closing', '1');
+    back.classList.add('dm-closing');
+    var sheet = back.querySelector('.dm-approval-sheet');
+    if (sheet) sheet.classList.add('dm-closing');
+    window.setTimeout(function () {
+      back.classList.remove('dm-approval-open');
+      back.classList.remove('dm-closing');
+      back.removeAttribute('data-dm-closing');
+      if (sheet) sheet.classList.remove('dm-closing');
+      setStatus('');
+    }, 200);
   }
   function isOpen() {
     return !!panel && panel.back.classList.contains('dm-approval-open');
@@ -2681,10 +2709,23 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
     load();
   }
 
+  // 收起动画（同上）：先反向播放，结束再移除 open。
   function closePanel() {
     if (!panel) return;
-    panel.back.classList.remove('dm-perm-open');
-    setStatus('');
+    var back = panel.back;
+    if (!back.classList.contains('dm-perm-open')) { setStatus(''); return; }
+    if (back.getAttribute('data-dm-closing') === '1') return;
+    back.setAttribute('data-dm-closing', '1');
+    back.classList.add('dm-closing');
+    var sheet = back.querySelector('.dm-perm-sheet');
+    if (sheet) sheet.classList.add('dm-closing');
+    window.setTimeout(function () {
+      back.classList.remove('dm-perm-open');
+      back.classList.remove('dm-closing');
+      back.removeAttribute('data-dm-closing');
+      if (sheet) sheet.classList.remove('dm-closing');
+      setStatus('');
+    }, 200);
   }
 
   function load() {

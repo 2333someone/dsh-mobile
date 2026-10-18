@@ -1626,3 +1626,27 @@ body {
   transform: translateY(-50%);
   z-index: 2;
 }
+
+/* ── 三个自绘面板的「收起」动画 ──────────────────────────────────────────
+   closePanel() 现在先给 backdrop/sheet 挂 .dm-closing，再等 200ms 才移除
+   .dm-*-open。这里让它们**反向播放**各自的入场动画：背景淡出、面板向下滑出，
+   与打开时的「从下往上弹出」对称。
+   时长 0.2s 与 JS 里的 200ms 对齐；reverse + forwards 保证结束时停在收起状态。 */
+.dm-subagent-backdrop.dm-closing {
+  animation: dm-subagent-fade 0.2s ease reverse forwards !important;
+}
+.dm-subagent-sheet.dm-closing {
+  animation: dm-subagent-up 0.2s cubic-bezier(0.4, 0, 1, 1) reverse forwards !important;
+}
+.dm-perm-backdrop.dm-closing {
+  animation: dm-perm-fade 0.2s ease reverse forwards !important;
+}
+.dm-perm-sheet.dm-closing {
+  animation: dm-perm-up 0.2s cubic-bezier(0.4, 0, 1, 1) reverse forwards !important;
+}
+.dm-approval-backdrop.dm-closing {
+  animation: dm-approval-fade 0.2s ease reverse forwards !important;
+}
+.dm-approval-sheet.dm-closing {
+  animation: dm-approval-up 0.2s cubic-bezier(0.4, 0, 1, 1) reverse forwards !important;
+}
