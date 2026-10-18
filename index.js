@@ -5490,15 +5490,59 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
     // 行上标「本机」，绝不混进 mobile.commands 的返回（bundle 的「＋」面板也用那份）。
     var LOCAL_ACTIONS = [
       {
-        name: 'file', label: '文件', description: '添加图片或拍照', group: '添加', source: 'local',
+        name: 'file', label: '文件', description: '从相册或相机添加', group: '添加', source: 'local',
         keywords: ['附件', '图片', '拍照', '相册', '上传'],
       },
       {
-        name: 'model', label: '模型', description: '切换当前会话使用的模型', group: '指令', source: 'local',
+        name: 'model', label: '模型', description: '选择本会话使用的模型', group: '指令', source: 'local',
         keywords: ['切换模型', '模型目录', '思考强度'],
       },
     ];
     var SOURCE_BADGES = { host: '宿主', local: '本机', skill: '技能' };
+
+    // ── 中文文案（命令）：按宿主命令 name 查表，命中才覆盖 ─────────────────────
+    // 来源（不是自翻）：桌面 @deepseek-ai/dsh-client-ui-commands/lib/client.js 的
+    // zh 字典（label.goal=目标、description.goal=设置或查看长期任务目标、
+    // label.plan…、label.export=下载日志 …）；model 来自
+    // ui-model-selection 的 command.label/description；file 来自 ui-conversation 的
+    // input.file（桌面没有独立描述，手机端用「从相册或相机添加」）。orchestrate 由
+    // 动态插件注册、宿主没有中文文案，这里给等价中文。
+    // 命令名（斜杠后那串）永远保持英文 —— 宿主只解析 /goal 这种形态；中文只是
+    // 标题与说明。未命中的新命令不覆盖，回退宿主英文文案（不隐藏）。
+    var COMMAND_ZH = {
+      goal: { label: '目标', description: '设置或查看长期任务目标' },
+      plan: { label: '计划', description: '进入或退出计划模式' },
+      feedback: { label: '反馈', description: '发送关于当前会话的反馈' },
+      compact: { label: '压缩', description: '压缩以上对话内容' },
+      permission: { label: '权限', description: '切换权限预设（沙箱模式与审批策略）' },
+      export: { label: '下载日志', description: '将当前会话内容导出为 ZIP' },
+      model: { label: '模型', description: '选择本会话使用的模型' },
+      file: { label: '文件', description: '从相册或相机添加' },
+      orchestrate: { label: '编排', description: '让本回合进入纯编排模式（可带任务参数；不带参数=仅本回合）' },
+    };
+
+    // ── 中文文案（技能）：按技能名查表，命中才覆盖 ─────────────────────────────
+    // 宿主 skill 没有 locale 字典（SKILL.md 只有英文 description），所以这 16 条是
+    // 按各 SKILL.md 英文描述人工写的，不是机器翻译；命中用中文，未命中的新技能
+    // 回退宿主英文 description（不隐藏）。技能名同样保持英文。
+    var SKILL_ZH = {
+      'agent-experience': '编写或修改面向模型的工具定义（名称、描述、参数 schema、系统提示段），以及设计技能、上下文加载与多步工作流',
+      'computer-use': '通过 orca computer 控制本地可见应用窗口：辅助功能树、点击、输入、菜单、对话框与截图；适用于原生应用与外部浏览器窗口',
+      'cordis-composition-reference': '编写或阅读本 harness 的 Cordis bundle patch 或 agent preset 时使用，需要 Loader YAML 方言或可安装插件包清单',
+      'cordis-plugin-development': '设计、评审、增删、启停、安装、配置或调试本 harness 配置档中的插件、bundle、页面、面板、工具或 MCP 连接',
+      'diagnose-windows-sandbox-acl': 'Windows 上出现意料之外的 DSH 沙箱访问被拒时使用（工作区写入/列目录失败，或本应可读的路径读不到）；内置命令会检查并修复 ACL',
+      'editing-cordis-compositions': '创建、修改或校验本 harness 的 agent preset 或其它 Cordis 组合，包括判断放宿主还是预设、以及确认预设能挂载',
+      'find-skills': '帮助用户发现并安装 agent 技能（用户问「怎么做 X」「找一个技能」「有没有能…的技能」或想扩展能力时）',
+      office: '创建、编辑、检查或转换 Office 文档、表格、演示文稿与 PDF；加载后选择合适的工作流',
+      'office-docx': '创建、读取、编辑并校验 Word 文档（.docx）',
+      'office-export-pdf': '用 LibreOffice Kit 把 Office 文档转换为 PDF',
+      'office-pptx': '创建、读取、编辑并校验 PowerPoint 演示文稿（.pptx）',
+      'office-recalculate': '用 LibreOffice Kit 刷新表格公式缓存并校验计算结果',
+      'office-render': '用 LibreOffice Kit 渲染文档图片或检查页面布局',
+      'office-xlsx': '读取、创建、编辑并校验 Excel 工作簿、数据与公式（.xlsx）',
+      'orca-cli': '通过 orca CLI 操作 Orca 管理的工作树、文件夹上下文、终端、仓库、自动化、产物、技能共享、工作树评论与内嵌浏览器',
+      orchestration: '编排受监督的 Orca 工作者：线程消息、阻塞式问答、任务派发、worker_done/escalation 等待、任务 DAG、决策门、协调循环与跨 agent 拆分',
+    };
 
     function localOf(name) {
       for (var i = 0; i < LOCAL_ACTIONS.length; i++) {
@@ -5523,6 +5567,17 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         var it = hostItems[i];
         if (!it || typeof it.name !== 'string' || it.name === '') continue;
         it.source = 'host';
+        // 展示层中文化：命中 COMMAND_ZH 才覆盖 label/description；未命中的新命令
+        // 保留宿主返回的英文文案（不隐藏、不翻译）。宿主英文 description 塞进
+        // keywords，保证用英文也能搜到（搜索同时匹配中文说明与英文命令名）。
+        var zh = COMMAND_ZH[it.name];
+        if (zh) {
+          if (typeof it.description === 'string' && it.description !== '') {
+            it.keywords = (Array.isArray(it.keywords) ? it.keywords : []).concat([it.description]);
+          }
+          it.label = zh.label;
+          it.description = zh.description;
+        }
         if (it.group === '添加') {
           add.push(it);
           continue;
@@ -5549,9 +5604,16 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
         var sk = skillItems[s];
         if (!sk || typeof sk.name !== 'string' || sk.name === '') continue;
         var desc = typeof sk.description === 'string' ? sk.description : '';
+        // 技能中文文案：按 name 查 SKILL_ZH，命中用中文；未命中的新技能回退宿主
+        // 英文 description（不隐藏）。英文原文仍进 keywords，便于英文检索。
+        var zhSkill = SKILL_ZH[sk.name];
+        if (typeof zhSkill === 'string' && zhSkill !== '') desc = zhSkill;
         // 与桌面 ui-skill 的候选描述完全一致：modelInvocable=false（仅用户可调用）
         // 前缀「仅用户 · 」（client.js:427-430）。
         if (sk.modelInvocable === false && desc !== '') desc = '仅用户 · ' + desc;
+        var skillKeywords = [];
+        if (typeof sk.whenToUse === 'string' && sk.whenToUse !== '') skillKeywords.push(sk.whenToUse);
+        if (typeof sk.description === 'string' && sk.description !== '') skillKeywords.push(sk.description);
         out.push({
           name: sk.name,
           label: sk.name,
@@ -5559,7 +5621,7 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
           group: '技能',
           source: 'skill',
           disabled: sk.userInvocable === false,
-          keywords: sk.whenToUse ? [sk.whenToUse] : [],
+          keywords: skillKeywords,
         });
       }
       return out;
