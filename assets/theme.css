@@ -1577,6 +1577,39 @@ body {
   display: none !important;
 }
 
+/* ── 会话列表页：Agent 模式卡「先没有、后插入」造成的顶部跳动 ──────────────
+   bundle 只在预设列表非空时才渲染这张卡：
+     te.length>0&&(0,G.jsxs)(`div`,{className:`mobile-presetCard`,...})
+   （assets/mobile.bundle.js）。所以从聊天页返回会话列表时，第一帧只有
+   「+ 新建会话」按钮；agentPreset.list 一回来，卡片才被插到 .mobile-create
+   的第一行，按钮和整张列表**瞬间下移 79px** —— 用户看到的「顶部闪一下」
+   就是这次重排，不是聊天页的 #dm-preset-btn（它始终在 #dm-tools 里，随
+   聊天页一起移除）。
+   这里在卡片还不存在时用 ::before 先占住它的位置：高度用卡片自身的盒模型
+   算出来（上下边框 2 + 上下内边距 16 + 标题行高 1.5×base + 列内 gap 2 +
+   描述行高 1.4×sm），左右外边距/下外边距也与卡片一致。卡片插入后 :has()
+   立即不再匹配、占位消失，两者几何完全相同，所以不会再推挤下方内容。
+   只占位，不隐藏卡片，也不影响没有预设时 bundle 自己的「不渲染卡片」行为。 */
+.mobile-create:not(:has(> .mobile-presetCard))::before {
+  content: "";
+  display: block;
+  block-size: calc(18px + 1.5 * var(--text-base, 15px) + 2px + 1.4 * var(--text-sm, 12px));
+  margin: 0 16px 8px;
+  border-radius: var(--radius-card, 16px);
+}
+
+/* 占位换成真卡时淡入 140ms，避免卡片文字/底色「啪」地出现。 */
+.mobile-presetCard {
+  animation: dm-preset-card-in 140ms ease-out both;
+}
+@keyframes dm-preset-card-in {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-presetCard { animation: none; }
+}
+
 /* 会话模式图标改为**常驻状态展示**（PRESET_STATUS_HTML）：
    原 PRESET_BTN_HTML 会在首条消息发出后给按钮加 .dm-icon-hidden 隐藏它，
    但用户要求聊天页一直显示当前模式，所以这里把那条隐藏规则压回去。
@@ -1651,4 +1684,40 @@ body {
 }
 .dm-approval-sheet.dm-closing {
   animation: dm-approval-up 0.2s cubic-bezier(0.4, 0, 1, 1) reverse forwards !important;
+}
+
+/* ── 折叠行图标垂直居中修正 ──────────────────────────────────────────────
+   「深度思考 · N 行」这类 .chat-disclosure 行里，bundle 的
+     .chat-disclosure-icon { display: flex; }        ← 没有 align-items
+     .chat-disclosure-icon svg { width/height: 14px }
+   而 flex 默认 align-items: stretch，固定 14px 的 SVG 会**贴顶**，
+   看上去比文字高半格。这里补上交叉轴居中（图标与右侧小箭头都补）。
+   bundle 的样式是运行时注入、DOM 顺序在本文件之后，同特异性下它赢，
+   所以必须 !important。 */
+.chat-disclosure-icon,
+.chat-disclosure-caret {
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* ── 「深度思考 · N 行」前面的 ✦ 图标垂直居中 ─────────────────────────────
+   bundle 里它是**文字字符**（.chat-think-icon 的 content 就是 `✦`），
+   样式只有 `flex: none; color: var(--accent)`：flex 行用 align-items:center
+   居中的是**行盒**（实测 18.69px），而 ✦ 是 11px 的字形，字形的墨迹在行盒里
+   偏上，于是看起来比文字高半格（实测图标盒中心 304.19 vs 文字墨迹中心 303.84）。
+   这里把图标做成 1em 见方的 flex 盒、line-height:1，让字形自身的盒子居中，
+   再向下微调 0.5px 补偿字体基线下沉。右侧小箭头同样处理。 */
+.chat-think-icon,
+.chat-think-caret {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 14px;
+  height: 14px;
+  line-height: 1 !important;
+  flex: none;
+}
+.chat-think-icon {
+  /* ✦ 的字形视觉重心偏上，往下压半像素与「深度思考」文字对齐 */
+  transform: translateY(0.5px);
 }
