@@ -4222,6 +4222,9 @@ const PRESET_STATUS_HTML = `<script>
       var b = button();
       if (!b) return;
       if (b.classList.contains('dm-icon-hidden')) b.classList.remove('dm-icon-hidden');
+      // 原脚本在会话已开始时会给按钮加 aria-hidden="true"。按钮现在是常驻状态，
+      // 必须去掉它 —— 否则读屏器会整颗忽略这个「当前模式」状态图标。
+      if (b.getAttribute('aria-hidden') === 'true') b.removeAttribute('aria-hidden');
       if (b.getAttribute('data-dm-preset-painted') !== preset) paint(preset);
       if (currentSession() !== '' && preset === 'standard') refresh();
     }
@@ -4229,7 +4232,7 @@ const PRESET_STATUS_HTML = `<script>
     try {
       var mo = new MutationObserver(function () { ensure(); });
       mo.observe(document.documentElement || document.body, {
-        childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-label', 'title']
+        childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-label', 'title', 'aria-hidden']
       });
     } catch (e) {}
     setInterval(ensure, 300);
@@ -4269,7 +4272,9 @@ const CHAT_AUTOSCROLL_HTML = `<script>
       if (!generating || !follow) return;
       var el = scroller();
       if (!el) return;
-      if (distance(el) > FOLLOW_STOP) return;
+      // 不要在这里用离底距离判断：流式内容一次长很多时距离同样会 >120px，
+      // 但那是内容变高、不是用户上滑；若据此 return，下一帧距离更大，
+      // 就会在本轮里永远追不上。停/恢复跟随只由下面真实 scroll 事件决定。
       el.scrollTop = el.scrollHeight;
     }
     function schedule() { if (!raf) raf = window.requestAnimationFrame(tick); }
