@@ -608,6 +608,39 @@ function assetText(name) {
 //      阈值 1 时 844±0.5 的噪声仍会写 2 次，阈值 2 时为 0 次）。
 //      真实视口变化（地址栏收展几十 px、软键盘几百 px）远大于它，不受影响。
 // 只有超阈值才真正触发一次 style 写入 + 重排。
+//
+// ── 另一个更隐蔽的坑：WebView 误报离线导致「丢图」 ─────────────────────
+// bundle 的发消息路径里有一道硬拦截（assets/mobile.bundle.js，禁止改）：
+//     if (navigator.onLine === false) {
+//       ...
+//       Ze.length > 0 && K('图片需联网发送，本次仅保存文本'); // ← 图片被丢掉
+//       // 只把 text 存进离线 outbox，然后 return
+//     }
+// 也就是说：只要 WebView 把 navigator.onLine 误报成 false，用户选好的图片
+// 就不会进 content，会话里那条 user/message 只剩 text 块 —— 正是「间歇性丢图」。
+// 夸克 / 鸿蒙 ArkWeb 在代理网络、无默认路由、从后台恢复等场景会误报离线。
+//
+// 修法：在任何页面脚本（包括 bundle 的 module）之前，把 navigator.onLine 的
+// **读取结果**固定为 true。只改这一个属性，不动 navigator 的其它字段，也不改
+// 网络栈本身：真正断网时 prompt 请求照样失败并弹出「发送失败」，而不是把图片
+// 静默吞掉。defineProperty 在个别 WebView 上会抛（属性不可配置），try/catch
+// 静默跳过 —— 页面继续按原样运行，最坏退回旧行为，不影响其它功能。
+//
+// 位置：必须放进 <head>、在 bundle 之前。bundle 是 type="module"（defer），
+// 发送时读的又是实时值；head 里的同步脚本仍然最早，能覆盖「模块初始化时读一次」
+// 的实现，也不会被 bundle 的加载时机影响。
+const ONLINE_GUARD_HTML = `<script>
+(function () {
+  /* dm-online-guard: Android/HarmonyOS WebViews may misreport navigator.onLine === false */
+  try {
+    Object.defineProperty(navigator, 'onLine', {
+      get: function () { return true; },
+      configurable: true
+    });
+  } catch (e) {}
+})();
+</script>`
+
 const VIEWPORT_VH_HTML = `<script>
 (function () {
   var KEY = '--dm-vh';
@@ -3074,6 +3107,8 @@ function mobilePageHtml() {
     '<html lang="zh-CN">',
     '<head>',
     '<meta charset="utf-8">',
+    // 必须最早：先把 navigator.onLine 的误报按住，bundle 才不会在发送时丢掉图片。
+    ONLINE_GUARD_HTML,
     '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">',
     '<meta name="theme-color" content="#f5f5f7">',
     '<meta name="referrer" content="no-referrer">',
