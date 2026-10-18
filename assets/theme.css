@@ -1606,6 +1606,10 @@ body {
   --dm-proc-card-pad-y: 4px;   /* 工具卡（.chat-step）上下内边距 */
   --dm-proc-row-gap: 5px;      /* 过程卡内部行与行的间距 */
   --dm-proc-head-pad-y: 5px;   /* 过程卡 head / 折叠行的上下内边距 */
+  /* 主展开栏（.chat-proc-head）要和下面工具卡一样高：
+     工具卡 = head 行高 + 上下内边距 + 上下边框，这里按同一公式算出来。
+     舒适 32+8+2=42，紧凑 27+6+2=35，和 .chat-step 的外廓完全一致。 */
+  --dm-proc-card-h: calc(var(--dm-proc-row-h) + 2 * var(--dm-proc-card-pad-y) + 2px);
 }
 :root[data-density="compact"] {
   --dm-proc-row-h: 27px;
@@ -1625,9 +1629,10 @@ body {
 .chat-step-head {
   min-height: var(--dm-proc-row-h) !important;
 }
-/* 过程卡 head（「思考中 / 已完成 · 用时 N 秒」那张卡）。 */
+/* 过程卡 head（「思考中 / 已完成 · 用时 N 秒」那张卡）。
+   高度按工具卡的外廓算（--dm-proc-card-h），两边在各密度下都齐平。 */
 .chat-proc-head {
-  min-height: var(--dm-proc-row-h) !important;
+  min-height: var(--dm-proc-card-h) !important;
   padding: var(--dm-proc-head-pad-y) 26px var(--dm-proc-head-pad-y) 8px !important;
 }
 /* 消息流里折叠的「深度思考 · N 行」卡。 */

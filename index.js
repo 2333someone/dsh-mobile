@@ -3919,6 +3919,30 @@ const CHAT_STATUS_HTML = `<script>
       '调用工具': '调用工具中'
     };
 
+    // ── 4c) 思考阶段的行数文案 ──────────────────────────────────────────────
+    // 过程卡展开后，下面每一段思考都是「✦ 深度思考 · N 行」；主展开栏却一直写
+    // 「思考中」，信息量对不上。这里把 head 上的「思考中」镜像成同一张卡里
+    // **最后一段**思考的行数文案（N 随流式增长实时更新）；卡片收起、下面还
+    // 没有这一行时退回「思考中」。
+    var THINK_LABEL = '.chat-think-label';
+    var THINK_TEXT_RE = /^深度思考\s*·\s*\d+\s*行$/;
+
+    function thinkingLabelOf(el) {
+      // el 是 head 内的 .chat-proc-current-text：向上找到同一张过程卡。
+      var card = el;
+      while (card && card.nodeType === 1 && !card.classList.contains('chat-proc')) {
+        card = card.parentNode;
+      }
+      if (!card || card.nodeType !== 1) return '';
+      var labels = card.querySelectorAll(THINK_LABEL);
+      var text = '';
+      for (var i = 0; i < labels.length; i++) {
+        var t = trim(labels[i].textContent || '');
+        if (t !== '') text = t;   // 取最后一个：最新一段思考
+      }
+      return text;
+    }
+
     function progressiveStep() {
       var nodes = document.querySelectorAll(STEP_TEXT);
       for (var i = 0; i < nodes.length; i++) {
@@ -3929,6 +3953,13 @@ const CHAT_STATUS_HTML = `<script>
           if (n.nodeType !== 3) continue;
           var raw = trim(n.nodeValue || '');
           if (raw === '') continue;
+          // 思考阶段：显示和下面那一行一样的「深度思考 · N 行」。
+          if (raw === '思考中' || THINK_TEXT_RE.test(raw)) {
+            var thinkText = thinkingLabelOf(el);
+            var nextThink = thinkText === '' ? '思考中' : thinkText;
+            if (n.nodeValue !== nextThink) n.nodeValue = nextThink;
+            continue;
+          }
           // 已经是进行时（以「中」结尾）就不用再改，避免「执行命令中中」。
           if (/中$/.test(raw)) continue;
           var next = STEP_LABELS[raw];
