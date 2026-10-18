@@ -4417,8 +4417,23 @@ const CHAT_AUTOSCROLL_HTML = `<script>
       var el = e.target;
       if (!el || el.nodeType !== 1 || !el.classList || !el.classList.contains('chat-scroll')) return;
       var d = distance(el);
+      // 只在上滑离开底部时**停止**跟随；恢复跟随必须由用户点「回到最新消息」显式发起，
+      // 否则用户正在往上翻历史时，只要手指滑过底部附近就会被重新"吸"回去。
       if (d > FOLLOW_STOP) follow = false;
-      else if (d < FOLLOW_RESUME) follow = true;
+    }, true);
+
+    // 恢复跟随的唯一入口：底部那个「回到最新消息」圆钮（bundle 的 .chat-jump-latest）。
+    // 只旁听点击（捕获阶段、不 preventDefault 也不 stopPropagation），
+    // bundle 自己的 onClick 会把界面滚到底，这里只负责把跟随状态打开。
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== document && !(t.classList && t.classList.contains('chat-jump-latest'))) {
+        t = t.parentNode;
+      }
+      if (!t || t === document || !t.classList || !t.classList.contains('chat-jump-latest')) return;
+      follow = true;
+      answering = false;   // 等本轮正文的下一个 text-delta 再接管
+      schedule();
     }, true);
 
     // 新内容进来 → 若在跟随就贴底。
@@ -4441,17 +4456,21 @@ const CHAT_AUTOSCROLL_HTML = `<script>
                 // 先子串预判，避免每个 chunk 都 JSON.parse。
                 if (raw.indexOf('turn/start') >= 0) {
                   // 新的一轮：进入思考/工具阶段，不跟随，也不动滚动位置。
+                  // **不要**在这里把 follow 打开 —— 是否跟随由用户决定（上滑=停，
+                  // 点「回到最新消息」=恢复），否则用户正翻历史时会被新回合硬拽下去。
                   answering = false;
-                  follow = true;
                 } else if (raw.indexOf('text-delta') >= 0) {
                   // 结论正文开始流式：第一次到达时贴底一次，之后持续跟随。
                   if (!answering) {
                     answering = true;
-                    follow = true;
-                    var el0 = scroller();
-                    if (el0) el0.scrollTop = el0.scrollHeight;
+                    // 只在"用户仍在跟随"时才贴底；如果他已经上滑在翻历史，
+                    // 就静静把正文写进去，等他点「回到最新消息」再回来。
+                    if (follow) {
+                      var el0 = scroller();
+                      if (el0) el0.scrollTop = el0.scrollHeight;
+                    }
                   }
-                  schedule();
+                  if (follow) schedule();
                 } else if (raw.indexOf('turn/end') >= 0) {
                   answering = false;
                 }
