@@ -3713,13 +3713,55 @@ const CHAT_STATUS_HTML = `<script>
         var state = head.querySelector(PROC_STATE);
         var cur = head.querySelector(CUR_LINE);
         if (!state || !cur) continue;
-        var curText = trim((cur.querySelector(CUR_TEXT) || cur).textContent || '');
-        var stateText = trim(state.textContent || '');
-        var same = stateText === TO && curText === TO;
-        if (same) {
-          if (!state.classList.contains(DUP)) state.classList.add(DUP);
-        } else if (state.classList.contains(DUP)) {
-          state.classList.remove(DUP);
+        // 运行中（有当前步骤行）就隐藏状态词：整个 head 只留**一行**动态状态，
+        // 由 §4b 把它写成「思考中 / 调用工具中 / 写入文件中 …」，图标随步骤变。
+        // 回合结束后 bundle 会把 .chat-proc-current 整个移除，这里自然回到
+        // 「已完成 / 用时 N 秒」的原样，不用额外判断。
+        if (!state.classList.contains(DUP)) state.classList.add(DUP);
+      }
+    }
+
+    // ── 4b) 当前步骤 → 进行时中文（单行动态状态 + 图标随步骤变）────────────
+    // bundle 给 .chat-proc-current-text 的是**动作名**：「思考中」「运行命令」
+    // 「写入」「读取」「编辑」「搜索内容」「查找文件」「抓取网页」「联网搜索」
+    // 「查看图片」「运行代码」「工具」…… 用户希望看到「正在做什么」的进行时说法：
+    //     思考中 / 调用工具中 / 写入文件中 / 执行命令中 / 读取文件中 / 搜索中 ……
+    // 只改文本节点的 nodeValue（不写 textContent、不 replaceChild），React 若写回
+    // 原文案，MutationObserver 会再改一次；值已经对就不动，避免自激循环。
+    var STEP_TEXT = '.chat-proc-current-text';
+    var STEP_LABELS = {
+      '思考中': '思考中',
+      '正在回答': '正在回答',
+      '运行命令': '执行命令中',
+      '运行代码': '运行代码中',
+      '写入': '写入文件中',
+      '编辑': '编辑文件中',
+      '读取': '读取文件中',
+      '搜索': '搜索中',
+      '搜索内容': '搜索中',
+      '查找文件': '查找文件中',
+      '抓取网页': '抓取网页中',
+      '联网搜索': '联网搜索中',
+      '查看图片': '查看图片中',
+      '工具': '调用工具中',
+      '调用工具': '调用工具中'
+    };
+
+    function progressiveStep() {
+      var nodes = document.querySelectorAll(STEP_TEXT);
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        var kids = el.childNodes;
+        for (var k = 0; k < kids.length; k++) {
+          var n = kids[k];
+          if (n.nodeType !== 3) continue;
+          var raw = trim(n.nodeValue || '');
+          if (raw === '') continue;
+          // 已经是进行时（以「中」结尾）就不用再改，避免「执行命令中中」。
+          if (/中$/.test(raw)) continue;
+          var next = STEP_LABELS[raw];
+          if (next === undefined) next = raw + '中';   // 未知动作：兜底加「中」
+          if (n.nodeValue !== next) n.nodeValue = next;
         }
       }
     }
@@ -3772,6 +3814,7 @@ const CHAT_STATUS_HTML = `<script>
       queued = false;
       try { renameProcState(); } catch (e) {}
       try { dedupeProcCurrent(); } catch (e) {}
+      try { progressiveStep(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
       try { syncStatusText(); } catch (e) {}
     }
