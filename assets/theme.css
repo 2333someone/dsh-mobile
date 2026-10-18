@@ -1565,3 +1565,11 @@ body {
 .chat-proc-current.dm-proc-dup {
   display: none !important;
 }
+
+/* 列表页「Agent 模式」卡片右侧的问号按钮（.mobile-presetHelp）：它打开的
+   「Agent 模式说明」弹窗只渲染「当前模式名 + 文档正文」，而宿主 preset 没有
+   文档（agentPreset.list 返回 hasDocument:false），点开基本是空壳 —— 用户要求
+   没用就删掉。只隐藏按钮，卡片的触发区/下拉箭头/新建按钮都不动。 */
+.mobile-presetHelp {
+  display: none !important;
+}

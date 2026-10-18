@@ -4972,6 +4972,37 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 四个 Agent 预设的中文名与一句话说明。
+   *
+   * 宿主 profile 里的 preset 定义只有 id/order，**没有 name/description**，
+   * 所以 `agentPreset.list` 原样透传时，手机端的模式列表只能显示英文 id
+   *（`standard` / `ptc` / `minimal` / `cordis`），对用户毫无意义。
+   * bundle 的消费点是：
+   *   · 下拉列表 `.sheet-option-title` = `e.name ?? e.id`，副标题 = `e.description`
+   *   · 列表页卡片 `.mobile-presetTriggerTitle` = `Ge.name ?? D`，desc 同名字段
+   * 因此在这一层补中文名与说明即可（不改 bundle、也不用动宿主 profile）。
+   * 宿主若将来自己提供了 name/description，下面的实现优先用宿主的，不会被覆盖。
+   */
+  const PRESET_TEXT = {
+    standard: {
+      name: '默认模式',
+      description: '完整工具集（命令、文件、搜索、任务、技能），适合日常使用',
+    },
+    ptc: {
+      name: 'PTC 模式',
+      description: '在默认工具集之上增加工具展示，工具调用过程更清晰',
+    },
+    minimal: {
+      name: '最简模式',
+      description: '只保留文件与终端工具，响应更快、更省 token',
+    },
+    cordis: {
+      name: '工具创造模式',
+      description: '用于编写与调试插件/工具（Cordis 组合）',
+    },
+  }
+
+  /**
    * 决定一次 prompt 真正采用的发送模式（需求 B 的宿主侧兜底）。
    *
    * 优先级：请求显式带的 mode > 用户存的设置 > 默认 queue。
@@ -5355,10 +5386,16 @@ export function apply(ctx, config) {
             .map((row) => {
               const r = row && typeof row === 'object' ? row : {}
               const id = r.id === undefined ? '' : String(r.id)
+              // 宿主 preset 定义没有 name/description：用 PRESET_TEXT 补中文，
+              // 宿主自己提供了就优先用宿主的（见常量上方的注释）。
+              const zh = PRESET_TEXT[id] || {}
+              const name = typeof r.name === 'string' && r.name !== '' ? r.name : zh.name
+              const description =
+                typeof r.description === 'string' && r.description !== '' ? r.description : zh.description
               return {
                 id,
-                ...(typeof r.name === 'string' && r.name !== '' ? { name: r.name } : {}),
-                ...(typeof r.description === 'string' && r.description !== '' ? { description: r.description } : {}),
+                ...(name !== undefined ? { name } : {}),
+                ...(description !== undefined ? { description } : {}),
                 ...(typeof r.order === 'number' ? { order: r.order } : {}),
                 isDefault: id !== '' && (r.isDefault === true || id === defaultId),
                 ...(typeof r.broken === 'string' && r.broken !== '' ? { broken: r.broken } : {}),
