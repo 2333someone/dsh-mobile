@@ -4600,6 +4600,122 @@ const CHAT_AUTOSCROLL_HTML = `<script>
 })();
 </script>`
 
+/**
+ * 图标与文字的光学垂直对齐（运行时按真实字体度量计算）。
+ *
+ * 问题背景：
+ *   bundle 里这些行的结构是 [图标 span][文字 span][图标/箭头 span] 的 flex 行，
+ *   图标是 SVG（或 emoji），文字是中文。行用 align-items:center 居中的是**行盒**，
+ *   而中文字形在行盒里的**墨迹位置由字体的 ascent/descent 决定** —— 不同字体
+ *   （电脑上的 Chromium 默认字体 vs 鸿蒙 ArkWeb 的系统字体）差别可达 1~2px。
+ *   所以任何写死的像素补偿都只能对某一种字体成立。
+ *   右侧的展开箭头 ▾ 是**文字字符**，与标题共用基线，天然对齐 —— 这正是对照。
+ *
+ * 做法：
+ *   用 canvas 的 measureText 取到当前元素实际字体下的：
+ *     · fontBoundingBoxAscent/Descent —— 字体用于排行盒的 ascent/descent
+ *     · actualBoundingBoxAscent/Descent —— 这段文字**墨迹**的上下边界
+ *   由此算出「墨迹中心相对行盒中心的偏移」，再把图标整体平移这个量。
+ *   → 不论手机用什么字体，都按它自己的度量对齐。
+ *
+ * 触发：字体加载完成、DOM 变化（rAF 合并）、resize、每 1.2s 兜底。
+ * 只写 icon.style.transform，不动 DOM 结构、不改 React 节点。
+ */
+const ICON_OPTICAL_ALIGN_HTML = `<script>
+(function () {
+  try {
+    if (window.__dmIconAlign) return;
+    window.__dmIconAlign = true;
+
+    // [行选择器, 图标选择器, 文字选择器]
+    var PAIRS = [
+      ['.chat-step-head', '.chat-step-icon', '.chat-step-title'],
+      ['.chat-proc-current', '.chat-step-icon', '.chat-proc-current-text'],
+      ['.chat-trigger-head', '.chat-trigger-icon', '.chat-trigger-title'],
+      ['.chat-disclosure-head', '.chat-disclosure-icon', '.chat-disclosure-label'],
+      ['.chat-think-head', '.chat-think-icon', '.chat-think-label']
+    ];
+
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d');
+    var cache = {};   // 字体 + 文本 → 偏移
+
+    // 返回「墨迹中心相对行盒中心」的偏移（px，向下为正）；算不出返回 null。
+    function inkOffset(el) {
+      var cs = window.getComputedStyle(el);
+      var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text === '') return null;
+      var fontSize = parseFloat(cs.fontSize) || 13;
+      var lineHeight = cs.lineHeight === 'normal' ? fontSize * 1.2 : parseFloat(cs.lineHeight);
+      if (!(lineHeight > 0)) return null;
+      var font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      var key = font + '|' + lineHeight + '|' + text;
+      if (cache[key] !== undefined) return cache[key];
+
+      ctx.font = font;
+      var m;
+      try { m = ctx.measureText(text); } catch (e) { return null; }
+      var FA = m.fontBoundingBoxAscent;
+      var FD = m.fontBoundingBoxDescent;
+      var AA = m.actualBoundingBoxAscent;
+      var AD = m.actualBoundingBoxDescent;
+      if (!(FA > 0) || !(FD >= 0) || !(AA >= 0) || !(AD >= 0)) return null;
+
+      // 行盒里文字内容区垂直居中（半行距），据此得到基线位置
+      var halfLeading = (lineHeight - (FA + FD)) / 2;
+      var baseline = halfLeading + FA;
+      // 墨迹中心 = 基线 - (上升 - 下降)/2
+      var inkCenter = baseline - (AA - AD) / 2;
+      var offset = inkCenter - lineHeight / 2;
+      // 合理范围保护：超过 3px 说明度量异常，宁可不改
+      if (!isFinite(offset) || Math.abs(offset) > 3) offset = null;
+      cache[key] = offset;
+      return offset;
+    }
+
+    function apply() {
+      for (var p = 0; p < PAIRS.length; p++) {
+        var rows = document.querySelectorAll(PAIRS[p][0]);
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          var icon = row.querySelector(PAIRS[p][1]);
+          var text = row.querySelector(PAIRS[p][2]);
+          if (!icon || !text) continue;
+          var off = inkOffset(text);
+          if (off === null) continue;
+          var v = (Math.round(off * 10) / 10) + 'px';
+          if (icon.style.transform !== 'translateY(' + v + ')') {
+            icon.style.transform = 'translateY(' + v + ')';
+          }
+        }
+      }
+    }
+
+    var queued = false;
+    function schedule() {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(function () {
+        queued = false;
+        try { apply(); } catch (e) {}
+      });
+    }
+
+    try {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
+    } catch (e) {}
+    window.addEventListener('resize', schedule);
+    // 字体晚到（自定义字体/系统字体异步加载）时重新算一次
+    try {
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
+    } catch (e) {}
+    setInterval(schedule, 1200);
+    schedule();
+  } catch (e) {}
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -4641,6 +4757,7 @@ function mobilePageHtml() {
     QUEUE_DOCK_PLACE_HTML,
     CHAT_STATUS_HTML,
     CHAT_AUTOSCROLL_HTML,
+    ICON_OPTICAL_ALIGN_HTML,
     '</body>',
     '</html>',
   ].join('')

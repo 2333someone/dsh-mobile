@@ -1781,28 +1781,4 @@ body {
   vertical-align: middle !important;
 }
 
-/* ── 图标视觉对齐：按**实测墨迹中心**逐处补偿 ────────────────────────────
-   容器改成 flex 盒后，盒子本身已经完全居中；剩下的偏差来自字形：
-   中文字形的墨迹在行盒里偏下（ascent/descent 不对称），所以图标看起来
-   统一偏高。用截图逐像素测量得到的实际偏差是：
-     工具行            -0.38px
-     「深度思考 N 行中」 -1.00px
-     「收到任务消息」卡  -0.50px
-   这里按各处的实测值分别给 svg 加一点下沉，把"盒子对齐"补成"墨迹对齐"。
-   数值都很小（≤1px），只影响视觉平衡，不改变布局。 */
-.chat-step-head > .chat-step-icon > svg,
-.chat-step-head > .chat-step-icon > .dm-icon {
-  transform: translateY(0.4px);
-}
-.chat-proc-current > .chat-step-icon > svg,
-.chat-proc-current > .chat-step-icon > .dm-icon {
-  transform: translateY(1px);
-}
-.chat-trigger-icon > svg,
-.chat-trigger-icon > .dm-icon {
-  transform: translateY(0.5px);
-}
-.chat-disclosure-icon > svg,
-.chat-disclosure-icon > .dm-icon {
-  transform: translateY(0.5px);
-}
+
