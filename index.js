@@ -3564,6 +3564,10 @@ const CHAT_STATUS_HTML = `<script>
     var TO = '思考中';
     var WHALE = 'dm-turn-whale';
     var RUNNING = '输出中';
+    // 用户要求：底部状态行文案由「输出中」改成「深度求索中」（与过程卡用词统一）。
+    // 只换**可见文本**；aria-label 仍是 bundle 写的「输出中」，鲸鱼尾/状态判定
+    // 两种写法都认（见 turnState 的归一化）。
+    var RUNNING_TEXT = '深度求索中';
     // 原始 SSE 收到当前会话的 turn/end 后置位，下一轮 turn/start 复位（见 §5）。
     // 只在「turn/end 被 fold 丢掉、状态行卡在输出中」时起作用，正常回合用不到。
     var TURN_ENDED = false;
@@ -3604,13 +3608,35 @@ const CHAT_STATUS_HTML = `<script>
     // 万一以后没了 aria-label，再退回文本节点。
     function turnState(row) {
       var label = row.getAttribute && row.getAttribute('aria-label');
-      if (label) return trim(label);
-      var text = '';
-      var kids = row.childNodes;
-      for (var i = 0; i < kids.length; i++) {
-        if (kids[i].nodeType === 3) text += kids[i].nodeValue;
+      var v = label ? trim(label) : '';
+      if (v === '') {
+        var kids = row.childNodes;
+        for (var i = 0; i < kids.length; i++) {
+          if (kids[i].nodeType === 3) v += kids[i].nodeValue;
+        }
+        v = trim(v);
       }
-      return trim(text);
+      // 「输出中」是 bundle 的原文案；状态行文字会被 §2b 改成「深度求索中」，
+      // 两种写法都视为运行中，鲸鱼尾逻辑不用改。
+      if (v === RUNNING_TEXT) return RUNNING;
+      return v;
+    }
+
+    // ── 2b) 状态行文案：输出中 → 深度求索中 ──────────────────────────────
+    // 只改文本节点的 nodeValue（React 持有该节点，重写 textContent 会让它失联），
+    // 呼吸点（.chat-turn-dots）是元素、不受影响。React 写回原文案时 Observer 再改。
+    function renameTurnText() {
+      var rows = document.querySelectorAll(TURN);
+      for (var i = 0; i < rows.length; i++) {
+        var kids = rows[i].childNodes;
+        for (var k = 0; k < kids.length; k++) {
+          var n = kids[k];
+          if (n.nodeType !== 3) continue;
+          if (trim(n.nodeValue) === RUNNING && n.nodeValue !== RUNNING_TEXT) {
+            n.nodeValue = RUNNING_TEXT;
+          }
+        }
+      }
     }
 
     function syncTurn() {
@@ -3860,6 +3886,7 @@ const CHAT_STATUS_HTML = `<script>
       try { renameProcState(); } catch (e) {}
       try { dedupeProcCurrent(); } catch (e) {}
       try { progressiveStep(); } catch (e) {}
+      try { renameTurnText(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
       try { syncStatusText(); } catch (e) {}
     }
