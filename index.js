@@ -4682,7 +4682,7 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
     // 返回「墨迹中心相对行盒中心」的偏移（px，向下为正）；算不出返回 null。
     function inkOffset(el) {
       var cs = window.getComputedStyle(el);
-      var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
       if (text === '') return null;
       var fontSize = parseFloat(cs.fontSize) || 13;
       var lineHeight = cs.lineHeight === 'normal' ? fontSize * 1.2 : parseFloat(cs.lineHeight);
@@ -4718,7 +4718,7 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
           box.style.cssText = 'position:fixed;left:6px;top:6px;z-index:99999;background:rgba(0,0,0,.82);color:#ff5c5c;font:11px/1.5 monospace;padding:6px 8px;border-radius:8px;white-space:pre;pointer-events:none';
           document.body.appendChild(box);
         }
-        box.textContent = deltas.length ? deltas.join('\n') : 'no rows';
+        box.textContent = deltas.length ? deltas.join('\\n') : 'no rows';
       } catch (e) {}
     }
 
