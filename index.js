@@ -6878,6 +6878,41 @@ export function apply(ctx, config) {
       clearTimeout(timer)
     }
   }
+  /**
+   * 惰性读取宿主服务（不写进静态 inject）。
+   *
+   * cordis 的 ctx.get 是明确的「不需要 inject 的读取入口」
+   *（cordis/lib/index.js:756 "Read a service from the store without the inject requirement"）。
+   * 这里必须用它而不是往 inject 数组里加名字：pluginManager 在
+   * `disabled: !!js '!ctx.get(''profileContext'')'` 的条件下只在桌面 profile 启用，
+   * schedule 也可能被用户 patch 禁用；硬 inject 会让整个手机插件加载失败。
+   * 取不到就返回 undefined，由 RPC 返回 service_unavailable —— 不编数据。
+   */
+  function hostService(name) {
+    const read = (fn) => {
+      try {
+        const value = typeof fn === 'function' ? fn(name) : undefined
+        return value && (typeof value === 'object' || typeof value === 'function') ? value : undefined
+      } catch {
+        return undefined
+      }
+    }
+    const direct = read((key) => ctx.get(key))
+    if (direct) return direct
+    return read((key) => ctx.reflect && ctx.reflect.get && ctx.reflect.get(key))
+  }
+
+  function serviceUnavailable(service, message) {
+    return {
+      ok: false,
+      error: {
+        code: 'service_unavailable',
+        message,
+        details: { service },
+      },
+    }
+  }
+
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     switch (method) {
@@ -7367,6 +7402,125 @@ export function apply(ctx, config) {
       // bundle 自带的权限面板走两条通道：会话投影 projections.values.permissions
       // （读）和 slash 命令 `/permission <name>`（写）。后者在本插件里没有实现，
       // 所以手机上一直切不动权限。这里补一对专用 RPC，由自绘面板直接调用。
+      // ── 插件页：宿主 pluginManager 的真实插件包清单 ───────────────────────
+      // 数据源：@deepseek-ai/dsh-plugin-manager 的 listBundles()
+      //（asar: dsh/node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js:1681）。
+      // 桌面「插件管理」页用的是同一个方法（ui-plugin-manager client 调
+      // ctx.remote.pluginManager.listBundles()），remote 只是把原始数组包成
+      // { ok, value } 信封；这里直接在宿主进程里拿原始数组，字段完全一致。
+      // 只投影手机需要的字段，不把 meta 等内部对象整包下发。
+      case 'mobile.plugins': {
+        const manager = hostService('pluginManager')
+        if (!manager || typeof manager.listBundles !== 'function') {
+          return serviceUnavailable('pluginManager', '宿主的插件管理服务未启用（profile 未加载 plugin-manager）')
+        }
+        let bundles
+        try {
+          bundles = await manager.listBundles()
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: 'plugin_inventory_failed',
+              message: `读取插件清单失败：${(err && err.message) || String(err)}`,
+            },
+          }
+        }
+        const all = Array.isArray(bundles) ? bundles : []
+        // availability === 'missing' 且未启用 = 官方目录里「能装但还没装」的条目，
+        // 不属于「已安装/已启用」，过滤掉。其余保留（含已安装但未启用的行，
+        // 手机端用「未启用」徽标如实展示）。
+        const items = all
+          .filter((bundle) => bundle && typeof bundle.name === 'string' && (bundle.availability !== 'missing' || bundle.enabled === true))
+          .map((bundle) => ({
+            name: bundle.name,
+            version: typeof bundle.version === 'string' ? bundle.version : null,
+            description: typeof bundle.description === 'string' ? bundle.description : null,
+            enabled: bundle.enabled === true,
+            installed: bundle.installed === true,
+            official: bundle.official === true,
+            availability: typeof bundle.availability === 'string' ? bundle.availability : null,
+            readOnlyReason: typeof bundle.readOnlyReason === 'string' ? bundle.readOnlyReason : null,
+            pluginCount: Array.isArray(bundle.rows) ? bundle.rows.length : 0,
+            error: bundle.error && typeof bundle.error.code === 'string' ? { code: bundle.error.code } : null,
+          }))
+          .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name))
+        return {
+          ok: true,
+          value: {
+            items,
+            counts: {
+              total: items.length,
+              enabled: items.filter((item) => item.enabled).length,
+            },
+            source: 'pluginManager.listBundles()',
+          },
+        }
+      }
+
+      // ── 自动化页：宿主 schedule 服务里的真实定时任务 ─────────────────────
+      // 数据源：@deepseek-ai/dsh-schedule 的 catalog()
+      //（asar: dsh/node_modules/@deepseek-ai/dsh-schedule/lib/index.js:2129）。
+      // catalog() 返回宿主全部 active/inactive 任务（含 sessionId/status），
+      // 桌面「自动化任务」页同源（ui-schedule client 调 ctx.remote.schedule.catalog()）。
+      // 说明：recurring 任务每次投递后宿主会把 record.scheduledAt 推进到下一次，
+      // 一次性任务投递后 status 变 inactive、scheduledAt 停在原定时间 —— 所以页面
+      // 「下次执行 / 原定」的语义与宿主持久化记录完全一致。
+      case 'mobile.automations': {
+        const schedule = hostService('schedule')
+        if (!schedule || typeof schedule.catalog !== 'function') {
+          return serviceUnavailable('schedule', '宿主的定时任务服务未启用（schedule 插件未加载）')
+        }
+        let catalog
+        try {
+          catalog = await schedule.catalog()
+        } catch (err) {
+          return {
+            ok: false,
+            error: {
+              code: 'schedule_catalog_failed',
+              message: `读取自动化任务失败：${(err && err.message) || String(err)}`,
+            },
+          }
+        }
+        const records = Array.isArray(catalog) ? catalog : []
+        const items = records.map((record) => {
+          const task = record && typeof record === 'object' ? record : {}
+          const item = {
+            id: typeof task.id === 'string' ? task.id : '',
+            kind: typeof task.kind === 'string' ? task.kind : '',
+            title: typeof task.title === 'string' ? task.title : '',
+            prompt: typeof task.prompt === 'string' ? task.prompt : '',
+            scheduledAt: typeof task.scheduledAt === 'string' ? task.scheduledAt : '',
+            status: task.status === 'inactive' ? 'inactive' : 'active',
+            sessionId: typeof task.sessionId === 'string' ? task.sessionId : '',
+          }
+          if (Number.isSafeInteger(task.afterSeconds)) item.afterSeconds = task.afterSeconds
+          if (Number.isSafeInteger(task.everySeconds)) item.everySeconds = task.everySeconds
+          if (typeof task.time === 'string') item.time = task.time
+          if (typeof task.timeZone === 'string') item.timeZone = task.timeZone
+          if (Array.isArray(task.weekdays)) item.weekdays = task.weekdays.filter((day) => Number.isSafeInteger(day))
+          if (typeof task.expression === 'string') item.expression = task.expression
+          // lastDelivery 的 schema 是 { scheduledAt, deliveredAt, messageId }（严格三键），
+          // 只取投递时间给页面显示「上次投递」，不额外加工。
+          if (task.lastDelivery && typeof task.lastDelivery.deliveredAt === 'string') {
+            item.lastDelivery = { deliveredAt: task.lastDelivery.deliveredAt }
+          }
+          return item
+        })
+        return {
+          ok: true,
+          value: {
+            items,
+            counts: {
+              total: items.length,
+              active: items.filter((item) => item.status === 'active').length,
+            },
+            source: 'schedule.catalog()',
+          },
+        }
+      }
+
       case 'mobile.permissions.get': {
         return { ok: true, value: readPermissionView(payload) }
       }
