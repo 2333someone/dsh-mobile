@@ -442,7 +442,6 @@ window.__ModuleLoader__.load({
                   }, '清除')
                 : null,
             ),
-            h('p', { className: 'dm-sub' }, '保存后这里会出现「域名/m/」。手机从该域名打开时，页面已经知道服务器地址，配对只填配对码。'),
             domainErr ? h('p', { className: 'dm-err' }, domainErr) : null,
           ),
         ),
