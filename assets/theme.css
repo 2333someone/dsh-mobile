@@ -1770,3 +1770,11 @@ body {
 .chat-step-icon > .dm-icon {
   transform: translateY(1px);
 }
+
+/* 思考中的 💭 是**emoji 文本**（没有 svg），前面那条只对 svg/.dm-icon 生效，
+   所以它还留在原位——emoji 字形的墨迹天然偏上，看起来比「思考中」高。
+   这里用 :not(:has(svg)) 精确命中"仍是 emoji"的图标，往下压 2px；
+   有 svg 的（扳手/齿轮等）继续用前面的 1px 规则。 */
+.chat-step-icon:not(:has(svg)) {
+  transform: translateY(2px);
+}
