@@ -7359,10 +7359,9 @@ const MODELS_CENTER_HTML = `<script>
 
   // ── 设置页「主机配置」：只保留「模型」一行 ────────────────────────────────
   //
-  // 为什么是 DOM 隐藏而不是过滤 settings.read：bundle 里 settings.read 的 namespaces
-  // 被多处共用（分组行、分组详情页、**主题偏好** ui-theme）。按组过滤会连带把
-  // ui-theme 等拿掉，主题与详情页都会坏。这里只在该 settings-group 内按行标题精确
-  // 匹配隐藏，MutationObserver 在 React 重渲染后补隐藏，绝不碰其它分组。
+  // 不改 settings.read：bundle 的 ui-theme（主题偏好）与分组详情页共用那份
+  // namespaces，按组过滤会连带把它们拿掉。这里只在该 settings-group 内按行标题
+  // 精确匹配隐藏，MutationObserver 在 React 重渲染后补隐藏，绝不碰其它分组。
   var GROUP_TITLE = '主机配置';
   var KEEP_ROW = '模型';
   var GROUP_DESC = '模型提供方 · 密钥 · 默认模型';
@@ -7426,6 +7425,9 @@ const MODELS_CENTER_HTML = `<script>
   var errorText = null;
   var status = null;
   var loadNonce = 0;
+  var sheet = null;      // 当前弹出面板（添加/编辑/删除/替换 Key/默认模型）
+  var openForm = null;   // 卡片内联表单：{ kind:'edit'|'key', route, error, draft }（同一时间只展开一个）
+  var busy = false;
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
@@ -7477,25 +7479,145 @@ const MODELS_CENTER_HTML = `<script>
     return '目录可选';
   }
 
+  function providerOf(route) {
+    if (!data || !Array.isArray(data.providers)) return null;
+    for (var i = 0; i < data.providers.length; i++) if (data.providers[i].provider === route) return data.providers[i];
+    return null;
+  }
+
+  function inlineFieldHtml(label, name, value, opts) {
+    var options = opts || {};
+    var input;
+    if (options.select) {
+      input = '<select class="dm-cfg-input" data-dm-mc-inline="' + esc(name) + '">' + options.select.map(function (choice) {
+        return '<option value="' + esc(choice.value) + '"' + (String(value) === String(choice.value) ? ' selected' : '') + '>' + esc(choice.label) + '</option>';
+      }).join('') + '</select>';
+    } else if (options.textarea) {
+      input = '<textarea class="dm-cfg-input dm-mc-textarea" rows="' + (options.rows || 5) + '" data-dm-mc-inline="' + esc(name) + '"' +
+        (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') + '>' + esc(value) + '</textarea>';
+    } else {
+      input = '<input class="dm-cfg-input" type="' + (options.type || 'text') + '" autocomplete="' + (options.type === 'password' ? 'new-password' : 'off') + '"' +
+        ' autocapitalize="off" spellcheck="false" data-dm-mc-inline="' + esc(name) + '" value="' + esc(value) + '"' +
+        (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') + '>';
+    }
+    return '<div class="dm-mc-formRow"><label class="dm-cfg-label">' + esc(label) + '</label>' + input +
+      (options.hint ? '<p class="dm-cfg-hint">' + esc(options.hint) + '</p>' : '') + '</div>';
+  }
+
+  // 卡片内联表单：默认收起，点「编辑 / 替换 API Key」才在卡片里展开（同一时间只开一个）。
+  function inlineFormHtml(item) {
+    var form = openForm;
+    var draft = form.draft || {};
+    var html = '<div class="dm-mc-inlineForm" data-dm-mc-inline-box="' + esc(item.provider) + '">';
+    if (form.kind === 'key') {
+      html += '<p class="dm-cfg-hint">凭据引用 ' + esc(item.apiKeyRef || '') + ' · 只写宿主凭据库，不回显。</p>' +
+        inlineFieldHtml('API Key', 'key', '', { type: 'password', placeholder: (item.credential && item.credential.configured) ? '已配置；留空表示保持当前密钥' : '输入 API 密钥' });
+    } else {
+      var profile = (data.profiles && data.profiles[item.provider] && typeof data.profiles[item.provider] === 'object') ? data.profiles[item.provider] : {};
+      html += inlineFieldHtml('显示名称', 'displayName', draft.displayName !== undefined ? draft.displayName : (profile.displayName || item.displayName || ''), { placeholder: '留空使用默认名称' });
+      html += inlineFieldHtml('API 协议', 'api', draft.api !== undefined ? draft.api : (profile.api || item.api || 'openai-completions'), {
+        select: [
+          { value: 'openai-completions', label: 'openai-completions' },
+          { value: 'openai-responses', label: 'openai-responses' },
+          { value: 'anthropic-messages', label: 'anthropic-messages' },
+        ],
+      });
+      html += inlineFieldHtml('API 地址', 'baseURL', draft.baseURL !== undefined ? draft.baseURL : (profile.baseURL || item.baseURL || ''), { placeholder: 'https://gateway.example/v1' });
+      html += inlineFieldHtml('模型（每行一个，可写 id=显示名）', 'models', draft.modelsText !== undefined ? draft.modelsText : modelsTextOf(profile.models || item.models || []), { textarea: true, rows: 5 });
+      html += inlineFieldHtml('API Key', 'key', '', { type: 'password', placeholder: (item.credential && item.credential.configured) ? '已配置；留空表示保持当前密钥' : '输入 API 密钥' });
+    }
+    if (form.error) html += '<p class="dm-cfg-invalid">' + esc(form.error) + '</p>';
+    html += '<div class="dm-mc-sheetActions"><button class="dm-cfg-save" type="button" data-dm-mc-inline-save="1"' + (busy ? ' disabled' : '') + '>' + esc(busy ? '保存中…' : '保存') + '</button>' +
+      '<button class="dm-mc-btn" type="button" data-dm-mc-inline-cancel="1">取消</button></div></div>';
+    return html;
+  }
+
+  function readInlineField(name) {
+    var box = PAGE.querySelector('[data-dm-mc-inline-box]');
+    var el = box ? box.querySelector('[data-dm-mc-inline="' + name + '"]') : null;
+    return el ? String(el.value == null ? '' : el.value) : '';
+  }
+
+  function submitInline() {
+    if (busy || !openForm) return;
+    var route = openForm.route;
+    var payload;
+    var intent;
+    if (openForm.kind === 'key') {
+      var keyValue = readInlineField('key');
+      openForm.draft = { key: keyValue };
+      if (keyValue === '') { openForm.error = '请输入 API Key'; render(); return; }
+      var keyItem = providerOf(route);
+      payload = { action: 'setKey', ref: keyItem ? keyItem.apiKeyRef : '', value: keyValue };
+      intent = { kind: 'key', ref: payload.ref };
+    } else {
+      openForm.draft = {
+        displayName: readInlineField('displayName'),
+        api: readInlineField('api'),
+        baseURL: readInlineField('baseURL'),
+        modelsText: readInlineField('models'),
+        key: readInlineField('key'),
+      };
+      payload = {
+        action: 'saveProvider', mode: 'edit', route: route,
+        displayName: openForm.draft.displayName, api: openForm.draft.api,
+        baseURL: openForm.draft.baseURL, models: parseModelsText(openForm.draft.modelsText),
+        key: openForm.draft.key,
+      };
+      intent = { kind: 'provider', route: route, key: payload.key !== '' };
+    }
+    busy = true;
+    openForm.error = null;
+    render();
+    var target = openForm;
+    rpc('mobile.modelsCenter.save', payload).then(function (result) {
+      settleSave(intent, result, null, function (landed, message, res) {
+        if (openForm === target) openForm = landed ? null : target;
+        if (!landed && openForm) openForm.error = message || '保存失败';
+        render();
+        if (!landed) { setStatus('err', '保存失败：' + (message || '回读未看到目标值')); return; }
+        var mismatches = (res && res.value && Array.isArray(res.value.mismatches)) ? res.value.mismatches : [];
+        if (mismatches.length > 0) setStatus('err', '已提交，但宿主回读不一致：' + mismatches.map(function (item) { return item.field; }).join('、'));
+        else setStatus('ok', message ? '已保存并应用到宿主（写入时连接中断一次，回读已确认）。' : '已保存并应用到宿主（回读已确认）。');
+      });
+    }).catch(function (err) {
+      settleSave(intent, null, err, function (landed, message) {
+        if (openForm === target) openForm = landed ? null : target;
+        if (!landed && openForm) openForm.error = message || '保存失败';
+        render();
+        setStatus(landed ? 'ok' : 'err', landed ? '已保存并应用到宿主（写入时连接中断一次，回读已确认）。' : '保存失败：' + (message || ''));
+      });
+    });
+  }
+
   function providerCard(item) {
     var badges = '';
     if (item.registered) badges += badge('已注册', 'is-on');
     if (item.configured) badges += badge('已配置', 'is-on');
-    if (!item.registered && !item.configured) badges += badge('目录', 'is-off');
     if (item.error) badges += badge('异常', 'is-off');
     var meta = [];
     if (item.credential) meta.push(item.credential.configured ? 'API Key 已配置' : 'API Key 未配置');
     if (item.models && item.models.length > 0) meta.push(item.models.length + ' 个模型');
     if (item.api) meta.push(item.api);
-    var endpoint = item.baseURL ? String(item.baseURL) : '';
+    var expanded = openForm !== null && openForm.route === item.provider;
+    var actions = '';
+    if (item.provider === 'deepseek-official' && item.credential) {
+      actions += '<button class="dm-mc-btn" type="button" data-dm-mc-key="' + esc(item.provider) + '">' + (expanded && openForm.kind === 'key' ? '收起' : '替换 API Key') + '</button>';
+    }
+    if (item.source === 'profile' || item.removable) {
+      actions += '<button class="dm-mc-btn" type="button" data-dm-mc-edit="' + esc(item.provider) + '">' + (expanded && openForm.kind === 'edit' ? '收起' : '编辑') + '</button>';
+      if (item.removable) actions += '<button class="dm-mc-btn is-danger" type="button" data-dm-mc-remove="' + esc(item.provider) + '">删除</button>';
+    }
     var html = '<div class="dm-mc-card" data-dm-mc-provider="' + esc(item.provider) + '">' +
       '<div class="dm-mc-head"><span class="dm-mc-name">' + esc(item.displayName || item.provider) + '</span>' +
       '<span class="dm-mc-badges">' + badges + '</span></div>' +
       '<div class="dm-mc-sub">' + esc(item.provider) + ' · ' + esc(sourceLabel(item)) + '</div>';
     if (meta.length > 0) html += '<div class="dm-mc-meta">' + esc(meta.join(' · ')) + '</div>';
-    if (endpoint !== '') html += '<div class="dm-mc-meta dm-mc-endpoint">' + esc(endpoint) + '</div>';
+    if (item.baseURL) html += '<div class="dm-mc-meta dm-mc-endpoint">' + esc(item.baseURL) + '</div>';
     if (item.modelsError) html += '<p class="dm-cfg-hint dm-cfg-warn">模型清单读取失败：' + esc(item.modelsError) + '</p>';
     if (item.error) html += '<p class="dm-cfg-hint dm-cfg-warn">' + esc(item.error) + '</p>';
+    if (actions !== '') html += '<div class="dm-mc-actions">' + actions + '</div>';
+    if (expanded) html += inlineFormHtml(item);
     html += '</div>';
     return html;
   }
@@ -7509,7 +7631,9 @@ const MODELS_CENTER_HTML = `<script>
       renderState(data.reason || '宿主没有提供模型服务', 'dm-page-error', true);
       return;
     }
+    var readOnly = data.readOnly === true;
     var html = '';
+
     // DeepSeek 账号
     html += '<div class="dm-mc-section"><h2 class="dm-cfg-sectionTitle">DeepSeek 账号</h2>';
     var account = data.account || { available: false };
@@ -7523,23 +7647,37 @@ const MODELS_CENTER_HTML = `<script>
       if (account.attempt && account.attempt.phase) {
         html += '<p class="dm-cfg-hint dm-cfg-warn">登录进行中：' + esc(account.attempt.phase) + '</p>';
       }
+      // 账号链接做成按钮、右对齐放在卡片右下角（用户要求）；只在宿主真给了 URL 时渲染。
       var links = [];
-      if (account.links && account.links.usageUrl) links.push('<a class="dm-cfg-link" href="' + esc(account.links.usageUrl) + '" target="_blank" rel="noopener noreferrer">用量</a>');
-      if (account.links && account.links.topUpUrl) links.push('<a class="dm-cfg-link" href="' + esc(account.links.topUpUrl) + '" target="_blank" rel="noopener noreferrer">充值</a>');
-      if (links.length > 0) html += '<div class="dm-mc-links">' + links.join('<span class="dm-mc-sep">·</span>') + '</div>';
+      if (account.links && account.links.usageUrl) {
+        links.push('<a class="dm-mc-btn dm-mc-linkBtn" role="button" href="' + esc(account.links.usageUrl) + '" target="_blank" rel="noopener noreferrer">用量</a>');
+      }
+      if (account.links && account.links.topUpUrl) {
+        links.push('<a class="dm-mc-btn dm-mc-linkBtn" role="button" href="' + esc(account.links.topUpUrl) + '" target="_blank" rel="noopener noreferrer">充值</a>');
+      }
+      if (links.length > 0) html += '<div class="dm-mc-links">' + links.join('') + '</div>';
       html += '</div>';
     }
     html += '</div>';
 
     // 默认模型
-    html += '<div class="dm-mc-section"><h2 class="dm-cfg-sectionTitle">默认模型</h2>';
+    html += '<div class="dm-mc-section"><div class="dm-mc-sectionHead"><h2 class="dm-cfg-sectionTitle">默认模型</h2>' +
+      (readOnly ? '' : '<button class="dm-mc-btn" type="button" data-dm-mc-default-edit="1">编辑</button>') + '</div>';
     var model = data.defaultModel;
     if (!model) {
       html += '<div class="dm-mc-card"><p class="dm-cfg-hint">宿主没有返回默认模型。</p></div>';
     } else {
-      html += '<div class="dm-mc-card"><div class="dm-mc-head"><span class="dm-mc-name">' + esc(model.provider) + ' / ' + esc(model.model) + '</span>' +
+      var nameOf = function (provider, id) {
+        var item = providerOf(provider);
+        if (!item) return null;
+        for (var i = 0; i < (item.models || []).length; i++) if (item.models[i].id === id) return item.models[i].name;
+        return null;
+      };
+      html += '<div class="dm-mc-card"><div class="dm-mc-head"><span class="dm-mc-name">' +
+        esc(nameOf(model.provider, model.model) || model.model) + '</span>' +
         (model.overridden ? badge('已覆盖') : '') + '</div>' +
-        '<div class="dm-mc-sub">推理强度：' + esc(model.reasoningEffort || '默认') + '</div></div>';
+        '<div class="dm-mc-sub">' + esc(model.provider) + ' · ' + esc(model.model) + '</div>' +
+        '<div class="dm-mc-meta">推理强度：' + esc(model.reasoningEffort || '默认') + '</div></div>';
     }
     html += '</div>';
 
@@ -7551,15 +7689,439 @@ const MODELS_CENTER_HTML = `<script>
     } else {
       for (var i = 0; i < providers.length; i++) html += providerCard(providers[i]);
     }
+    if (!readOnly) html += '<button class="dm-mc-addRow" type="button" data-dm-mc-add="1">＋ 添加模型提供商</button>';
     html += '</div>';
 
     html += '<p class="dm-cfg-footnote">数据来自宿主 llm / credentials / deepseekAccount / agentDefaultModel 的实时读取。' +
-      (data.readOnly ? '当前部署的设置文档只读。' : '当前为只读视图：编辑 Key、添加提供商、修改默认模型将在下一阶段接入。') +
+      (readOnly ? '当前部署的设置文档只读。' : '保存会写入 profile 的 cordis.patch.yml 并走正常 Loader 路径应用，插件可能短暂重载。') +
       '</p>';
     html += '<div class="dm-cfg-footer"><p class="dm-cfg-status" data-dm-mc-status="1"></p></div>';
     BODY.innerHTML = html;
     setStatus(status && status.kind, status && status.text);
+    renderSheet();
   }
+
+  // ── 弹出面板（添加 / 编辑 / 删除 / 替换 Key / 默认模型）────────────────────
+  function sheetHost() {
+    var host = PAGE.querySelector('[data-dm-mc-sheethost]');
+    if (!host) {
+      host = document.createElement('div');
+      host.className = 'dm-mc-sheetHost';
+      host.setAttribute('data-dm-mc-sheethost', '1');
+      host.hidden = true;
+      PAGE.appendChild(host);
+    }
+    return host;
+  }
+
+  function fieldHtml(label, name, value, opts) {
+    var options = opts || {};
+    var input;
+    if (options.select) {
+      var items = options.select.map(function (choice) {
+        return '<option value="' + esc(choice.value) + '"' + (String(value) === String(choice.value) ? ' selected' : '') + '>' + esc(choice.label) + '</option>';
+      }).join('');
+      input = '<select class="dm-cfg-input" data-dm-mc-field="' + esc(name) + '"' + (options.disabled ? ' disabled' : '') + '>' + items + '</select>';
+    } else if (options.textarea) {
+      input = '<textarea class="dm-cfg-input dm-mc-textarea" rows="' + (options.rows || 3) + '" data-dm-mc-field="' + esc(name) + '"' +
+        (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') + '>' + esc(value) + '</textarea>';
+    } else {
+      input = '<input class="dm-cfg-input" type="' + (options.type || 'text') + '" autocomplete="' + (options.type === 'password' ? 'new-password' : 'off') + '"' +
+        ' autocapitalize="off" spellcheck="false" data-dm-mc-field="' + esc(name) + '"' +
+        ' value="' + esc(value) + '"' +
+        (options.placeholder ? ' placeholder="' + esc(options.placeholder) + '"' : '') +
+        (options.disabled ? ' disabled' : '') + '>';
+    }
+    return '<div class="dm-mc-formRow"><label class="dm-cfg-label">' + esc(label) + '</label>' + input +
+      (options.hint ? '<p class="dm-cfg-hint">' + esc(options.hint) + '</p>' : '') + '</div>';
+  }
+
+  function sheetErrorHtml() {
+    if (!sheet || !sheet.error) return '';
+    return '<p class="dm-cfg-invalid dm-mc-sheetErr">' + esc(sheet.error) + '</p>';
+  }
+
+  function sheetHeader(title) {
+    return '<div class="dm-mc-sheetHead"><span class="dm-mc-sheetTitle">' + esc(title) + '</span>' +
+      '<button class="dm-mc-btn" type="button" data-dm-mc-sheet-close="1">取消</button></div>';
+  }
+
+  function sheetFooter(label) {
+    return '<div class="dm-mc-sheetActions">' +
+      '<button class="dm-cfg-save" type="button" data-dm-mc-save="1"' + (busy ? ' disabled' : '') + '>' + esc(busy ? '保存中…' : label || '保存') + '</button>' +
+      '</div>';
+  }
+
+  function catalogChoices() {
+    if (!data || !Array.isArray(data.catalog)) return [];
+    var configured = {};
+    (data.providers || []).forEach(function (item) { if (item.configured) configured[item.provider] = true; });
+    return data.catalog.filter(function (item) { return !configured[item.provider]; });
+  }
+
+  function renderSheet() {
+    var host = sheetHost();
+    if (!sheet) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    host.hidden = false;
+    var body = '';
+    if (sheet.kind === 'catalog') {
+      var query = String(sheet.query || '').toLowerCase();
+      var choices = catalogChoices().filter(function (item) {
+        if (query === '') return true;
+        return String(item.provider + ' ' + (item.displayName || '')).toLowerCase().indexOf(query) >= 0;
+      });
+      body = sheetHeader('添加模型提供商') +
+        '<p class="dm-cfg-hint">第三方模型提供商：从内置目录中选择 OpenAI、Anthropic、Kimi 等，填入 API 密钥即可使用。</p>' +
+        '<input class="dm-cfg-input dm-mc-search" type="search" placeholder="搜索提供商目录" data-dm-mc-catsearch="1" value="' + esc(sheet.query || '') + '">' +
+        '<div class="dm-mc-list" data-dm-mc-catlist="1">';
+      if (choices.length === 0) {
+        body += '<p class="dm-cfg-hint">' + (query === '' ? '目录中的提供商都已添加。' : '没有匹配的提供商。') + '</p>';
+      } else {
+        for (var i = 0; i < choices.length; i++) {
+          var entry = choices[i];
+          body += '<button class="dm-mc-listItem" type="button" data-dm-mc-cat="' + esc(entry.provider) + '">' +
+            '<span class="dm-mc-listName">' + esc(entry.displayName || entry.provider) + '</span>' +
+            '<span class="dm-mc-listSub">' + esc(entry.provider) + (entry.defaultBaseURL ? ' · ' + esc(entry.defaultBaseURL) : '') + '</span>' +
+            '</button>';
+        }
+      }
+      body += '</div>' +
+        '<button class="dm-mc-btn dm-mc-customBtn" type="button" data-dm-mc-custom="1">自定义模型 API（baseURL + 协议 + 模型 + 密钥）</button>' +
+        sheetErrorHtml();
+    } else if (sheet.kind === 'provider') {
+      var mode = sheet.mode;
+      var isEdit = mode === 'edit';
+      var title = isEdit ? '编辑 ' + (sheet.route || '') : (mode === 'catalog' ? '添加 ' + (sheet.displayName || sheet.route || '') : '自定义模型 API');
+      body = sheetHeader(title);
+      if (isEdit) {
+        body += fieldHtml('Provider ID', 'route', sheet.route, { disabled: true, hint: 'Provider ID 不可修改' });
+      } else if (mode === 'custom') {
+        body += fieldHtml('Provider ID', 'route', sheet.route || '', { placeholder: '例如 my-gateway', hint: '以小写字母开头的标识，用于派生凭据名；规则 ^[a-z][a-z0-9]*(-[a-z0-9]+)*$' });
+      } else {
+        body += fieldHtml('Provider ID', 'route', sheet.route, { disabled: true });
+      }
+      body += fieldHtml('显示名称', 'displayName', sheet.displayName || '', { placeholder: '留空使用默认名称' });
+      body += fieldHtml('API 协议', 'api', sheet.api || 'openai-completions', {
+        select: [
+          { value: 'openai-completions', label: 'openai-completions（OpenAI 兼容 /chat/completions）' },
+          { value: 'openai-responses', label: 'openai-responses（OpenAI Responses）' },
+          { value: 'anthropic-messages', label: 'anthropic-messages（Anthropic Messages）' },
+        ],
+      });
+      body += fieldHtml('API 地址', 'baseURL', sheet.baseURL || '', { placeholder: 'https://gateway.example/v1', hint: '含 API 前缀的地址；程序会按协议追加 /chat/completions、/responses 或 /messages。' });
+      body += fieldHtml('模型（每行一个，可写 id=显示名）', 'models', sheet.modelsText || '', { textarea: true, rows: 5, placeholder: 'gpt-4o\\nclaude-3-5-sonnet=Claude 3.5 Sonnet' });
+      body += fieldHtml('API Key', 'key', '', { type: 'password', placeholder: sheet.keyConfigured ? '已配置；留空表示保持当前密钥' : '输入 API 密钥' });
+      body += sheetErrorHtml() + sheetFooter();
+    } else if (sheet.kind === 'key') {
+      var item = providerOf(sheet.route);
+      body = sheetHeader('替换 API Key') +
+        '<p class="dm-cfg-hint">' + esc(item ? (item.displayName || item.provider) : sheet.route) + ' · 凭据引用 ' + esc(sheet.ref || '') + '</p>' +
+        fieldHtml('API Key', 'key', '', { type: 'password', placeholder: sheet.configured ? '已配置；留空表示不修改' : '输入 API 密钥' }) +
+        '<p class="dm-cfg-hint">密钥只写入宿主凭据库，不回显，也不写进设置文件。</p>' +
+        sheetErrorHtml() + sheetFooter('保存密钥');
+    } else if (sheet.kind === 'default') {
+      var choicesProviders = (data.providers || []).filter(function (item) { return (item.models || []).length > 0; });
+      body = sheetHeader('默认模型') +
+        fieldHtml('提供商', 'provider', sheet.provider || (data.defaultModel ? data.defaultModel.provider : ''), {
+          select: choicesProviders.map(function (item) { return { value: item.provider, label: item.displayName || item.provider }; }),
+        }) +
+        fieldHtml('模型', 'model', sheet.model || (data.defaultModel ? data.defaultModel.model : ''), {
+          select: (function () {
+            var item = providerOf(sheet.provider || (data.defaultModel ? data.defaultModel.provider : ''));
+            return (item && item.models ? item.models : []).map(function (model) { return { value: model.id, label: model.name || model.id }; });
+          })(),
+        }) +
+        fieldHtml('推理强度', 'reasoningEffort', sheet.reasoningEffort || (data.defaultModel && data.defaultModel.reasoningEffort) || '', {
+          select: [
+            { value: '', label: '默认（不指定）' },
+            { value: 'off', label: 'off' },
+            { value: 'low', label: 'low' },
+            { value: 'medium', label: 'medium' },
+            { value: 'high', label: 'high' },
+            { value: 'xhigh', label: 'xhigh' },
+            { value: 'max', label: 'max' },
+          ],
+        }) +
+        sheetErrorHtml() + sheetFooter('应用默认模型');
+    } else if (sheet.kind === 'delete') {
+      var target = providerOf(sheet.route);
+      body = sheetHeader('删除 ' + (target ? target.displayName || target.provider : sheet.route) + '？') +
+        '<p class="dm-cfg-hint">删除会移除该提供商的配置' +
+        (sheet.removeKey ? '和存储的 API 密钥' : '；其使用的凭证由其他位置管理，将会保留') + '。</p>' +
+        (sheet.removeKey ? '<label class="dm-mc-check"><input type="checkbox" data-dm-mc-removekey="1" checked> 同时删除存储的 API 密钥</label>' : '') +
+        sheetErrorHtml() +
+        '<div class="dm-mc-sheetActions"><button class="dm-mc-btn" type="button" data-dm-mc-sheet-close="1">取消</button>' +
+        '<button class="dm-mc-btn is-danger" type="button" data-dm-mc-confirm-delete="1"' + (busy ? ' disabled' : '') + '>' + esc(busy ? '删除中…' : '删除') + '</button></div>';
+    }
+    host.innerHTML = '<div class="dm-mc-mask" data-dm-mc-mask="1"></div><div class="dm-mc-sheet">' + body + '</div>';
+  }
+
+  function openSheet(next) {
+    sheet = next;
+    sheet.error = null;
+    busy = false;
+    renderSheet();
+  }
+  function closeSheet() {
+    sheet = null;
+    busy = false;
+    renderSheet();
+  }
+
+  function readField(name) {
+    var el = PAGE.querySelector('[data-dm-mc-field="' + name + '"]');
+    return el ? String(el.value == null ? '' : el.value) : '';
+  }
+
+  function parseModelsText(text) {
+    var out = [];
+    var lines = String(text || '').split('\\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line === '') continue;
+      var idx = line.indexOf('=');
+      if (idx > 0) out.push({ id: line.slice(0, idx).trim(), name: line.slice(idx + 1).trim() });
+      else out.push({ id: line });
+    }
+    return out;
+  }
+
+  function modelsTextOf(list) {
+    return (Array.isArray(list) ? list : []).map(function (model) {
+      return model.name && model.name !== model.id ? model.id + '=' + model.name : model.id;
+    }).join('\\n');
+  }
+
+
+  // 写配置会触发 Loader 应用：本插件连接可能断一次。所以保存后一律重取宿主状态，
+  // 以「目标效果是否真的出现」判定成功，而不是把网络错误当失败。
+  function refetchModels(attempt) {
+    var tries = attempt || 0;
+    return rpc('mobile.modelsCenter.get').then(function (result) {
+      return result && result.ok === true ? result.value : null;
+    }).catch(function () {
+      if (tries >= 9) return null;
+      return new Promise(function (resolve) { setTimeout(resolve, 700); }).then(function () { return refetchModels(tries + 1); });
+    });
+  }
+
+  function intentLanded(page, intent) {
+    if (!page || page.available !== true) return false;
+    var providers = Array.isArray(page.providers) ? page.providers : [];
+    var find = function (route) {
+      for (var i = 0; i < providers.length; i++) if (providers[i].provider === route) return providers[i];
+      return null;
+    };
+    if (intent.kind === 'key') {
+      var owner = null;
+      for (var i = 0; i < providers.length; i++) if (providers[i].apiKeyRef === intent.ref) owner = providers[i];
+      return !!(owner && owner.credential && owner.credential.configured === true);
+    }
+    if (intent.kind === 'default') {
+      return !!(page.defaultModel && page.defaultModel.provider === intent.provider && page.defaultModel.model === intent.model);
+    }
+    if (intent.kind === 'provider') {
+      var item = find(intent.route);
+      if (!item || item.configured !== true) return false;
+      if (intent.key === true && (!item.credential || item.credential.configured !== true)) return false;
+      return true;
+    }
+    if (intent.kind === 'remove') {
+      var gone = find(intent.route);
+      return !(gone && gone.configured === true);
+    }
+    return false;
+  }
+
+  function settleSave(intent, result, error, onSettled) {
+    refetchModels().then(function (fresh) {
+      busy = false;
+      if (fresh) data = fresh;
+      var landed = intentLanded(data, intent);
+      var message = error
+        ? String((error && error.message) || error)
+        : ((result && result.ok !== true && result.error && result.error.message) || null);
+      if (onSettled !== undefined) { onSettled(landed, message, result); return; }
+      if (landed) {
+        var mismatches = (result && result.value && Array.isArray(result.value.mismatches)) ? result.value.mismatches : [];
+        sheet = null;
+        render();
+        if (mismatches.length > 0) setStatus('err', '已提交，但宿主回读不一致：' + mismatches.map(function (item) { return item.field; }).join('、'));
+        else setStatus('ok', message ? '已保存并应用到宿主（写入时连接中断一次，回读已确认）。' : '已保存并应用到宿主（回读已确认）。');
+      } else {
+        if (sheet) sheet.error = message || '宿主没有返回保存结果，且回读未看到目标值';
+        render();
+        setStatus('err', '保存失败：' + (message || '回读未看到目标值'));
+      }
+    });
+  }
+
+  function submitSheet() {
+    if (busy || !sheet) return;
+    var action = '';
+    var payload = {};
+    if (sheet.kind === 'key') {
+      var key = readField('key');
+      if (key === '') { sheet.error = '请输入 API Key'; renderSheet(); return; }
+      action = 'setKey';
+      payload = { action: action, ref: sheet.ref, value: key };
+    } else if (sheet.kind === 'default') {
+      action = 'setDefaultModel';
+      payload = { action: action, provider: readField('provider'), model: readField('model'), reasoningEffort: readField('reasoningEffort') };
+      if (payload.model === '') { sheet.error = '请选择模型'; renderSheet(); return; }
+    } else if (sheet.kind === 'provider') {
+      action = 'saveProvider';
+      payload = {
+        action: action,
+        mode: sheet.mode,
+        route: sheet.mode === 'custom' ? readField('route') : sheet.route,
+        displayName: readField('displayName'),
+        api: readField('api'),
+        baseURL: readField('baseURL'),
+        models: parseModelsText(readField('models')),
+        key: readField('key'),
+      };
+      if (sheet.mode === 'catalog') {
+        // 目录提供商沿用内置地址/协议/模型，不强制填模型清单。
+        if (payload.baseURL === '') delete payload.baseURL;
+        if (payload.api === '') delete payload.api;
+        if (payload.models.length === 0) delete payload.models;
+      }
+    } else if (sheet.kind === 'delete') {
+      if (busy) return;
+      busy = true;
+      renderSheet();
+      var removeKeyEl = PAGE.querySelector('[data-dm-mc-removekey]');
+      var removeIntent = { kind: 'remove', route: sheet.route };
+      rpc('mobile.modelsCenter.save', { action: 'removeProvider', route: sheet.route, removeKey: !!(removeKeyEl && removeKeyEl.checked) }).then(function (result) {
+        settleSave(removeIntent, result, null);
+      }).catch(function (err) {
+        settleSave(removeIntent, null, err);
+      });
+      return;
+    }
+    busy = true;
+    sheet.error = null;
+    renderSheet();
+    var intent = sheet.kind === 'key'
+      ? { kind: 'key', ref: payload.ref }
+      : sheet.kind === 'default'
+        ? { kind: 'default', provider: payload.provider, model: payload.model }
+        : { kind: 'provider', route: payload.route, key: payload.key !== '' };
+    rpc('mobile.modelsCenter.save', payload).then(function (result) {
+      settleSave(intent, result, null);
+    }).catch(function (err) {
+      settleSave(intent, null, err);
+    });
+  }
+
+  // ── 事件 ────────────────────────────────────────────────────────────────
+  PAGE.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest('[data-dm-mc-back]')) { event.preventDefault(); closeModelsPage(false); return; }
+    if (target.closest('[data-dm-mc-refresh]') || target.closest('[data-dm-mc-retry]')) { event.preventDefault(); load(); return; }
+    if (target.closest('[data-dm-mc-sheet-close]') || target.closest('[data-dm-mc-mask]')) { event.preventDefault(); closeSheet(); return; }
+    if (target.closest('[data-dm-mc-add]')) { event.preventDefault(); openForm = null; openSheet({ kind: 'catalog', query: '' }); return; }
+    if (target.closest('[data-dm-mc-custom]')) { event.preventDefault(); openSheet({ kind: 'provider', mode: 'custom', route: '', displayName: '', api: 'openai-completions', baseURL: '', modelsText: '', keyConfigured: false }); return; }
+    var cat = target.closest('[data-dm-mc-cat]');
+    if (cat) {
+      event.preventDefault();
+      var catalogEntry = null;
+      (data.catalog || []).forEach(function (item) { if (item.provider === cat.getAttribute('data-dm-mc-cat')) catalogEntry = item; });
+      openSheet({
+        kind: 'provider', mode: 'catalog', route: cat.getAttribute('data-dm-mc-cat'),
+        displayName: catalogEntry && catalogEntry.displayName ? catalogEntry.displayName : '',
+        api: 'openai-completions',
+        baseURL: catalogEntry && catalogEntry.defaultBaseURL ? catalogEntry.defaultBaseURL : '',
+        modelsText: '', keyConfigured: false,
+      });
+      return;
+    }
+    var edit = target.closest('[data-dm-mc-edit]');
+    if (edit) {
+      event.preventDefault();
+      var editRoute = edit.getAttribute('data-dm-mc-edit');
+      if (openForm && openForm.route === editRoute && openForm.kind === 'edit') openForm = null;
+      else openForm = { kind: 'edit', route: editRoute, error: null, draft: {} };
+      sheet = null;
+      renderSheet();
+      render();
+      return;
+    }
+    var keyBtn = target.closest('[data-dm-mc-key]');
+    if (keyBtn) {
+      event.preventDefault();
+      var keyRoute = keyBtn.getAttribute('data-dm-mc-key');
+      if (openForm && openForm.route === keyRoute && openForm.kind === 'key') openForm = null;
+      else openForm = { kind: 'key', route: keyRoute, error: null, draft: {} };
+      sheet = null;
+      renderSheet();
+      render();
+      return;
+    }
+    if (target.closest('[data-dm-mc-inline-cancel]')) { event.preventDefault(); openForm = null; render(); return; }
+    if (target.closest('[data-dm-mc-inline-save]')) { event.preventDefault(); submitInline(); return; }
+    var remove = target.closest('[data-dm-mc-remove]');
+    if (remove) {
+      event.preventDefault();
+      var removeItem = providerOf(remove.getAttribute('data-dm-mc-remove'));
+      openSheet({ kind: 'delete', route: remove.getAttribute('data-dm-mc-remove'), removeKey: !!(removeItem && removeItem.apiKeyRef && removeItem.apiKeyRef === String(removeItem.provider).toUpperCase().replace(/[^A-Z0-9]+/g, '_') + '_API_KEY') });
+      return;
+    }
+    if (target.closest('[data-dm-mc-default-edit]')) {
+      event.preventDefault();
+      openSheet({
+        kind: 'default',
+        provider: data.defaultModel ? data.defaultModel.provider : '',
+        model: data.defaultModel ? data.defaultModel.model : '',
+        reasoningEffort: data.defaultModel ? data.defaultModel.reasoningEffort : '',
+      });
+      return;
+    }
+    if (target.closest('[data-dm-mc-save]')) { event.preventDefault(); submitSheet(); return; }
+    if (target.closest('[data-dm-mc-confirm-delete]')) { event.preventDefault(); submitSheet(); }
+  });
+
+  PAGE.addEventListener('input', function (event) {
+    var target = event.target;
+    if (!target || !target.getAttribute) return;
+    if (target.getAttribute('data-dm-mc-catsearch') !== null && sheet && sheet.kind === 'catalog') {
+      sheet.query = String(target.value || '');
+      var list = PAGE.querySelector('[data-dm-mc-catlist]');
+      if (!list) return;
+      var query = sheet.query.toLowerCase();
+      var choices = catalogChoices().filter(function (item) {
+        if (query === '') return true;
+        return String(item.provider + ' ' + (item.displayName || '')).toLowerCase().indexOf(query) >= 0;
+      });
+      var html = '';
+      if (choices.length === 0) html = '<p class="dm-cfg-hint">没有匹配的提供商。</p>';
+      else for (var i = 0; i < choices.length; i++) {
+        var entry = choices[i];
+        html += '<button class="dm-mc-listItem" type="button" data-dm-mc-cat="' + esc(entry.provider) + '">' +
+          '<span class="dm-mc-listName">' + esc(entry.displayName || entry.provider) + '</span>' +
+          '<span class="dm-mc-listSub">' + esc(entry.provider) + (entry.defaultBaseURL ? ' · ' + esc(entry.defaultBaseURL) : '') + '</span>' +
+          '</button>';
+      }
+      list.innerHTML = html;
+    }
+  });
+
+  PAGE.addEventListener('change', function (event) {
+    var target = event.target;
+    if (!target || !target.getAttribute) return;
+    if (target.getAttribute('data-dm-mc-field') === 'provider' && sheet && sheet.kind === 'default') {
+      sheet.provider = String(target.value || '');
+      var item = providerOf(sheet.provider);
+      sheet.model = item && item.models && item.models[0] ? item.models[0].id : '';
+      renderSheet();
+    }
+  });
 
   function load() {
     var nonce = ++loadNonce;
@@ -7598,23 +8160,11 @@ const MODELS_CENTER_HTML = `<script>
   function closeModelsPage(fromPop) {
     if (!opened) return;
     opened = false;
+    sheet = null;
+    renderSheet();
     PAGE.hidden = true;
     if (!fromPop) { try { history.back(); } catch (e) {} }
   }
-
-  PAGE.addEventListener('click', function (event) {
-    var target = event.target;
-    if (!target || !target.closest) return;
-    if (target.closest('[data-dm-mc-back]')) {
-      event.preventDefault();
-      closeModelsPage(false);
-      return;
-    }
-    if (target.closest('[data-dm-mc-refresh]') || target.closest('[data-dm-mc-retry]')) {
-      event.preventDefault();
-      load();
-    }
-  });
 
   window.addEventListener('popstate', function (event) {
     var stateValue = event && event.state;
@@ -7638,7 +8188,6 @@ const MODELS_CENTER_HTML = `<script>
     openModelsPage();
   }, true);
 
-  // 测试/排查入口（只读快照 + 显式打开）
   window.__dmModelsPage = {
     open: openModelsPage,
     close: closeModelsPage,
@@ -7649,6 +8198,7 @@ const MODELS_CENTER_HTML = `<script>
         loading: loading,
         error: errorText,
         hideHits: hideHits,
+        sheet: sheet ? { kind: sheet.kind, route: sheet.route || null, mode: sheet.mode || null, error: sheet.error || null } : null,
         visibleRows: (function () {
           var group = settingsGroup();
           if (!group) return null;
@@ -7658,17 +8208,12 @@ const MODELS_CENTER_HTML = `<script>
             var button = rows[i].querySelector('.mobile-row');
             if (!button) continue;
             if (rows[i].style.display === 'none') continue;
-            var titleEl = button.querySelector('.card-titleText');
+            var titleEl = button.querySelector('.mobile-row .card-titleText') || button.querySelector('.card-titleText');
             out.push(String(titleEl && titleEl.textContent ? titleEl.textContent : '').trim());
           }
           return out;
         })(),
-        data: data ? {
-          available: data.available,
-          counts: data.counts,
-          account: data.account,
-          defaultModel: data.defaultModel,
-        } : null,
+        data: data ? { available: data.available, counts: data.counts, account: data.account, defaultModel: data.defaultModel } : null,
       };
     },
   };
@@ -10133,6 +10678,8 @@ export function apply(ctx, config) {
         defaultModel,
         providers,
         catalog,
+        // 原始 llm-pi-ai.providers：编辑已有 provider 时宿主端合并用（profile 里不含密钥）。
+        profiles,
         counts: {
           providers: providers.length,
           catalog: catalog.length,
@@ -10143,8 +10690,221 @@ export function apply(ctx, config) {
       }
     }
 
+    const MODELS_TRIMMED = (value) => (typeof value === 'string' ? value.trim() : '')
+
+    /** 把客户端提交的模型清单收敛成宿主 schema 认的形状（id 必填、去重、上限 200）。 */
+    function modelsNormalizeModels(value) {
+      if (!Array.isArray(value)) return { ok: false, message: '模型清单需要数组' }
+      const seen = new Set()
+      const out = []
+      for (const item of value) {
+        let id = ''
+        let name = ''
+        if (typeof item === 'string') id = MODELS_TRIMMED(item)
+        else if (item !== null && typeof item === 'object') {
+          id = MODELS_TRIMMED(item.id)
+          name = MODELS_TRIMMED(item.name)
+        }
+        if (id === '') return { ok: false, message: '每个模型都需要非空的模型 ID' }
+        if (seen.has(id)) return { ok: false, message: `模型 ID 重复：${id}` }
+        seen.add(id)
+        out.push(name !== '' && name !== id ? { id, name } : { id })
+        if (out.length > 200) return { ok: false, message: '模型数量过多（最多 200 个）' }
+      }
+      if (out.length === 0) return { ok: false, message: '至少需要一个模型' }
+      return { ok: true, value: out }
+    }
+
+    function modelsBadRequest(message) {
+      return { ok: false, error: { code: 'bad-request', message } }
+    }
+
+    /** 写完之后回读比对：客户端据此判断「真的落地了」，不是只信写接口的返回。 */
+    function modelsCenterMismatches(action, payload, fresh) {
+      const out = []
+      if (!fresh || fresh.available !== true) {
+        out.push({ field: 'available', message: '宿主模型服务不可用' })
+        return out
+      }
+      const providerOf = (route) => (Array.isArray(fresh.providers) ? fresh.providers.find((item) => item.provider === route) : undefined)
+      if (action === 'setKey') {
+        const ref = typeof payload.ref === 'string' ? payload.ref : ''
+        const owner = (fresh.providers || []).find((item) => item.apiKeyRef === ref)
+        if (!owner || !owner.credential || owner.credential.configured !== true) {
+          out.push({ field: 'credential', message: `宿主回读显示 ${ref} 仍未配置` })
+        }
+      } else if (action === 'setDefaultModel') {
+        const model = fresh.defaultModel
+        if (!model || model.provider !== payload.provider || model.model !== payload.model) {
+          out.push({ field: 'defaultModel', message: '宿主回读的默认模型与提交值不一致' })
+        }
+      } else if (action === 'saveProvider') {
+        const route = typeof payload.route === 'string' ? payload.route : ''
+        const item = providerOf(route)
+        if (!item || item.configured !== true) {
+          out.push({ field: 'providers', message: `宿主回读不到已配置的 ${route}` })
+        } else if (typeof payload.key === 'string' && payload.key !== '') {
+          if (!item.credential || item.credential.configured !== true) {
+            out.push({ field: 'credential', message: `${route} 的 API Key 未落地` })
+          }
+        }
+      } else if (action === 'removeProvider') {
+        const route = typeof payload.route === 'string' ? payload.route : ''
+        const item = providerOf(route)
+        if (item && item.configured === true) out.push({ field: 'providers', message: `宿主回读仍存在 ${route}` })
+      }
+      return out
+    }
+
+    /**
+     * 模型中心写入口。每个动作都先按「宿主当前真值」做白名单校验（ref / route /
+     * profile 都来自刚才的 modelsCenterPayload()，不认客户端自报），再走
+     * callOutsideHmr（configEditor.edit 内部会 hmr.runExclusive，嵌套会被宿主拒绝）。
+     */
+    async function modelsCenterSave(payload) {
+      const action = payload && typeof payload.action === 'string' ? payload.action : ''
+      if (!['setKey', 'setDefaultModel', 'saveProvider', 'removeProvider'].includes(action)) {
+        return modelsBadRequest(`未知操作：${action || '(空)'}`)
+      }
+      const before = await modelsCenterPayload()
+      if (before.available !== true) {
+        return serviceUnavailable('llm', before.reason || '宿主模型服务不可用')
+      }
+      const settings = hostService('settings')
+      const credentials = hostService('credentials')
+      const defaultService = hostService('agentDefaultModel')
+      const providerOf = (route) => (before.providers || []).find((item) => item.provider === route)
+      const applied = []
+
+      try {
+        if (action === 'setKey') {
+          const ref = MODELS_TRIMMED(payload.ref)
+          const value = typeof payload.value === 'string' ? payload.value : ''
+          const allowed = new Set((before.providers || []).map((item) => item.apiKeyRef).filter((item) => typeof item === 'string' && item !== ''))
+          if (!allowed.has(ref)) return modelsBadRequest(`不允许写入凭据 ${ref || '(空)'}`)
+          if (value === '') return modelsBadRequest('API Key 不能为空；要移除请用删除提供商')
+          if (!credentials || typeof credentials.set !== 'function') {
+            return serviceUnavailable('credentials', '宿主的凭据服务未启用，无法保存 API Key')
+          }
+          await callOutsideHmr(() => credentials.set(ref, value))
+          applied.push({ action, ref })
+        } else if (action === 'setDefaultModel') {
+          if (!defaultService || typeof defaultService.saveSelection !== 'function') {
+            return serviceUnavailable('agentDefaultModel', '宿主的默认模型服务未启用')
+          }
+          const provider = MODELS_TRIMMED(payload.provider)
+          const model = MODELS_TRIMMED(payload.model)
+          const item = providerOf(provider)
+          if (!item) return modelsBadRequest(`未知的提供商 ${provider || '(空)'}`)
+          if (!(item.models || []).some((entry) => entry.id === model)) {
+            return modelsBadRequest(`${provider} 没有模型 ${model || '(空)'}`)
+          }
+          const selection = { provider, model }
+          if (typeof payload.reasoningEffort === 'string' && payload.reasoningEffort !== '') {
+            selection.reasoningEffort = payload.reasoningEffort
+          }
+          await callOutsideHmr(() => defaultService.saveSelection(selection))
+          applied.push({ action, provider, model })
+        } else if (action === 'saveProvider') {
+          if (!settings || typeof settings.mutate !== 'function') {
+            return serviceUnavailable('settings', '宿主的设置服务未启用，无法保存提供商')
+          }
+          const route = MODELS_TRIMMED(payload.route)
+          if (!MODELS_PROVIDER_PATTERN.test(route)) {
+            return modelsBadRequest('Provider ID 需以小写字母开头，之后仅限小写字母、数字和短横线')
+          }
+          if (route === MODELS_ROUTE_DEEPSEEK || route === MODELS_ROUTE_ACCOUNT) {
+            return modelsBadRequest('内置提供商（DeepSeek / DeepSeek 账号）不能在手机上新增或修改')
+          }
+          const existing = providerOf(route)
+          const isEdit = existing !== undefined && existing.configured === true
+          const mode = payload.mode === 'catalog' ? 'catalog' : isEdit ? 'edit' : 'custom'
+          if (!isEdit) {
+            const catalogEntry = (before.catalog || []).find((item) => item.provider === route)
+            if (mode === 'catalog' && !catalogEntry) return modelsBadRequest(`目录里没有提供商 ${route}`)
+          }
+          const current = (before.profiles || {})[route]
+          const profile = isEdit && current !== null && typeof current === 'object' ? { ...current } : {}
+          const displayName = MODELS_TRIMMED(payload.displayName)
+          if (displayName !== '') profile.displayName = displayName
+          const protocol = MODELS_TRIMMED(payload.api)
+          if (mode !== 'edit' || protocol !== '') {
+            if (!MODELS_PROTOCOLS.includes(protocol)) {
+              return modelsBadRequest('请选择有效的 API 协议（openai-completions / openai-responses / anthropic-messages）')
+            }
+            profile.api = protocol
+          }
+          const baseURL = MODELS_TRIMMED(payload.baseURL)
+          if (mode !== 'edit' || baseURL !== '') {
+            if (!/^https?:\/\//i.test(baseURL)) return modelsBadRequest('API 地址需以 http:// 或 https:// 开头')
+            profile.baseURL = baseURL
+          }
+          if (Array.isArray(payload.models)) {
+            const normalized = modelsNormalizeModels(payload.models)
+            if (!normalized.ok) return modelsBadRequest(normalized.message)
+            profile.models = normalized.value
+          } else if (mode === 'custom') {
+            return modelsBadRequest('自定义模型 API 至少需要一个模型')
+          }
+          if (typeof profile.apiKeyEnv !== 'string' || profile.apiKeyEnv === '') profile.apiKeyEnv = modelsKeyRef(route)
+          await callOutsideHmr(() => settings.mutate(MODELS_PI_AI_NS, [{ op: 'set', path: ['providers', route], value: profile }]))
+          applied.push({ action, route, mode: isEdit ? 'edit' : mode })
+          const key = typeof payload.key === 'string' ? payload.key : ''
+          if (key !== '') {
+            if (!credentials || typeof credentials.set !== 'function') {
+              return serviceUnavailable('credentials', '宿主的凭据服务未启用，无法保存 API Key')
+            }
+            await callOutsideHmr(() => credentials.set(profile.apiKeyEnv, key))
+            applied.push({ action: 'setKey', ref: profile.apiKeyEnv })
+          }
+        } else if (action === 'removeProvider') {
+          if (!settings || typeof settings.mutate !== 'function') {
+            return serviceUnavailable('settings', '宿主的设置服务未启用，无法删除提供商')
+          }
+          const route = MODELS_TRIMMED(payload.route)
+          const existing = providerOf(route)
+          if (!existing || existing.configured !== true || existing.removable !== true) {
+            return modelsBadRequest(`提供商 ${route || '(空)'} 不是可删除的自定义配置`)
+          }
+          const managedRef = existing.apiKeyRef
+          if (payload.removeKey === true && typeof managedRef === 'string' && managedRef !== '' && managedRef === modelsKeyRef(route)) {
+            if (!credentials || typeof credentials.unset !== 'function') {
+              return serviceUnavailable('credentials', '宿主的凭据服务未启用，无法删除 API Key')
+            }
+            await callOutsideHmr(() => credentials.unset(managedRef))
+            applied.push({ action: 'unsetKey', ref: managedRef })
+          }
+          await callOutsideHmr(() => settings.mutate(MODELS_PI_AI_NS, [{ op: 'unset', path: ['providers', route] }]))
+          applied.push({ action, route })
+        }
+      } catch (err) {
+        const fresh = await modelsCenterPayload()
+        return {
+          ok: false,
+          error: {
+            code: 'models_write_failed',
+            message: err && err.message ? String(err.message) : String(err),
+            details: { action, applied },
+          },
+          value: { page: fresh },
+        }
+      }
+
+      const fresh = await modelsCenterPayload()
+      return {
+        ok: true,
+        value: {
+          page: fresh,
+          applied,
+          action,
+          mismatches: modelsCenterMismatches(action, payload, fresh),
+        },
+      }
+    }
+
     const MODELS_CENTER_CASES = {
       'mobile.modelsCenter.get': async () => ({ ok: true, value: await modelsCenterPayload() }),
+      'mobile.modelsCenter.save': async (payload) => modelsCenterSave(payload),
     }
 
   /**
@@ -11040,7 +11800,8 @@ export function apply(ctx, config) {
       }
 
       // ── 模型中心：设置 → 主机配置 → 模型 ───────────────────────────────────
-      case 'mobile.modelsCenter.get': {
+      case 'mobile.modelsCenter.get':
+      case 'mobile.modelsCenter.save': {
         const handle = MODELS_CENTER_CASES[method]
         if (typeof handle !== 'function') {
           return { ok: false, error: { code: 'unknown-method', message: `未知的模型中心方法：${method}` } }
