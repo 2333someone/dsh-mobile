@@ -1768,7 +1768,8 @@ body {
    两种状态下的补偿会不一致。所以把下沉加在**图标内容**上。 */
 .chat-step-icon > svg,
 .chat-step-icon > .dm-icon {
-  transform: translateY(1px);
+  /* 像素测量定标：1px → 图标中心比文字高 0.83px；2px → 低 1.17px；取 1.5px 居中。 */
+  transform: translateY(1.8px);
 }
 
 /* 思考中的 💭 是**emoji 文本**（没有 svg），前面那条只对 svg/.dm-icon 生效，
