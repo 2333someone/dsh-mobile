@@ -198,7 +198,9 @@ window.__ModuleLoader__.load({
       const bits = []
       if (model !== '' && model !== title) bits.push(model)
       if (label !== '' && label !== title) bits.push(label)
-      bits.push(d.deviceId, '最近活跃 ' + fmt(d.lastSeenAt))
+      // 不再显示 deviceId（e4430… 这种十六进制串）：设备已经能靠型号/平台区分，
+      // 长串只会把第二行挤满；内部仍用它做 key / 撤销请求。
+      bits.push('最近活跃 ' + fmt(d.lastSeenAt))
       return { title, detail: bits.join(' · ') }
     }
 
