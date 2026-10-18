@@ -3279,3 +3279,17 @@ img.chat-msg-image {
 .dm-mc-addHint {
   margin-bottom: 10px;
 }
+
+/* 模型页「默认模型」卡片的编辑按钮：卡片内部底行、右对齐（用户要求）。
+   320 窄屏下按钮不换行、不挤压上面的模型文本。 */
+.dm-mc-cardFoot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.dm-mc-cardFoot .dm-mc-btn {
+  flex: none;
+  white-space: nowrap;
+}
