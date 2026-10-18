@@ -1585,6 +1585,60 @@ body {
   justify-content: center !important;
 }
 
+/* ── 过程卡里各种行的行高（跟随「设置 → 消息密度」）───────────────────────
+   用户反馈：展开的思考过程里，「深度思考 · N 行」和工具卡都太高，希望整体
+   压矮，而且跟着设置里那个「消息密度」（紧凑 / 舒适）一起变。
+   bundle 的默认值是 `.chat-think-head` / `.chat-step-head` / `.chat-proc-head`
+   / `.chat-disclosure-head` 全部 `min-height:40px`，工具卡再叠 6px 上下内边距
+   —— 一张工具卡实测 54px（1.5× 截图里 80px），一行「深度思考」40px；而这两处
+   的文字只有 11px、图标 16px，40px 的行盒空得太多。
+   这里把这几类行统一收进变量，两个档位：
+     舒适（默认，<html> 上没有 data-density）    行 32 / 工具卡 42 / 间距 5
+     紧凑（bundle 写 <html data-density="compact">）行 27 / 工具卡 35 / 间距 3
+   密度开关是 bundle 的设置页写的（localStorage `dsh.palm.density` → 切
+   documentElement.dataset.density），所以改设置立即生效、不用刷新页面。
+   只改变量就能切档，不需要为紧凑档再写一遍规则。
+   bundle 的 CSS 晚于本文件注入、同特异性它赢 → 尺寸一律 !important。 */
+:root {
+  --dm-proc-row-h: 32px;       /* 思考行 / 过程卡 head / 折叠行 的最小行高 */
+  --dm-proc-card-pad-y: 4px;   /* 工具卡（.chat-step）上下内边距 */
+  --dm-proc-row-gap: 5px;      /* 过程卡内部行与行的间距 */
+  --dm-proc-head-pad-y: 5px;   /* 过程卡 head / 折叠行的上下内边距 */
+}
+:root[data-density="compact"] {
+  --dm-proc-row-h: 27px;
+  --dm-proc-card-pad-y: 3px;
+  --dm-proc-row-gap: 3px;
+  --dm-proc-head-pad-y: 4px;
+}
+/* 「深度思考 · N 行」行（过程卡内部、以及展开的思考块里都用它）。 */
+.chat-think-head {
+  min-height: var(--dm-proc-row-h) !important;
+  padding: 0 6px !important;
+}
+/* 工具行：卡片本身的内边距 + head 的行高，两者一起决定卡片高度。 */
+.chat-step {
+  padding: var(--dm-proc-card-pad-y) 8px !important;
+}
+.chat-step-head {
+  min-height: var(--dm-proc-row-h) !important;
+}
+/* 过程卡 head（「思考中 / 已完成 · 用时 N 秒」那张卡）。 */
+.chat-proc-head {
+  min-height: var(--dm-proc-row-h) !important;
+  padding: var(--dm-proc-head-pad-y) 26px var(--dm-proc-head-pad-y) 8px !important;
+}
+/* 消息流里折叠的「深度思考 · N 行」卡。 */
+.chat-disclosure-head {
+  min-height: var(--dm-proc-row-h) !important;
+  padding: var(--dm-proc-head-pad-y) 10px !important;
+}
+/* 过程卡内部的行距（bundle 是 gap:6px / margin-top:6px）。 */
+.chat-proc-body {
+  gap: var(--dm-proc-row-gap) !important;
+  margin-top: var(--dm-proc-row-gap) !important;
+}
+
 /* 列表页「Agent 模式」卡片右侧的问号按钮（.mobile-presetHelp）：它打开的
    「Agent 模式说明」弹窗只渲染「当前模式名 + 文档正文」，而宿主 preset 没有
    文档（agentPreset.list 返回 hasDocument:false），点开基本是空壳 —— 用户要求
