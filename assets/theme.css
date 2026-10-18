@@ -1721,3 +1721,37 @@ body {
   /* ✦ 的字形视觉重心偏上，往下压半像素与「深度思考」文字对齐 */
   transform: translateY(0.5px);
 }
+
+/* ── 自绘面板「收起」动画（修正版）────────────────────────────────────────
+   原先用 `animation: dm-perm-up … reverse` —— 想复用入场动画反向播放。
+   但 CSS 里**同名动画就是同一个动画**：入场那个 0.22s 早已播完，
+   改 direction 不会重启，浏览器直接把元素摆到末端（实测 transform 一上来
+   就是 translateY(100%) 且全程不变），所以看起来"没有动画、瞬间消失"。
+   这里改成独立名字的收起关键帧，每次加 .dm-closing 都是一次新的动画，
+   从 0 插值到 100%，才真的有下滑过程。时长 0.2s 与 JS 的 200ms 对齐。 */
+@keyframes dm-sheet-down-out {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+@keyframes dm-backdrop-fade-out-200 {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.dm-subagent-sheet.dm-closing {
+  animation: dm-sheet-down-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards !important;
+}
+.dm-subagent-backdrop.dm-closing {
+  animation: dm-backdrop-fade-out-200 0.2s ease forwards !important;
+}
+.dm-perm-sheet.dm-closing {
+  animation: dm-sheet-down-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards !important;
+}
+.dm-perm-backdrop.dm-closing {
+  animation: dm-backdrop-fade-out-200 0.2s ease forwards !important;
+}
+.dm-approval-sheet.dm-closing {
+  animation: dm-sheet-down-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards !important;
+}
+.dm-approval-backdrop.dm-closing {
+  animation: dm-backdrop-fade-out-200 0.2s ease forwards !important;
+}
