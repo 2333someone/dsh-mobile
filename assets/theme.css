@@ -1470,6 +1470,14 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* dock 是浮层，会压在消息区（.chat-scroll）底部。补一段底部留白，
+   让滚到最底时最后一条消息停在 dock 上面，而不是被它盖住。
+   留白 = dock 高度 + 8px（index.js 量出来写进 --dm-queue-space），
+   只在 dock 真实存在时生效 —— 没有排队项时一点空间都不占。 */
+.chat:has(.chat-composer > .queue-dock[data-queue-dock]) .chat-scroll {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px + var(--dm-queue-space, 45px)) !important;
+}
+
 /* ── 设置页「发送模式」行（index.js 的 SEND_MODE_SETTINGS_HTML 注入）───────────
    结构：<li><div class="settings-row dm-sendmode-row">
             <span class="card-icon dm-sendmode-icon"><svg …纸飞机…></span>
