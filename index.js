@@ -4780,6 +4780,60 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
 })();
 </script>`
 
+/**
+ * 设置页「用量」：直接平铺，不需要先点开再点收起。
+ *
+ * bundle 的这块是折叠式的：
+ *   · 收起态渲染一行 <button class="settings-row">（标题「用量」+ 余额摘要 + › 箭头），
+ *     onClick 里 setState(true)；
+ *   · 展开态才渲染 <li class="usage-card">（余额明细）以及 actions 里的
+ *     「收起」「刷新」两个按钮。
+ * 用户要求：内容直接显示，不要再点开/收起。
+ *
+ * 做法：检测到折叠行就**替用户点一下**（React 状态照常走），展开后把
+ * 「收起」按钮隐藏（见 theme.css）。展开态下那一行本身就不会渲染，所以
+ * 页面上不会再有箭头/收起入口，效果等于"永久平铺"。
+ * 若 React 因其它原因回到收起态，MutationObserver 会再次点开。
+ */
+const USAGE_INLINE_HTML = `<script>
+(function () {
+  try {
+    if (window.__dmUsageInline) return;
+    window.__dmUsageInline = true;
+    var lastClick = 0;
+
+    // 折叠态的「用量」行：settings-row 按钮，标题文本里含「用量」。
+    function collapsedRow() {
+      var rows = document.querySelectorAll('button.settings-row');
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var t = r.querySelector('.card-titleText');
+        if (!t || (t.textContent || '').indexOf('用量') < 0) continue;
+        return r;
+      }
+      return null;
+    }
+
+    function ensure() {
+      if (document.querySelector('.usage-card')) return;   // 已经展开
+      var r = collapsedRow();
+      if (!r) return;
+      var now = Date.now();
+      if (now - lastClick < 900) return;                    // 防抖，避免连点
+      lastClick = now;
+      try { r.click(); } catch (e) {}
+    }
+
+    try {
+      var mo = new MutationObserver(ensure);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    } catch (e) {}
+    setInterval(ensure, 1200);
+    ensure();
+  } catch (e) {}
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -4822,6 +4876,7 @@ function mobilePageHtml() {
     CHAT_STATUS_HTML,
     CHAT_AUTOSCROLL_HTML,
     ICON_OPTICAL_ALIGN_HTML,
+    USAGE_INLINE_HTML,
     '</body>',
     '</html>',
   ].join('')

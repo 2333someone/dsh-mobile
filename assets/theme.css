@@ -1854,3 +1854,11 @@ body {
 }
 
 
+
+/* ── 设置页「用量」：隐藏「收起」按钮（只留「刷新」）──────────────────────
+   用户要求用量内容直接平铺、不需要收起。展开由 index.js 的 USAGE_INLINE_HTML
+   自动触发；这里把 actions 里的第一个按钮（收起）隐藏，第二个（刷新）保留。
+   两个按钮都是 .mobile-button，所以用位置选择器精确命中第一个。 */
+.usage-card .usage-actions > button:first-child {
+  display: none !important;
+}
