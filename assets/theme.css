@@ -1582,3 +1582,13 @@ body {
 #dm-preset-btn.dm-icon-hidden {
   display: inline-flex !important;
 }
+
+/* 展开的思考/工具过程左侧那条竖线。
+   bundle 的 .chat-proc-body 用的是 `border-left: 2px solid var(--border-subtle)`
+   ——淡灰，几乎看不出它在标示从属关系。用户要求改成紫色：这条线的作用就是
+   声明「下面这一整块都是这次展开里的内容」，所以用主题强调色 --accent
+   （深色主题下是亮靛紫），并加粗到 3px、左内边距同步放到 12px，避免文字贴线。 */
+.chat-proc-body {
+  border-left: 3px solid var(--accent, #4d6bfe) !important;
+  padding-left: 12px !important;
+}
