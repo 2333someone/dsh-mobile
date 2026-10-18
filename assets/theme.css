@@ -484,10 +484,11 @@ body:has(> #dm-subagent-btn) #dm-subagent-btn {
   pointer-events: none;
 }
 
-/* 思考中 / 深度思考位置的鲸鱼尾：与桌面 DSH 同一张 APNG（28×28），但不再用 <img>
-   直显 —— 那张图的 RGB 像素是全黑的，深色主题（黑底）下几乎看不见。改成与桌面
-   RunningWhaleTail 完全一致的画法：空 span + background: currentColor + mask，
-   只取 APNG 的 alpha 通道当遮罩，颜色永远继承所在行的文字色，深浅两套主题都可见。
+/* 鲸鱼尾：与桌面 DSH 同一张 APNG（28×28），但不再用 <img> 直显 —— 那张图的 RGB
+   像素是全黑的，深色主题（黑底）下几乎看不见。改成与桌面 RunningWhaleTail 完全
+   一致的画法：空 span + background: currentColor + mask，只取 APNG 的 alpha 通道
+   当遮罩，颜色永远继承所在行的文字色，深浅两套主题都可见。当前只挂在底部
+   「输出中」状态行（.chat-turn-status .dm-turn-whale，尺寸见下面那条规则）。
 
    两个必须写对的地方：
    ① alpha —— 源图像素是纯黑（gray 直方图只有 0），走 luminance 遮罩的话黑 = 亮度 0
@@ -510,6 +511,17 @@ body:has(> #dm-subagent-btn) #dm-subagent-btn {
   /* 位图不需要 .dm-icon 的降饱和 opacity:0.9（那是给单色描边用的）。 */
   opacity: 1;
   pointer-events: none;
+}
+
+/* 底部「输出中」状态行里的鲸鱼尾（由 index.js 注入的 CHAT_STATUS_HTML 插入）：
+   .chat-turn-status 是 display:flex + align-items:center，所以这里不用管垂直对齐
+   （flex 子项上 vertical-align 无效），只要把盒子收到 1em 跟行内文字同一视觉大小；
+   flex:none 防止被压缩。颜色仍由 .dm-whale 的 background:currentColor 继承
+   该行的 var(--accent)。 */
+.chat-turn-status .dm-whale.dm-turn-whale {
+  width: 1em;
+  height: 1em;
+  flex: none;
 }
 
 /* ── 折叠箭头（▾ / ▸）放大 ───────────────────────────────────────────────

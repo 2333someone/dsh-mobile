@@ -55,7 +55,7 @@ const THEME_URL = '/m/theme.css'
 const ICON_192_URL = '/m/icon-192.png'
 const ICON_512_URL = '/m/icon-512.png'
 const APPLE_TOUCH_URL = '/m/apple-touch-icon.png'
-// 思考中（💭）位置显示的鲸鱼尾 APNG，与桌面 DSH 同一张图；APNG 自带循环播放。
+// 鲸鱼尾 APNG，与桌面 DSH 同一张图；现在只用在底部「输出中」状态行（mask 画形状）。
 const WHALE_URL = '/m/whale.png'
 // 浏览器推送能力自检页（只读诊断，不配对/不写设备/不订阅）。
 const PUSH_CHECK_URL = '/m/push-check'
@@ -937,9 +937,6 @@ const EMOJI_ICON_HTML = `<script>
       done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
       warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>'
     };
-    // 思考中不画 SVG，也不用 <img> 直显：鲸鱼尾 APNG 的像素是全黑的，深色主题（黑底）
-    // 下几乎看不见。改成空 span + theme.css 的 mask + currentColor，形状仍由这张 APNG
-    // 的 alpha 通道给、颜色继承所在行的文字色 —— 与桌面 DSH 的 RunningWhaleTail 一致。
     // [emoji 序列, 图标 key, 作用域 class]：只精确匹配这些序列（含 FE0F 变体选择器），
     // 不模糊匹配；作用域用祖先 class 限定，正文里同款 emoji（以及第二批才做的通知映射
     // 📨👥🧩🔔⏰⚙️🔌🎯）都不会被替换。
@@ -965,22 +962,11 @@ const EMOJI_ICON_HTML = `<script>
       // 报错计数「⚠ N 处报错」
       ['\\u26A0\\uFE0F', 'warning', 'chat-proc-errors'],
       ['\\u26A0', 'warning', 'chat-proc-errors'],
-      // 思考中 / 深度思考：容器多带一个 chat-step-icon-thinking class，只有这一种
-      // 情况换成鲸鱼尾 APNG。工具步骤行的容器只有 chat-step-icon（没有 -thinking），
-      // 里面的工具 emoji 仍走上面的 SVG 映射，不受影响。
-      ['\\u{1F4AD}\\uFE0F', 'whale', 'chat-step-icon-thinking'],
-      ['\\u{1F4AD}', 'whale', 'chat-step-icon-thinking']
+      // 思考块（.chat-step-icon-thinking / 💭）刻意不再换图标：鲸鱼尾已经挪到
+      // 底部「输出中」状态行（见 CHAT_STATUS_HTML），折叠块的图标恢复原 emoji。
     ];
 
     function makeIcon(key) {
-      // 鲸鱼尾是位图（APNG），不是 SVG：单独走一条分支。
-      if (key === 'whale') {
-        // 空元素：形状由 theme.css 的 mask 画、颜色由 currentColor 给。
-        var tail = document.createElement('span');
-        tail.setAttribute('class', 'dm-icon dm-icon-whale dm-whale');
-        tail.setAttribute('aria-hidden', 'true');
-        return tail;
-      }
       var svg = document.createElementNS(NS, 'svg');
       svg.setAttribute('class', 'dm-icon dm-icon-' + key);
       svg.setAttribute('viewBox', '0 0 24 24');
@@ -2953,6 +2939,124 @@ const QUEUE_DOCK_PLACE_HTML = `<script>
 })();
 </script>`
 
+// 聊天状态词 + 「输出中」行的鲸鱼尾（需求：手机上两处微调）。
+//
+// 1) 过程卡的状态词：bundle 把状态词渲染成 <span class="chat-proc-state">深度求索中</span>
+//    （另外三个是 已完成 / 已中断 / 失败）。整个折叠块展示的本来就是思考过程，叫
+//    「深度求索中」不准确 —— 这里在运行时把该 span 里的文本节点改成「思考中」。
+//    只认这两个 class 与这个词，正文里的同名词不会被误伤；React 以后把状态改成
+//    已完成/失败时会照常覆盖 nodeValue，所以替换必须每次走一遍（Observer + 幂等）。
+//
+// 2) 底部 <div class="chat-turn-status"> 状态行在输出时渲染「输出中」+ 三个呼吸点。
+//    鲸鱼尾挂在折叠块图标位置不直观，改成插在这一行文字前面；只在「输出中」时出现，
+//    「后台处理中 / 连接中断」不显示。鲸鱼尾复用 .dm-whale 的 mask + currentColor
+//    （见 theme.css），颜色自动继承该行的 var(--accent)。
+//
+// 全程幂等：每次 flush 先看现状再动 DOM，自己触发的 mutation 不会造成循环。
+const CHAT_STATUS_HTML = `<script>
+(function () {
+  try {
+    if (!document.body) return;
+
+    var PROC_STATE = '.chat-proc-state';
+    var TURN = '.chat-turn-status';
+    var FROM = '深度求索中';   // bundle 里 Mc.running
+    var TO = '思考中';
+    var WHALE = 'dm-turn-whale';
+    var RUNNING = '输出中';
+
+    function trim(s) {
+      return (s || '').replace(/^\\s+|\\s+$/g, '');
+    }
+
+    // ── 1) 状态词：只改 .chat-proc-state 下「恰好是这个词」的文本节点 ───────
+    // 不写 el.textContent：React 持有那个文本节点实例，重写会把它摘掉，
+    // 之后状态变化就更新不到 DOM 了。直接把 nodeValue 改掉，实例仍在原位。
+    function renameProcState() {
+      var list = document.querySelectorAll(PROC_STATE);
+      for (var i = 0; i < list.length; i++) {
+        var kids = list[i].childNodes;
+        for (var k = 0; k < kids.length; k++) {
+          var n = kids[k];
+          if (n.nodeType !== 3) continue;
+          var v = n.nodeValue;
+          if (v === FROM) n.nodeValue = TO;
+          // 容错：万一前后带了空白（不会出现在当前 bundle 里），保留空白只换词。
+          else if (v && trim(v) === FROM) n.nodeValue = v.replace(FROM, TO);
+        }
+      }
+    }
+
+    // ── 2) 「输出中」行的鲸鱼尾 ────────────────────────────────────────────
+    function ownWhale(row) {
+      for (var i = 0; i < row.childNodes.length; i++) {
+        var n = row.childNodes[i];
+        if (n.nodeType === 1 && n.classList && n.classList.contains(WHALE)) return n;
+      }
+      return null;
+    }
+
+    // 状态词只从 aria-label / 纯文本取（呼吸点是没有文字的 span，读不出来）。
+    // aria-label 是 bundle 同步写的（输出中 / 后台处理中 / 连接中断），最可靠；
+    // 万一以后没了 aria-label，再退回文本节点。
+    function turnState(row) {
+      var label = row.getAttribute && row.getAttribute('aria-label');
+      if (label) return trim(label);
+      var text = '';
+      var kids = row.childNodes;
+      for (var i = 0; i < kids.length; i++) {
+        if (kids[i].nodeType === 3) text += kids[i].nodeValue;
+      }
+      return trim(text);
+    }
+
+    function syncTurn() {
+      var rows = document.querySelectorAll(TURN);
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var whale = ownWhale(row);
+        var show = turnState(row) === RUNNING;
+        if (show && !whale) {
+          var w = document.createElement('span');
+          // 空元素：形状由 theme.css 的 mask 画、颜色由 currentColor 给。
+          w.className = 'dm-whale ' + WHALE;
+          w.setAttribute('aria-hidden', 'true');
+          row.insertBefore(w, row.firstChild);
+        } else if (!show && whale) {
+          row.removeChild(whale);
+        }
+      }
+    }
+
+    function flush() {
+      queued = false;
+      try { renameProcState(); } catch (e) {}
+      try { syncTurn(); } catch (e) {}
+    }
+
+    var queued = false;
+    function schedule() {
+      if (queued) return;
+      queued = true;
+      if (window.requestAnimationFrame) window.requestAnimationFrame(flush);
+      else window.setTimeout(flush, 0);
+    }
+
+    var mo = new MutationObserver(schedule);
+    // characterData 覆盖状态词变化（React 只改 nodeValue），childList 覆盖
+    // 行/折叠块的挂载与卸载，aria-label 覆盖状态行自身的状态切换。
+    mo.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['aria-label']
+    });
+    schedule();
+  } catch (e) {}
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -2986,6 +3090,7 @@ function mobilePageHtml() {
     SEND_MODE_HTML,
     SEND_MODE_SETTINGS_HTML,
     QUEUE_DOCK_PLACE_HTML,
+    CHAT_STATUS_HTML,
     '</body>',
     '</html>',
   ].join('')
