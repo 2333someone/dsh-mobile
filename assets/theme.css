@@ -1506,8 +1506,10 @@ body {
    所以尺寸必须 !important。颜色不写死：svg 用 stroke="currentColor" 继承
    .card-icon > * 的 --text-secondary 灰，和设置页其它行的单色图标一致。 */
 .dm-sendmode-icon {
-  width: 40px !important;
-  height: 40px !important;
+  /* 与 bundle 的 .card-icon 保持一致：外层格子 48×48，内层灰方块 40×40。
+     之前误设成 40，导致这一行图标与上下行的视觉重心不齐。 */
+  width: 48px !important;
+  height: 48px !important;
 }
 .dm-sendmode-icon > * {
   width: 40px !important;
@@ -1516,7 +1518,11 @@ body {
   align-items: center !important;
   justify-content: center !important;
 }
-.dm-sendmode-icon svg { width: 20px !important; height: 20px !important; display: block !important; }
+.dm-sendmode-icon svg {
+  width: 19px !important;
+  height: 19px !important;
+  display: block !important;
+}
 
 /* 描述文字：bundle 的 .card-desc 是 white-space:nowrap + ellipsis，
    这两句说明不短，手机上会被截断成「排队（等当前…」，所以放开换行。 */
