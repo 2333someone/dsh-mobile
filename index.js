@@ -1597,6 +1597,9 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
   var bgTimer = null;    // 后台预取轮询（与面板是否打开无关）
   var view = 'list';     // 'list' | 'chat'
   var chatSid = '';
+  // 聊天视图状态（新→旧顺序、增量前插、30s 对账）。null 表示当前不在聊天视图。
+  //   { sid, parent, itemSeq, seenSeq, live, es, reconcileTimer, list, pendingNew }
+  var chat = null;
   var lastSessionId = '';
 
   // ── 预取缓存 ────────────────────────────────────────────────────────────
@@ -1862,8 +1865,14 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
     back2.addEventListener('click', function (e) {
       e.preventDefault();
-      if (view !== 'list') { view = 'list'; chatSid = ''; renderList(true); }
+      if (view !== 'list') { stopChat(); view = 'list'; chatSid = ''; renderList(true); }
     });
+    // 滚动策略：停在顶部就继续保持贴顶（新消息前插后仍看得到最新）；一旦下滑
+    // 读旧消息，就不再抢滚动位置（前插时会补偿 scrollTop，见 prependHtml）。
+    body.addEventListener('scroll', function () {
+      if (!chat) return;
+      if (chatAtTop()) hideNewTip(true);
+    }, { passive: true });
 
     panel = { back: back, sheet: sheet, head: head, title: title, back2: back2, body: body };
     return panel;
@@ -1872,7 +1881,7 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
   function openPanel() {
     if (!panel) build();
     panel.back.classList.add('dm-subagent-open');
-    if (view !== 'list') { view = 'list'; chatSid = ''; }
+    if (view !== 'list') { stopChat(); view = 'list'; chatSid = ''; }
     renderList(true);
     startTimer();
   }
@@ -1881,6 +1890,7 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
   // 动画结束后才真正移除 .dm-subagent-open。用 data 标记防止重复触发。
   function closePanel() {
     stopTimer();
+    stopChat();     // 离开面板：关 EventSource、停对账定时器，无泄漏
     if (!panel) return;
     var back = panel.back;
     if (!back.classList.contains('dm-subagent-open')) return;
@@ -1901,8 +1911,9 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     stopTimer();
     timer = window.setInterval(function () {
       if (document.visibilityState && document.visibilityState !== 'visible') return;
+      // 聊天视图不再定时整段重绘：它由 SSE 增量 + 30s 对账维护（见 openChat/startChatStream），
+      // 整段 innerHTML 重绘既会闪，也会把 scrollTop 打回 0。列表视图照旧低频刷新。
       if (view === 'list') renderList(false);
-      else renderChat();
     }, REFRESH_MS);
   }
   function stopTimer() {
@@ -2045,90 +2056,364 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     writeBody(html);
   }
 
-  // 聊天内容视图的行 HTML（原来用 DOM fragment 拼，改为字符串才能参与 diff）。
-  function fragHtml(items) {
-    var html = '';
-    for (var k = 0; k < items.length; k++) {
-      var it = items[k];
-      var icon = it.role === 'user' ? '我' : (it.role === 'assistant' ? 'AI' : '⚙');
-      html +=
-        '<div class="dm-subagent-msg dm-subagent-msg-' + it.role + '">' +
-          '<span class="dm-subagent-who">' + icon + '</span>' +
-          '<span class="dm-subagent-text">' + esc(it.text || '(无文本)') + '</span>' +
-        '</div>';
-    }
-    return html;
+  // ── 聊天内容视图：最新消息在最上面（新→旧），首屏一次拉取 + SSE 前插 ──────
+  //
+  // 用户要求（task-4 rev5）：子代理聊天记录「最新在最上面、从下往上排」，打开就停在
+  // 顶部看最新，不需要往下翻。旧实现每 8s 用 session.history 整段重绘
+  // （writeBody → innerHTML=），既闪，又把 scrollTop 打回 0；顺序还是旧→新，
+  // 于是「停在顶部 = 看到最旧一条」。
+  //
+  // 现在：
+  //   · 打开一次 session.history（subscribe:true 先登记 → 宿主为该会话起 follow）；
+  //   · 之后消费 /m/api/events.mux 的 session/event 帧（user/message、assistant/message、
+  //     tool/call、assistant/chunk）**前插到最上面**，不整段重绘；
+  //   · 30s 低频对账：只补 seq 缺口（正常情况 0 次 DOM 变更）；
+  //   · 滚动：停在顶部 → 前插后仍贴顶；已下滑看旧消息 → 插入多少补偿多少 scrollTop
+  //     （视觉位置不动），并给一个「↑ 有 N 条新消息」提示；
+  //   · 离开聊天视图 / 收起面板 → 关 EventSource、停对账定时器。
+  var CHAT_RECONCILE_MS = 30000;
+  var CHAT_TOP_PX = 8;
+
+  function chatAtTop() {
+    if (!panel) return true;
+    return panel.body.scrollTop <= CHAT_TOP_PX;
   }
 
-  // ── 聊天内容视图 ──────────────────────────────────────────────────────
-  function renderChat() {
-    if (!panel) return;
-    view = 'chat';
-    panel.back2.classList.add('dm-subagent-show');
-    panel.title.textContent = '子代理 · ' + chatSid.slice(0, 8);
-    writeBody('<p class="dm-subagent-hint dm-subagent-loading">加载中…</p>');
+  // 把一条消息插到最上面。返回插入的节点。
+  //
+  // 两种滚动策略都在这里落地：
+  //   · 用户原本停在顶部：插完仍然 scrollTop=0（新内容立刻可见）；
+  //   · 用户已经下滑在读旧消息：scrollTop 加上新增高度，正在看的那条不动，
+  //     并亮出「有新消息」提示（点一下回到顶部）。
+  function prependHtml(html) {
+    if (!chat || !chat.list || !panel) return null;
+    var body = panel.body;
+    var wasTop = body.scrollTop <= CHAT_TOP_PX;
+    var beforeHeight = body.scrollHeight;
+    chat.list.insertAdjacentHTML('afterbegin', html);
+    var node = chat.list.firstElementChild;
+    if (wasTop) {
+      body.scrollTop = 0;
+    } else {
+      body.scrollTop = body.scrollTop + (body.scrollHeight - beforeHeight);
+      showNewTip();
+    }
+    return node;
+  }
 
-    // 带上 parentSessionId：宿主读子代理会话必须走 durable 父地址
-    //（{kind:'subagent'}），父 id 由列表视图所在的当前会话直接给出。
-    //
-    // subscribe=true：告诉服务端「这台设备开始看这个子代理会话」，由它 ensureFollow()
-    // 起宿主流 → 之后子代理的增量随 SSE 到达（边跑边显示）。
-    // 这里必须**先登记订阅再拉历史**，否则订阅晚于历史请求时，
-    // 落在两者之间的增量就没有人推，会永久丢字。
+  function ensureNewTip() {
+    if (!panel) return null;
+    if (panel.newTip) return panel.newTip;
+    var tip = el('button', 'dm-subagent-newtip', '↑ 有新消息');
+    tip.type = 'button';
+    tip.hidden = true;
+    tip.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (!panel) return;
+      panel.body.scrollTop = 0;
+      hideNewTip(true);
+    });
+    panel.sheet.appendChild(tip);
+    panel.newTip = tip;
+    return tip;
+  }
+  function showNewTip() {
+    if (!chat) return;
+    var tip = ensureNewTip();
+    if (!tip) return;
+    chat.pendingNew = (chat.pendingNew || 0) + 1;
+    tip.textContent = '↑ 有 ' + chat.pendingNew + ' 条新消息';
+    tip.hidden = false;
+  }
+  function hideNewTip(reset) {
+    if (panel && panel.newTip) panel.newTip.hidden = true;
+    if (reset && chat) chat.pendingNew = 0;
+  }
+
+  function msgHtml(item, extraClass) {
+    var icon = item.role === 'user' ? '我' : (item.role === 'assistant' ? 'AI' : '⚙');
+    return '<div class="dm-subagent-msg dm-subagent-msg-' + item.role + (extraClass ? ' ' + extraClass : '') + '">' +
+      '<span class="dm-subagent-who">' + icon + '</span>' +
+      '<span class="dm-subagent-text">' + esc(item.text || '(无文本)') + '</span>' +
+      '</div>';
+  }
+
+  // 单条事件 → 一行消息（映射口径与旧 renderChat 完全一致，只是顺序改为前插）。
+  function itemOfEvent(ev) {
+    if (!ev || typeof ev.type !== 'string') return null;
+    var data = (ev.data && typeof ev.data === 'object') ? ev.data : {};
+    var seq = (typeof ev.seq === 'number' && isFinite(ev.seq)) ? ev.seq : undefined;
+    if (ev.type === 'user/message') {
+      return { role: 'user', text: excerpt(textOf(data.content), 120), seq: seq };
+    }
+    if (ev.type === 'assistant/message') {
+      var m = (data.message && typeof data.message === 'object') ? data.message : data;
+      var body = textOf(m.content);
+      if (!body) body = reasoningOf(m.content);
+      return { role: 'assistant', text: excerpt(body, 220), seq: seq };
+    }
+    if (ev.type === 'tool/call') {
+      var toolName = String(data.name || '工具');
+      var argText = '';
+      try {
+        var rawArgs = data.arguments;
+        var parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+        if (parsed && typeof parsed === 'object') {
+          var keys = Object.keys(parsed).slice(0, 2);
+          argText = keys.map(function (k) {
+            var v = parsed[k];
+            var str = typeof v === 'string' ? v : JSON.stringify(v);
+            return k + '=' + String(str == null ? '' : str).replace(/\s+/g, ' ').slice(0, 60);
+          }).join(' ');
+        }
+      } catch (e) {}
+      return { role: 'tool', text: toolName + (argText ? ' · ' + argText : ''), seq: seq };
+    }
+    return null;
+  }
+
+  function prependItem(item) {
+    if (!chat || !chat.list || !item) return false;
+    if (typeof item.seq === 'number') {
+      // seq 单调递增：SSE 与 30s 对账可能各带一份同一条事件，这里一并去重。
+      if (item.seq <= chat.itemSeq) return false;
+      chat.itemSeq = item.seq;
+    }
+    prependHtml(msgHtml(item));
+    return true;
+  }
+
+  // 流式气泡：同一个 turn/step 的 text-delta 累加进同一个 DOM 节点（它始终在最上面）。
+  //
+  // 文字用**一个文本节点**更新（textNode.data += …），而不是 element.textContent = …：
+  // 后者每次都会「删掉旧文本节点 + 插一个新节点」，几百个 chunk 就是几百次 childList
+  // 增删（实测 527 added / 523 removed）；改文本节点后只剩 characterData 变更，
+  // 流式期间消息容器的子节点数量保持不变。
+  function liveBubble(key) {
+    if (!chat) return null;
+    if (chat.live && chat.live.key === key) return chat.live;
+    finalizeLive();
+    if (!chat.list) return null;
+    var node = prependHtml(msgHtml({ role: 'assistant', text: '' }, 'dm-subagent-msg-live'));
+    var textEl = node ? node.querySelector('.dm-subagent-text') : null;
+    var textNode = null;
+    if (textEl) {
+      textEl.textContent = '';
+      textNode = document.createTextNode('');
+      textEl.appendChild(textNode);
+    }
+    chat.live = { key: key, node: node, textEl: textEl, textNode: textNode, text: '' };
+    return chat.live;
+  }
+  function writeLiveText(live, text) {
+    if (!live) return;
+    live.text = text;
+    if (live.textNode) live.textNode.data = text;
+    else if (live.textEl) live.textEl.textContent = text;
+  }
+  function appendChunk(data) {
+    if (!chat || !panel) return;
+    var chunk = data && data.chunk;
+    if (!chunk || typeof chunk !== 'object') return;
+    if (chunk.type !== 'text-delta') return;   // reasoning-delta 不显示，避免与正文混在一起
+    if (typeof chunk.text !== 'string' || chunk.text === '') return;
+    var key = String(data.turn === undefined ? '' : data.turn) + ':' + String(data.step === undefined ? '' : data.step);
+    var live = liveBubble(key);
+    if (!live) return;
+    var body = panel.body;
+    var wasTop = body.scrollTop <= CHAT_TOP_PX;
+    var beforeHeight = body.scrollHeight;
+    writeLiveText(live, live.text + chunk.text);
+    if (wasTop) body.scrollTop = 0;
+    else {
+      var delta = body.scrollHeight - beforeHeight;
+      if (delta > 0) body.scrollTop += delta;
+    }
+  }
+  function finalizeLive(finalText) {
+    if (!chat || !chat.live) return false;
+    if (typeof finalText === 'string' && finalText !== '') writeLiveText(chat.live, finalText);
+    if (chat.live.node) chat.live.node.classList.remove('dm-subagent-msg-live');
+    chat.live = null;
+    return true;
+  }
+
+  // 定稿用的完整正文（不走 excerpt）：流式气泡里已经显示了多少字就保持多少，
+  // 否则「流式时是全文、定稿瞬间被截成 220 字」会让文字回缩一下。
+  function fullAssistantText(ev) {
+    var data = (ev && ev.data && typeof ev.data === 'object') ? ev.data : {};
+    var m = (data.message && typeof data.message === 'object') ? data.message : data;
+    return textOf(m.content) || reasoningOf(m.content);
+  }
+
+  // 一条已落盘事件：先让流式气泡定稿，再按 seq 单调前插（重复事件自然被丢弃）。
+  function handleSessionEvent(ev) {
+    if (!chat || !ev) return;
+    var item = itemOfEvent(ev);
+    if (!item) return;
+    if (typeof item.seq === 'number') chat.seenSeq = Math.max(chat.seenSeq, item.seq);
+    if (item.role === 'assistant' && chat.live) {
+      // 同一步的最终消息：复用流式气泡节点（不新建、不闪），文字换成完整定稿内容。
+      finalizeLive(fullAssistantText(ev) || item.text);
+      if (typeof item.seq === 'number' && item.seq > chat.itemSeq) chat.itemSeq = item.seq;
+      return;
+    }
+    if (item.role === 'user') finalizeLive();
+    prependItem(item);
+  }
+
+  function createChatShell() {
+    if (!panel) return null;
+    panel.body.removeAttribute('data-dm-html');
+    panel.body.innerHTML = '';
+    var list = el('div', 'dm-subagent-chat');
+    list.setAttribute('data-dm-chat', '1');
+    panel.body.appendChild(list);
+    return list;
+  }
+
+  function stopChat() {
+    if (!chat) return;
+    var old = chat;
+    chat = null;
+    try { if (old.es) old.es.close(); } catch (e) {}
+    if (old.reconcileTimer !== null && old.reconcileTimer !== undefined) window.clearInterval(old.reconcileTimer);
+    if (panel) {
+      panel.body.removeAttribute('data-dm-chat-sid');
+      // 恢复浏览器默认的滚动锚定（聊天视图里是我们自己接管补偿的）。
+      panel.body.style.overflowAnchor = '';
+      if (panel.newTip) panel.newTip.hidden = true;
+    }
+  }
+
+  // 30s 低频对账：只把「本页里有、我们还没画」的事件补上；不清空、不重置滚动。
+  function reconcileChat() {
+    if (!chat || view !== 'chat') return;
+    var target = chat;
     rpc('session.history', {
-      sessionId: chatSid,
-      maxMessages: 50,
-      parentSessionId: currentSession(),
+      sessionId: target.sid,
+      maxMessages: 25,
+      parentSessionId: target.parent,
       subscribe: true,
     }).then(function (res) {
-      if (!panel || view !== 'chat') return;
+      if (!chat || chat !== target || view !== 'chat') return;
+      if (!res || !res.ok || !res.value) return;
+      var events = Array.isArray(res.value.events) ? res.value.events : [];
+      for (var i = 0; i < events.length; i++) {
+        var ev = events[i] && events[i].event;
+        if (ev) handleSessionEvent(ev);
+      }
+    }).catch(function () {});
+  }
+
+  function startChatStream(target) {
+    if (!target || target.es) return;
+    try {
+      // 自己开一条 mux 连接（不复用 bundle 的）：只认当前子代理会话的帧。
+      var es = new EventSource('/m/api/events.mux');
+      target.es = es;
+      es.addEventListener('message', function (msg) {
+        if (!chat || chat !== target) return;
+        var raw = msg && msg.data ? String(msg.data) : '';
+        if (raw === '') return;
+        // 先子串预判：绝大多数帧与本会话无关，避免每个 chunk 都 JSON.parse。
+        if (raw.indexOf('session/event') < 0 && raw.indexOf('assistant/chunk') < 0) return;
+        var wire;
+        try { wire = JSON.parse(raw); } catch (e) { return; }
+        if (!wire || wire.type !== 'server-request') return;
+        var frame = wire.payload;
+        if (!frame || frame.type !== 'session/event') return;
+        if (frame.sessionId !== target.sid) return;
+        var ev = frame.event;
+        if (!ev || typeof ev !== 'object') return;
+        if (ev.type === 'assistant/chunk') appendChunk(ev.data);
+        else handleSessionEvent(ev);
+      });
+      es.addEventListener('open', function () {
+        // 重连后可能漏帧：立刻对账一次（仍然只补差异）。
+        if (chat === target) reconcileChat();
+      });
+    } catch (e) {}
+    target.reconcileTimer = window.setInterval(function () {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      if (chat !== target || view !== 'chat') return;
+      reconcileChat();
+    }, CHAT_RECONCILE_MS);
+  }
+
+  // ── 打开某条子代理的聊天内容 ──────────────────────────────────────────
+  function openChat(sid) {
+    if (!panel || !sid) return;
+    if (chat && chat.sid === sid && view === 'chat') return;
+    stopChat();
+    view = 'chat';
+    panel.back2.classList.add('dm-subagent-show');
+    panel.title.textContent = '子代理 · ' + String(sid).slice(0, 8);
+    chat = {
+      sid: sid,
+      parent: currentSession(),
+      itemSeq: -1,
+      seenSeq: -1,
+      live: null,
+      es: null,
+      reconcileTimer: null,
+      list: null,
+      pendingNew: 0,
+    };
+    var target = chat;
+    chat.list = createChatShell();
+    panel.body.setAttribute('data-dm-chat-sid', sid);
+    // 聊天视图自己补偿前插带来的高度差，关掉浏览器的滚动锚定，行为才可预测。
+    panel.body.style.overflowAnchor = 'none';
+    panel.body.scrollTop = 0;
+    hideNewTip(true);
+    if (!chat.list) return;
+    chat.list.innerHTML = '<p class="dm-subagent-hint dm-subagent-loading">加载中…</p>';
+
+    // 带上 parentSessionId：宿主读子代理会话必须走 durable 父地址；
+    // subscribe=true 必须在读历史**之前**登记，否则两者之间的增量没人推。
+    rpc('session.history', {
+      sessionId: sid,
+      maxMessages: 50,
+      parentSessionId: target.parent,
+      subscribe: true,
+    }).then(function (res) {
+      if (!chat || chat !== target || view !== 'chat') return;
+      target.list.innerHTML = '';
       var ok = !!(res && res.ok && res.value);
       var events = ok && Array.isArray(res.value.events) ? res.value.events : [];
+      // 只画能显示的事件（user / assistant / tool），保持宿主给的旧→新顺序。
       var items = [];
       for (var i = 0; i < events.length; i++) {
         var ev = events[i] && events[i].event;
-        if (!ev || typeof ev.type !== 'string') continue;
-        var data = (ev.data && typeof ev.data === 'object') ? ev.data : {};
-        if (ev.type === 'user/message') {
-          items.push({ role: 'user', text: excerpt(textOf(data.content), 120) });
-        } else if (ev.type === 'assistant/message') {
-          var m = (data.message && typeof data.message === 'object') ? data.message : data;
-          // 先取正文；没有正文的步骤（只产出了推理）用 reasoning 兜底，
-          // 否则整行只剩「(无文本)」，过程信息等于没显示。
-          var body = textOf(m.content);
-          if (!body) body = reasoningOf(m.content);
-          items.push({ role: 'assistant', text: excerpt(body, 220) });
-        } else if (ev.type === 'tool/call') {
-          // 工具行带上参数摘要：只显示工具名的话，用户看不出这一步到底在干什么。
-          var toolName = String(data.name || '工具');
-          var argText = '';
-          try {
-            var rawArgs = data.arguments;
-            var parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
-            if (parsed && typeof parsed === 'object') {
-              var keys = Object.keys(parsed).slice(0, 2);
-              argText = keys.map(function (k) {
-                var v = parsed[k];
-                var str = typeof v === 'string' ? v : JSON.stringify(v);
-                return k + '=' + String(str == null ? '' : str).replace(/\s+/g, ' ').slice(0, 60);
-              }).join(' ');
-            }
-          } catch (e) {}
-          items.push({ role: 'tool', text: toolName + (argText ? ' · ' + argText : '') });
-        }
+        if (!ev) continue;
+        var item = itemOfEvent(ev);
+        if (item) items.push(item);
       }
       if (items.length === 0) {
-        writeBody('<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>');
+        target.list.innerHTML = '<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>';
         return;
       }
-      writeBody(fragHtml(items));
+      // 反转渲染：最新一条在最上面，旧消息往下排。
+      var html = '';
+      for (var k = items.length - 1; k >= 0; k -= 1) html += msgHtml(items[k]);
+      target.list.innerHTML = html;
+      var newest = -1;
+      for (var m = 0; m < items.length; m += 1) {
+        if (typeof items[m].seq === 'number') newest = Math.max(newest, items[m].seq);
+      }
+      target.itemSeq = newest;
+      target.seenSeq = newest;
+      // 打开即停在顶部：顶部就是最新消息。
+      panel.body.scrollTop = 0;
+      startChatStream(target);
     }).catch(function () {
-      if (!panel || view !== 'chat') return;
-      writeBody('<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>');
+      if (!chat || chat !== target || view !== 'chat') return;
+      target.list.innerHTML = '<p class="dm-subagent-hint">无法加载该子代理的会话内容</p>';
     });
   }
 
-  // 行点击：取 data-sid，切成聊天内容视图。
+  // 行点击：取 data-sid，切成聊天内容视图（增量模式）。
   document.addEventListener('click', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
@@ -2138,7 +2423,7 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     if (!sid) return;
     e.preventDefault();
     chatSid = sid;
-    renderChat();
+    openChat(sid);
   });
 
   btn.addEventListener('click', function (e) {
@@ -2200,6 +2485,26 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
         }
       },
       openPanel: function () { try { openPanel(); } catch (e) {} },
+      // 聊天视图自检快照（只读，测试/排查用）：确认 EventSource 已释放、增量游标位置。
+      chatState: function () {
+        try {
+          if (!chat) return { open: false };
+          return {
+            open: true,
+            sid: chat.sid,
+            itemSeq: chat.itemSeq,
+            seenSeq: chat.seenSeq,
+            nodes: chat.list ? chat.list.children.length : 0,
+            live: chat.live !== null,
+            atTop: chatAtTop(),
+            pendingNew: chat.pendingNew || 0,
+            esReadyState: chat.es ? chat.es.readyState : -1,
+            reconciling: chat.reconcileTimer !== null,
+          };
+        } catch (e) {
+          return { open: false };
+        }
+      },
     };
   } catch (e) {}
 

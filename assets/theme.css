@@ -2771,3 +2771,53 @@ html.dm-host-page-open body {
 .dm-detail-primary:active {
   opacity: 0.86;
 }
+
+/* ── 子代理聊天：增量前插模式（新→旧）──────────────────────────────────────
+   聊天视图不再每 8s 整段重绘，而是首屏一次 + SSE 前插（最新在最上面）。这里补三件事：
+   ① 消息容器（前插的父节点）纵向排列；
+   ② 正在流式的那条气泡末尾加一个闪烁光标；
+   ③ 用户下滑看旧消息时浮出的「有新消息」提示（点它回到顶部）。
+   尊重「减弱动态效果」：偏好减少动画时只留静态光标。 */
+.dm-subagent-sheet {
+  position: relative;
+}
+.dm-subagent-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dm-subagent-msg-live .dm-subagent-text::after {
+  content: '▍';
+  margin-left: 1px;
+  color: var(--accent, #6366f1);
+  animation: dm-subagent-caret 1s step-end infinite;
+}
+@keyframes dm-subagent-caret {
+  50% {
+    opacity: 0;
+  }
+}
+.dm-subagent-newtip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent, #6366f1);
+  color: #ffffff;
+  font-size: var(--text-xs, 11px);
+  line-height: 1.2;
+  box-shadow: var(--shadow-md, 0 4px 14px rgba(16, 24, 40, 0.2));
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-subagent-newtip[hidden] {
+  display: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dm-subagent-msg-live .dm-subagent-text::after {
+    animation: none;
+  }
+}
