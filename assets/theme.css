@@ -1609,3 +1609,20 @@ body {
 #dm-subagent-btn {
   display: none !important;
 }
+
+/* ── 工作区列表页：把「设置」齿轮从右上角移到左上角 ────────────────────────
+   bundle 的 .mobile-header 是 grid：`48px | minmax(0,1fr) | auto`，第一格是左侧
+   slot，非搜索态时里面是一个空 div；齿轮原本在右侧 slot 里（设置 → 搜索 → 主题）。
+   这里只把齿轮**绝对定位**到 header 左上角：
+     · 不移动任何 React 节点（本项目已因移动 .queue-dock 触发过 removeChild 崩溃）；
+     · 绝对定位把它从右侧 flex 流里摘出，右侧的搜索/主题按钮自动右对齐，布局不乱；
+     · sticky 的 .mobile-header 本身就是定位祖先，left/top 直接相对它算。
+   只认 aria-label="设置" 这一个按钮（bundle 里只有工作区列表页有它），
+   不会误伤聊天页的「更多」等按钮。 */
+.mobile-header > .mobile-headerSlot-right > button[aria-label="设置"] {
+  position: absolute !important;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+}
