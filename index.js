@@ -596,11 +596,28 @@ async function readAccountBalance(ctx) {
 
 // ── assets ──────────────────────────────────────────────────────────────────
 const assetCache = new Map()
+/**
+ * 读取 assets 下的静态资源，**按文件 mtime/size 失效**。
+ *
+ * 原来是"首次读盘后永久缓存"：改了 mobile.bundle.js 之后即使重载插件，
+ * 线上拿到的还是旧内容（只有重启 dsh 才会重新读）—— bundle 里的改动因此
+ * 无法通过普通 reload 生效。现在每次请求 stat 一次（开销可忽略），
+ * mtime 或大小变了就重新读盘；其余情况仍走内存缓存。
+ */
 function asset(name) {
-  if (!assetCache.has(name)) {
-    assetCache.set(name, readFileSync(join(__dirname, 'assets', name)))
-  }
-  return assetCache.get(name)
+  const file = join(__dirname, 'assets', name)
+  let mtimeMs = 0
+  let size = -1
+  try {
+    const st = statSync(file)
+    mtimeMs = st.mtimeMs
+    size = st.size
+  } catch {}
+  const hit = assetCache.get(name)
+  if (hit !== undefined && hit.mtimeMs === mtimeMs && hit.size === size) return hit.data
+  const data = readFileSync(file)
+  assetCache.set(name, { mtimeMs, size, data })
+  return data
 }
 function assetText(name) {
   return asset(name).toString('utf8')
