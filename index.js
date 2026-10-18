@@ -3417,6 +3417,7 @@ const QUEUE_DOCK_PLACE_HTML = `<script>
     var root = document.documentElement;
     var raf = 0;
     var last = -1;
+    var lastSpace = -1;
 
     function composer() { return document.querySelector('.chat-composer'); }
     function dock() { return document.querySelector('.chat-composer > .queue-dock[data-queue-dock]'); }
@@ -3449,6 +3450,14 @@ const QUEUE_DOCK_PLACE_HTML = `<script>
       if (cr.width <= 0 || cr.height <= 0 || tr.width <= 0) return;
       var lift = Math.round(cr.top - topOfStack(t) + 8);
       if (!isFinite(lift) || lift <= 0 || lift > 600) return;
+      // 给消息区补的底部留白 = dock 自身高度 + 8px：dock 是浮层，不补的话
+      // 滚到最底时最后一条消息会被它盖住。dock 消失后 :has() 规则整体失效，
+      // 不占任何空间，所以这里的旧值不用清。
+      var space = Math.round(d.getBoundingClientRect().height + 8);
+      if (space > 0 && space !== lastSpace) {
+        lastSpace = space;
+        root.style.setProperty('--dm-queue-space', space + 'px');
+      }
       if (lift === last) return;
       last = lift;
       root.style.setProperty('--dm-queue-lift', lift + 'px');
@@ -6514,8 +6523,17 @@ export function apply(ctx, config) {
       if (heartbeat !== undefined) clearInterval(heartbeat)
       if (syncTimer !== undefined) clearInterval(syncTimer)
       if (lifetimeTimer !== undefined) clearTimeout(lifetimeTimer)
-      // SSE 流就是观察登记的生命周期：设备走了就不能还占着 follow。
-      releaseDevice(deviceId)
+      // SSE 流是观察登记的生命周期：**这台设备已经没有活着的流**才释放登记。
+      //
+      // 不能无条件 releaseDevice：同一台设备天然会并存多条流 —— EventSource 重连时
+      // 新旧两条会短暂重叠，同一个 token 也可能同时开在几个标签页/客户端上。任何一条
+      // 关闭就把整台设备的 observations 清空（releaseDevice 是设备级的），剩下那条
+      // 流会立刻失去路由：session/event 被 muxVisibleTo 判成「设备没在看」而丢弃，
+      // 正在生成的回复就停在中途、最终 assistant/message 也永远收不到 —— 这正是
+      // 手机端「只显示一半 / 停在思考中」的复现路径之一（实测 2 条流时消息 0 送达，
+      // 单条流时 100% 送达）。所以按设备做引用计数，最后一条流关闭时才释放。
+      const deviceStillStreaming = [...muxStreams].some((s) => s.deviceId === deviceId)
+      if (!deviceStillStreaming) releaseDevice(deviceId)
       try {
         res.end()
       } catch {}
