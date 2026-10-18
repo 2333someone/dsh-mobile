@@ -4983,7 +4983,22 @@ export function apply(ctx, config) {
     switch (method) {
       case 'session.list': {
         const { items = [] } = await controller.list({ cursor: payload.cursor }, new AbortController().signal)
-        return { ok: true, value: { items } }
+        // 归档过滤：sessionController.list() 只回答「会话存不存在」，它不知道归档集合。
+        // 归档是 workspaceRegistry 的职责 —— 它的 getter 注释写明这是
+        // 「registry-global archive set: sessions hidden from every grouping surface」，
+        // 桌面端就是拿这个集合自己从列表里剔除的。手机端走同一个 RPC，少了这一步
+        // 就会出现「点了删除、列表里还在」。取不到 registry（未 inject / 版本差异）
+        // 时退化为不过滤，而不是让整个列表报错。
+        let hidden = null
+        try {
+          const reg = wr()
+          const ids = reg && reg.archivedSessionIds
+          if (Array.isArray(ids) && ids.length > 0) hidden = new Set(ids)
+        } catch (err) {
+          console.error('[dsh-mobile] archivedSessionIds unavailable:', err && err.message)
+        }
+        const visible = hidden === null ? items : items.filter((item) => !hidden.has(item.sessionId))
+        return { ok: true, value: { items: visible } }
       }
       case 'session.history': {
         if (!payload.sessionId) return { ok: false, error: { code: 'bad-request', message: 'sessionId required' } }
@@ -5132,8 +5147,24 @@ export function apply(ctx, config) {
         return { ok: true, value: { deleted: true } }
       }
       case 'workspace.archiveSession': {
-        await wr().archiveSession(payload.sessionId, { stopActivity: true })
-        return { ok: true, value: { archivedSessionIds: [] } }
+        // 契约（宿主 api-workspace-controller）：archiveSession({ sessionId, stopActivity })
+        // → { archivedSessionIds }。registry 上这个方法接收 (sessionId, options)，
+        // 把归档集合装进自己的状态；它**不会**替我们过滤 session.list，
+        // 所以上面那条 list 必须自己按 archivedSessionIds 剔除（已加）。
+        let archived = []
+        try {
+          const reg = wr()
+          const result = await reg.archiveSession(payload.sessionId, { stopActivity: true })
+          const ids = result && result.value && result.value.archivedSessionIds
+          if (Array.isArray(ids) && ids.length > 0) archived = ids
+          else if (Array.isArray(reg.archivedSessionIds)) archived = [...reg.archivedSessionIds]
+        } catch (err) {
+          const message = err && err.message ? err.message : String(err)
+          console.error('[dsh-mobile] archiveSession failed:', message)
+          return { ok: false, error: { code: 'archive-failed', message } }
+        }
+        if (archived.length === 0) archived = [String(payload.sessionId)]
+        return { ok: true, value: { archivedSessionIds: archived } }
       }
       case 'mobile.preferences': {
         // 手机 bundle 的启动探针；形态必须匹配 dsh-palm，否则会判定「连不上 host」。
@@ -5574,7 +5605,11 @@ export function apply(ctx, config) {
         }
       }
       case 'mobile.previews': {
-        return { ok: true, value: {} }
+        // bundle 的调用点是 `(await m('mobile.previews', {sessionIds})).items`，
+        // 然后对结果直接 `for (const x of items)`。这里返回空对象 `{}` 时
+        // `.items` 是 undefined，页面就会稳定抛 `TypeError: e is not iterable`
+        //（会话摘要预取静默失败）。契约要求 items 是数组，空也要给 []。
+        return { ok: true, value: { items: [] } }
       }
       case 'mobile.readChat': {
         return { ok: false, error: { code: 'unavailable', message: '折叠会话读取不可用' } }
