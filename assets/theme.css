@@ -1516,11 +1516,7 @@ body {
   align-items: center !important;
   justify-content: center !important;
 }
-.dm-sendmode-icon svg {
-  width: 24px !important;
-  height: 24px !important;
-  display: block !important;
-}
+.dm-sendmode-icon svg { width: 20px !important; height: 20px !important; display: block !important; }
 
 /* 描述文字：bundle 的 .card-desc 是 white-space:nowrap + ellipsis，
    这两句说明不短，手机上会被截断成「排队（等当前…」，所以放开换行。 */

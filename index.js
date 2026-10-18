@@ -3386,17 +3386,16 @@ const SEND_MODE_SETTINGS_HTML = `<script>
     // 本行图标的灰色 --text-secondary，与设置页其它行的单色图标一致。
     // 不要用箭头类字符（如 U+21A9）：它在部分浏览器/字体下会被渲染成彩色 emoji，
     // 语义也不是「发送」。
-    // 图标：队列语义（不是"发送"）。三行排队项 + 右侧向下的排序箭头，
-  // 表达「这条消息排到队尾等待发送」。与设置页其它单色描边图标同规格。
+    // 图标：队列语义，但**刻意做简**——设置页其它行都是 19~20px 的细线条图标，
+  // 这里如果画三条粗矩形 + 箭头，缩到同样尺寸会糊成一团、视觉也比邻行重。
+  // 只保留三根等距横线（队列/列表），与邻行的线条密度一致。
   icon.innerHTML =
       '<span aria-hidden="true">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"' +
       ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<rect x="3.2" y="5.4" width="12.6" height="3.2" rx="1.6"/>' +
-      '<rect x="3.2" y="10.4" width="12.6" height="3.2" rx="1.6"/>' +
-      '<rect x="3.2" y="15.4" width="12.6" height="3.2" rx="1.6"/>' +
-      '<path d="M20.2 5.6v10.2"/>' +
-      '<path d="m17.4 13 2.8 2.8 2.8-2.8"/>' +
+      '<path d="M6.5 8.5h11"/>' +
+      '<path d="M6.5 12h11"/>' +
+      '<path d="M6.5 15.5h11"/>' +
       '</svg>' +
       '</span>';
 
