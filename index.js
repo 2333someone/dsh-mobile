@@ -12421,10 +12421,52 @@ export function apply(ctx, config) {
           secrets: Array.isArray(d.secrets) ? d.secrets : [],
           revision: d.revision,
         }))
+        // 外观偏好按设备独立：bundle 每次启动都会读 ui-theme.preference 并应用
+        // （Fr(value)），如果不覆盖，它就会用宿主那份跨端同步值把手机上刚设的
+        // 深色顶掉 —— 表现就是「设成深色，刷新又变浅色」。
+        // 这里把该设备自己的选择回填进去，手机之间/桌面端互不影响。
+        const settingsDevice = rpcContext && typeof rpcContext.deviceId === 'string'
+          ? devices.get(rpcContext.deviceId)
+          : undefined
+        const deviceTheme = settingsDevice && typeof settingsDevice.theme === 'string' ? settingsDevice.theme : ''
+        if (deviceTheme === 'dark' || deviceTheme === 'light' || deviceTheme === 'system') {
+          for (const entry of namespaces) {
+            if (entry.ns !== 'ui-theme') continue
+            const value = entry.value && typeof entry.value === 'object' ? { ...entry.value } : {}
+            value.preference = deviceTheme
+            entry.value = value
+          }
+        }
         return { ok: true, value: { writable: false, hasDocument: false, namespaces } }
       }
       case 'settings.mutate': {
-        return { ok: false, error: { code: 'not-found', message: '设置项不可用' } }
+        // 手机端只开放「外观偏好」这一项，而且是**按设备**存：
+        //   · 写宿主 ui-theme 是跨端同步设置，手机上换深色会把桌面 GUI 一起改掉；
+        //   · 用户预期是「手机自己的主题跟着手机走」，所以存进设备表，
+        //     启动时再由上面的 settings.read 回填给 bundle。
+        const targetId = rpcContext && typeof rpcContext.deviceId === 'string' ? rpcContext.deviceId : ''
+        const target = devices.get(targetId)
+        if (!target) return { ok: false, error: { code: 'unpaired', message: '设备未配对' } }
+        const ns = typeof payload?.ns === 'string' ? payload.ns : ''
+        if (ns !== 'ui-theme') {
+          return { ok: false, error: { code: 'forbidden', message: '该设置项不允许在手机端修改' } }
+        }
+        const ops = Array.isArray(payload?.ops) ? payload.ops : []
+        let nextTheme = ''
+        for (const op of ops) {
+          if (!op || op.op !== 'set' || !Array.isArray(op.path) || op.path.length !== 1 || op.path[0] !== 'preference') {
+            return { ok: false, error: { code: 'bad-request', message: '只支持设置外观偏好' } }
+          }
+          if (op.value !== 'dark' && op.value !== 'light' && op.value !== 'system') {
+            return { ok: false, error: { code: 'bad-request', message: '外观偏好只能是 dark / light / system' } }
+          }
+          nextTheme = op.value
+        }
+        if (nextTheme !== '' && target.theme !== nextTheme) {
+          target.theme = nextTheme
+          persistDevices(cfg.devicesFile, devices)
+        }
+        return { ok: true, value: { ok: true } }
       }
       // ── 设备管理 ──
       case 'pair.devices': {
