@@ -4946,13 +4946,27 @@ const USAGE_INLINE_HTML = `<script>
     }
 
     function ensure() {
-      if (document.querySelector('.usage-card')) return;   // 已经展开
+      var card = document.querySelector('.usage-card');
+      if (card) { autoRefresh(card); return; }              // 已展开：只负责自动同步
       var r = collapsedRow();
       if (!r) return;
       var now = Date.now();
       if (now - lastClick < 900) return;                    // 防抖，避免连点
       lastClick = now;
       try { r.click(); } catch (e) {}
+    }
+
+    // 进设置自动同步：点一次「刷新」。用户要求把刷新按钮隐藏，但隐藏的元素
+    // 仍能被脚本 .click()，于是既能自动取最新余额，又不占界面。
+    var lastRefresh = 0;
+    function autoRefresh(card) {
+      if (Date.now() - lastRefresh < 5000) return;
+      var btns = card.querySelectorAll('.usage-actions > button');
+      if (btns.length < 2) return;
+      var refresh = btns[btns.length - 1];
+      if (refresh.disabled) return;
+      lastRefresh = Date.now();
+      try { refresh.click(); } catch (e) {}
     }
 
     try {

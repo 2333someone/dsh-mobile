@@ -1867,3 +1867,44 @@ body {
 .usage-card .usage-actions > button:first-child {
   display: none !important;
 }
+
+/* ── 设置页「用量」：单行 + 精简 + 不要刷新按钮 ────────────────────────────
+   用户要求：
+     · 删掉「刷新」按钮（进设置时脚本会自动点它同步，见 USAGE_INLINE_HTML）
+     · 信息压成一行：DeepSeek · 账户余额 13.75 CNY
+     · 去掉域名（api.deepseek.com）和「余额」徽标这些冗余信息
+   做法全部用布局/隐藏实现，不改 bundle 的数据结构：
+     .usage-provider 由块级改成一行 flex；head 与 stats 同排；actions 整块隐藏。 */
+.usage-card .usage-actions {
+  display: none !important;
+}
+.usage-card .usage-providerBase,
+.usage-card .usage-badge {
+  display: none !important;
+}
+.usage-card .usage-provider {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 8px !important;
+  padding: 12px 16px !important;
+  border-bottom: none !important;
+}
+.usage-card .usage-providerHead {
+  display: inline-flex !important;
+  margin-bottom: 0 !important;
+  min-width: 0;
+}
+.usage-card .usage-providerName {
+  font-size: var(--text-base) !important;
+}
+.usage-card .usage-stats {
+  display: inline-flex !important;
+  align-items: baseline;
+  gap: 6px !important;
+  margin: 0 !important;
+  white-space: nowrap;
+}
+/* 第二个空 span 是 bundle 用来撑开 space-between 的，单行布局里不需要 */
+.usage-card .usage-stats > span:empty {
+  display: none !important;
+}
