@@ -4121,6 +4121,51 @@ const SEND_DECODE_GUARD_HTML = `<script>
       hint = null;
     }
 
+    function chatInput() {
+      try {
+        return document.querySelector('textarea.chat-input');
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // 重放一次「发送」。两种发送态要用两种入口，不能用同一个按钮：
+    //   · Agent 空闲：.chat-send 的 aria-label 是「发送」，点它 = bundle 的 ri()；
+    //   · Agent 在跑：.chat-send 变成「停止」，点它等于取消这一轮 —— 绝不能点。
+    //     此时唯一的发送入口是输入框的回车（bundle 的 onKeyDown → ri()，mode:'queue'，
+    //     宿主会把消息排进队列），所以补发一个真实的 Enter 键盘事件。
+    // 旧实现只有「点按钮」一条路：排队发送被拦下后 sendButton() 恒为 null，于是每次
+    // 都在这里静默放弃 —— 这一下回车凭空消失，文字和图片都留在输入框里。
+    function replaySend() {
+      replaying = true;
+      try {
+        var btn = sendButton();
+        if (btn !== null && btn.disabled !== true) {
+          btn.click();
+          return;
+        }
+        var ta = chatInput();
+        if (ta === null) return;
+        var ev;
+        try {
+          ev = new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true
+          });
+        } catch (e) {
+          ev = document.createEvent('KeyboardEvent');
+          ev.initKeyboardEvent('keydown', true, true, window, 'Enter', 0, '', false, '');
+        }
+        ta.dispatchEvent(ev);
+      } finally {
+        replaying = false;
+      }
+    }
+
     function holdAndSend() {
       if (waiting) return;
       waiting = true;
@@ -4129,10 +4174,10 @@ const SEND_DECODE_GUARD_HTML = `<script>
         if (waiting) showHint();
       }, HINT_AFTER_MS);
       var tick = function () {
-        // 等下去之前先确认「发送」按钮还在：会话被切走、或这一轮已经跑起来变成
-        // 「停止」键时，这次拦截就没有意义了，立刻收手，别留下一个幽灵 toast。
-        var guardBtn = sendButton();
-        if (guardBtn === null) {
+        // 收手条件只有一个：输入框整个不见了（切走会话/退出聊天页）。**不能**用
+        // 「发送按钮不在」当收手条件 —— Agent 在跑时它本来就是「停止」键，而排队
+        // 发送走的正是回车，收手就等于把这次发送吞掉。
+        if (chatInput() === null) {
           waiting = false;
           clearTimeout(hintTimer);
           hideHint();
@@ -4145,15 +4190,8 @@ const SEND_DECODE_GUARD_HTML = `<script>
         waiting = false;
         clearTimeout(hintTimer);
         hideHint();
-        // 重放前重新查一次：等待期间 React 可能已经换过节点。
-        var btn = sendButton();
-        if (btn === null) return;
-        replaying = true;
-        try {
-          btn.click();
-        } finally {
-          replaying = false;
-        }
+        // 重放前重新查一次：等待期间 React 可能已经换过节点 / 换过发送态。
+        replaySend();
       };
       setTimeout(tick, 80);
     }
@@ -6391,6 +6429,14 @@ export function apply(ctx, config) {
   const observers = new Map()
 
   /**
+   * deviceId → 最近一次声明在看的会话（**不随流关闭清掉**）。
+   * 只用于新流进场时补一帧队列：流断了之后 observers 会被 releaseDevice 清空，
+   * 而 bundle 下一次 observe 重申要等最多 30s —— 期间新流拿不到任何队列帧，
+   * dock 就停在断流前的条数上。用它把这段空窗抹掉。
+   */
+  const lastObservedByDevice = new Map()
+
+  /**
    * 登记一台设备正在看的会话。
    *
    * **这是「在看哪个会话」的赋值，不是累加**：bundle 的
@@ -6407,7 +6453,14 @@ export function apply(ctx, config) {
     }
     // 重申即续命：回收器以此为计时基准。
     lastObserved.set(sessionId, Date.now())
-    if (set.size === 1 && set.has(sessionId)) return
+    lastObservedByDevice.set(deviceId, sessionId)
+    if (set.size === 1 && set.has(sessionId)) {
+      // observe 每 30s 重申一次。重申不做「立刻补帧」（指纹会挡住重复），但正是
+      // 一次天然的补漏时机：流断过 / 帧丢过时，这里会把当前队列重新推给每条流
+      //（每流指纹不同才写，没变化时零成本）。没有这一步，丢帧只能等队列再变。
+      emitQueue(sessionId)
+      return
+    }
     set.clear()
     set.add(sessionId)
     // 手机切到这个会话：立刻补一帧当前队列，省掉最多 30s 的 observe 重申空窗。
@@ -6790,6 +6843,13 @@ export function apply(ctx, config) {
               replayAssistantSnapshot(sessionId, f.assistantStream)
               if (typeof f.cursor === 'number') {
                 emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
+                // bundle 收到 session/subscribed 会把队列缓存和 dock 一起清空
+                //（rememberSubscribed → cachedQueueBySession.delete，chat 监听里 Mt([])）。
+                // 跟随流重启（断线/重连/换会话）都会走这里，所以必须紧接着补一帧当前
+                // 队列，否则「已经在排队的消息」会被这次清空从界面上抹掉，而每流指纹
+                // 又认为早就推过了 —— 要等到队列下次变化才恢复。
+                forgetQueue(sessionId)
+                emitQueue(sessionId)
               }
               continue
             }
@@ -6862,9 +6922,8 @@ export function apply(ctx, config) {
   /** 所有存活的 SSE 连接（扇出目标）。 */
   const muxStreams = new Set()
 
-  /** 向所有 SSE 连接推一帧。frame 必须是 bundle 认识的 mux 帧形。 */
-  function emitMux(frame, rpcId) {
-    let line
+  /** 一帧 → 一条 SSE data 行；不可序列化时返回 undefined。 */
+  function muxLineOf(frame, rpcId) {
     try {
       const wire = {
         type: 'server-request',
@@ -6872,10 +6931,16 @@ export function apply(ctx, config) {
         method: 'events.mux',
         payload: frame,
       }
-      line = `data: ${JSON.stringify(wire)}\n\n`
+      return `data: ${JSON.stringify(wire)}\n\n`
     } catch {
-      return // 不可序列化的帧宁可不推，也不能拖垮整条流
+      return undefined // 不可序列化的帧宁可不推，也不能拖垮整条流
     }
+  }
+
+  /** 向所有 SSE 连接推一帧。frame 必须是 bundle 认识的 mux 帧形。 */
+  function emitMux(frame, rpcId) {
+    const line = muxLineOf(frame, rpcId)
+    if (line === undefined) return
     for (const stream of [...muxStreams]) stream.write(line, frame)
   }
 
@@ -6893,8 +6958,9 @@ export function apply(ctx, config) {
   // 所以帧形必须是：{ type:'session/queue', sessionId, items:[{id, placement:'queued', message:{content:[{type:'text',text}]}}] }
   // 且它已在 MUX_ALWAYS_FORWARDED 里，所有设备都收（不按会话过滤）。
 
-  /** 会话 -> 上一次推出去的队列指纹（避免每次投影刷新都重推同一份）。 */
-  const queueFingerprints = new Map()
+  // 每条流的「某会话上一次收到的队列指纹」记在 stream.queueFp（见 emitQueue）。
+  // 这里刻意不再保留会话级的全局指纹：全局指纹会让重连后的新流以为「已经推过了」，
+  // 于是断流期间变化的队列永远补不回来。
 
   /** 把一个 inbox 消息（UserMessage）翻成 bundle 的 le() 认得的行。 */
   function queueItemView(message, placement) {
@@ -6954,14 +7020,30 @@ export function apply(ctx, config) {
       return
     }
     const fingerprint = JSON.stringify(items)
-    if (queueFingerprints.get(sid) === fingerprint) return // 没变化就不推
-    queueFingerprints.set(sid, fingerprint)
-    emitMux({ type: 'session/queue', sessionId: sid, items })
+    // 指纹必须按「每条 SSE 流」各记一份，不能是按会话一份：
+    //   · 手机锁屏/切后台/隧道抖动时流会断，这期间 emitQueue 推的帧没人收；
+    //   · 一条流只可能收到「它连上之后」的帧。若指纹是会话级的，重连时新流看到的
+    //     指纹已经是最新的，于是**永远不再补发**——dock 就停在断流前的条数上
+    //     （实测：宿主 inbox 7 条，界面停在「5 条排队」，等 30s 也不动）。
+    // 每流一份之后，新流的表是空的，一进场就会收到当前完整队列。
+    const line = muxLineOf({ type: 'session/queue', sessionId: sid, items })
+    if (line === undefined) return
+    for (const stream of [...muxStreams]) {
+      if (stream.closed) continue
+      if (!(stream.queueFp instanceof Map)) continue
+      if (stream.queueFp.get(sid) === fingerprint) continue
+      stream.queueFp.set(sid, fingerprint)
+      stream.write(line, { type: 'session/queue', sessionId: sid, items })
+    }
   }
 
-  /** 会话没了/不再被观察时忘掉它的队列指纹（否则重连后拿旧值判重）。 */
+  /** 让某会话的队列帧对每条流重新可见（下次 emitQueue 必推）。 */
   function forgetQueue(sessionId) {
-    queueFingerprints.delete(String(sessionId || ''))
+    const sid = String(sessionId || '')
+    if (sid === '') return
+    for (const stream of muxStreams) {
+      if (stream.queueFp instanceof Map) stream.queueFp.delete(sid)
+    }
   }
 
   /**
@@ -7022,6 +7104,9 @@ export function apply(ctx, config) {
       closed: false,
       // 每会话已推过的最大 seq：follow 重启/重试会重放同一批事件，靠它去重。
       seqWatermark: new Map(),
+      // 每会话已推过的队列指纹：**每条流独立**。新流 / 重连流天然是空表，
+      // 所以断流期间变过的队列会在它进场时补发（详见 emitQueue 的注释）。
+      queueFp: new Map(),
       write(line, frame) {
         if (this.closed) return
         // 路由过滤：手机不看的会话，其事件不过隧道（省移动流量）。
@@ -7043,6 +7128,20 @@ export function apply(ctx, config) {
       },
     }
     muxStreams.add(stream)
+
+    // 新流进场先补一份当前队列（零成本：每流指纹为空 / 与当前值相同就不写）。
+    // 断流期间队列变过的帧只推给了当时还活着的流，新流永远等不到它们；
+    // 观察登记也可能已随上一条流被 releaseDevice 清掉，所以用 lastObservedByDevice
+    // 兜住「同一个聊天页刚重连、还没来得及 observe 重申」的这段空窗。
+    {
+      const watching = observedSessions(deviceId)
+      if (watching.length === 0) {
+        const last = lastObservedByDevice.get(deviceId)
+        if (typeof last === 'string' && last !== '') emitQueue(last)
+      } else {
+        for (const watched of watching) emitQueue(watched)
+      }
+    }
 
     function closeStream() {
       if (stream.closed) return
