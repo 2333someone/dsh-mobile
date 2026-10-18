@@ -2823,7 +2823,10 @@ html.dm-host-page-open body {
 }
 
 /* 内置插件配置的宿主彩色图标（PluginArtwork*，36×36 原图，按卡片尺寸缩放）。 */
-.dm-card-icon-art { background: transparent; }
+/* 内置插件配置四行：宿主原图是 36×36 的透明底 SVG，桌面把它们放在浅灰圆角方片上。
+   原来这里写死 transparent，导致手机上图标「浮」在白卡片上、和实验性/已安装行不一致。
+   这里恢复 .dm-card-icon 的浅灰底（同一 token），圆角与尺寸沿用上面那条。 */
+.dm-card-icon-art { background: var(--bg-elevated, #f1f1f4); }
 .dm-card-icon-art svg { display: block; width: 32px; height: 32px; }
 .dm-card-icon-art.dm-card-icon-lg svg { width: 46px; height: 46px; }
 
@@ -2887,4 +2890,161 @@ html.dm-host-page-open body {
 }
 .dm-mc-sep {
   color: var(--text-tertiary, #6a6a7a);
+}
+
+/* ── 模型页：操作按钮 / 弹层（添加、编辑、删除、默认模型）────────────────── */
+.dm-mc-sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dm-mc-sectionHead .dm-cfg-sectionTitle {
+  margin: 0;
+}
+.dm-mc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.dm-mc-btn {
+  padding: 7px 12px;
+  border: 1px solid var(--border-subtle, #e6e6ea);
+  border-radius: 10px;
+  background: var(--bg-elevated, #f7f7fa);
+  color: var(--text-primary, #1a1a2e);
+  font-size: 13px;
+  line-height: 1.2;
+  -webkit-tap-highlight-color: transparent;
+}
+.dm-mc-btn:active {
+  opacity: 0.8;
+}
+.dm-mc-btn.is-danger {
+  border-color: rgba(209, 36, 47, 0.35);
+  color: #d1242f;
+  background: rgba(209, 36, 47, 0.06);
+}
+.dm-mc-btn[disabled] {
+  opacity: 0.55;
+}
+.dm-mc-sheetHost {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  display: flex;
+  align-items: flex-end;
+}
+.dm-mc-sheetHost[hidden] {
+  display: none !important;
+}
+.dm-mc-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 18, 34, 0.45);
+}
+.dm-mc-sheet {
+  position: relative;
+  width: 100%;
+  max-height: 84vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+  border-radius: 18px 18px 0 0;
+  background: var(--bg-page, #f5f5f7);
+  box-shadow: 0 -8px 28px rgba(16, 24, 40, 0.18);
+}
+.dm-mc-sheetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.dm-mc-sheetTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #1a1a2e);
+}
+.dm-mc-formRow {
+  margin-bottom: 12px;
+}
+.dm-mc-formRow .dm-cfg-label {
+  display: block;
+  margin-bottom: 6px;
+}
+.dm-mc-formRow .dm-cfg-input {
+  margin-top: 0;
+}
+.dm-mc-textarea {
+  min-height: 96px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.45;
+}
+.dm-mc-sheetActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.dm-mc-sheetActions .dm-cfg-save {
+  flex: 1 1 auto;
+}
+.dm-mc-sheetActions .dm-mc-btn {
+  flex: none;
+}
+.dm-mc-sheetErr {
+  margin: 6px 0 0;
+}
+.dm-mc-list {
+  margin-top: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle, #f0f0f2);
+  border-radius: 12px;
+  background: var(--bg-surface, #ffffff);
+}
+.dm-mc-listItem {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle, #f0f0f2);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+.dm-mc-listItem:last-child {
+  border-bottom: 0;
+}
+.dm-mc-listName {
+  display: block;
+  font-size: 14px;
+  color: var(--text-primary, #1a1a2e);
+}
+.dm-mc-listSub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-tertiary, #6a6a7a);
+  word-break: break-all;
+}
+.dm-mc-search {
+  margin-top: 8px;
+}
+.dm-mc-customBtn {
+  width: 100%;
+  margin-top: 10px;
+}
+.dm-mc-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary, #4a4a5a);
 }
