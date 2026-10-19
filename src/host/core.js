@@ -1036,7 +1036,6 @@ export function createHost(ctx, config) {
 
   const state = createHostState({ devices: loadDevices(cfg.devicesFile) })
   const devices = state.devices
-  let pairToken = null // { code, expiresAt, fixed }
   let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
   // 发送模式：手机端唯一一处真值；下发 mobile.preferences，写回 session.prompt。
   let sendMode = loadSendMode(cfg.sendModeFile)
@@ -1159,11 +1158,11 @@ export function createHost(ctx, config) {
     const fixed = fixedPairCode()
     if (fixed !== '') {
       // 固定码：永不过期，随时可配（不再随机、不再 5 分钟失效）。
-      pairToken = { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
-      return pairToken
+      state.pairToken = { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
+      return state.pairToken
     }
-    pairToken = { code: String(randomInt(0, 1e6)).padStart(6, '0'), expiresAt: Date.now() + TOKEN_TTL_MS, fixed: false }
-    return pairToken
+    state.pairToken = { code: String(randomInt(0, 1e6)).padStart(6, '0'), expiresAt: Date.now() + TOKEN_TTL_MS, fixed: false }
+    return state.pairToken
   }
 
   function acceptPairCode(code, userAgent) {
@@ -1174,12 +1173,12 @@ export function createHost(ctx, config) {
       return createDevice(userAgent)
     }
     const now = Date.now()
-    if (!pairToken || pairToken.code !== input || now > pairToken.expiresAt) {
-      if (pairToken && now > pairToken.expiresAt) pairToken = null
+    if (!state.pairToken || state.pairToken.code !== input || now > state.pairToken.expiresAt) {
+      if (state.pairToken && now > state.pairToken.expiresAt) state.pairToken = null
       return null
     }
     const created = createDevice(userAgent)
-    if (created) pairToken = null
+    if (created) state.pairToken = null
     return created
   }
 
@@ -1278,7 +1277,7 @@ export function createHost(ctx, config) {
     const fixed = fixedPairCode()
     const pending = fixed !== ''
       ? { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
-      : (pairToken && now <= pairToken.expiresAt ? { code: pairToken.code, expiresAt: pairToken.expiresAt, fixed: false } : null)
+      : (state.pairToken && now <= state.pairToken.expiresAt ? { code: state.pairToken.code, expiresAt: state.pairToken.expiresAt, fixed: false } : null)
     sendJson(res, 200, { ok: true, addresses: accessAddresses(), devices: devicesView, pending })
   }
 
@@ -6284,7 +6283,7 @@ export function createHost(ctx, config) {
       if (changed) {
         try { persistDevices(cfg.devicesFile, devices) } catch (e) {}
       }
-      if (pairToken && now > pairToken.expiresAt) pairToken = null
+      if (state.pairToken && now > state.pairToken.expiresAt) state.pairToken = null
     }, SWEEP_INTERVAL_MS)
     timer.unref?.()
     return () => clearInterval(timer)

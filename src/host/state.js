@@ -9,6 +9,8 @@ export function createHostState({ devices }) {
   return {
     // 设备表：deviceId -> { token, createdAt, lastSeenAt, ... }
     devices,
+    // 当前待用的 6 位配对码（null = 没有有效码）
+    pairToken: null,
     // 待处理：approval / question 的 rpcId 注册表（含 resolve）
     pending: {
       approvals: new Map(),
