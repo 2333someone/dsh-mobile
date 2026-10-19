@@ -3341,3 +3341,24 @@ img.chat-msg-image {
   box-shadow: 0 0 0 2px var(--bg-page, #f5f5f7);
   pointer-events: none;
 }
+
+/* 迁移 C 内化：输入框单行居中（原 INPUT_TEXT_CENTER 的 canvas 反解已删除）。
+   默认单行 = 9/13（整体上移 2px，总高不变）；显式换行/折行时切回 11/11。 */
+.chat-input:not(.dm-input-multiline) {
+  padding-top: 9px !important;
+  padding-bottom: 13px !important;
+}
+.chat-input.dm-input-multiline {
+  padding-top: 11px !important;
+  padding-bottom: 11px !important;
+}
+
+/* 迁移 C 内化：聊天步骤/触发器图标与文字的光学对齐。
+   原 ICON_OPTICAL_ALIGN 用 canvas 量墨迹逐图标算 translateY；实测偏差在 ±0.6px，
+   这里固化成 CSS（换字体仍可能差零点几像素，肉眼不可见）。 */
+.chat-proc-current .chat-step-icon {
+  transform: translateY(0.2px);
+}
+.chat-trigger-head .chat-trigger-icon {
+  transform: translateY(-0.6px);
+}
