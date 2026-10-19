@@ -5864,10 +5864,14 @@ export function createHost(ctx, config) {
     // 只读自检：不需要登录/配对，任何能访问到本插件的人都能打开。
     if (path === PUSH_CHECK_URL) return sendHtml(res, 200, pushCheckPageHtml())
     if (path === BUNDLE_URL) {
-      // bundle 会随插件更新（例如把设置行内建进去）。必须显式 no-store：
-      // 1) sendBuffer 默认 public,max-age=3600，先 setHeader 会被它覆盖；
-      // 2) 浏览器启发式缓存也会留下旧模块。
-      return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'), { 'Cache-Control': 'no-store' })
+      // 页面引用的是 mobile.js?v=<bundle 版本>：同一版本内容永不变化，可以长缓存。
+      // 否则每次打开/刷新手机页面都要重传 1.1MB（br 288KB），弱网下就是"加载很慢"。
+      // 版本升级时 HTML 里的 ?v 会变 → 自然重新拉取；没有 ?v 的请求（手输地址/旧书签）
+      // 仍走 no-store，避免拿到旧模块。
+      const versioned = url.searchParams.has('v')
+      return sendBuffer(res, 200, 'text/javascript; charset=utf-8', asset('mobile.bundle.js'), {
+        'Cache-Control': versioned ? 'public, max-age=31536000, immutable' : 'no-store',
+      })
     }
     if (path === MANIFEST_URL) return sendText(res, 200, 'application/manifest+json', manifestJson())
     if (path === ICON_SVG_URL) return sendBuffer(res, 200, 'image/svg+xml', asset('icon.svg'))
