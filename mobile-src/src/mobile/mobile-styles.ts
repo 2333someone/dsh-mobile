@@ -4462,7 +4462,9 @@ button.settings-row:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px 0;
+  /* 底部留 8px：工具行去掉容器后图标直接落在页面底色上，需要与输入框之间
+     保留一点呼吸间距（原来胶囊自带的 3px 内边距 + 玻璃底给了同样的视觉间隔）。 */
+  padding: 8px 16px var(--space-2);
 }
 
 .chat-tools-actions {
@@ -7029,15 +7031,19 @@ details.think-block[open] .chat-disclosure-caret {
   transform: scale(var(--press-scale));
 }
 
-/* 工具栏容器：玻璃胶囊（图标本体尺寸/描边/颜色保持现状） */
+/* 工具栏一行：**没有容器** —— 图标直接落在页面底色上（用户要求去掉玻璃胶囊：
+   背景 / backdrop-blur / 边框 / 阴影 / 圆角 / 内边距全部移除）。它仍是输入框
+   上方的一排（7 个按钮 + 上下文环）；间距用 --space-1 token。按钮热区
+   （--tool-height）与图标本体尺寸/描边/颜色保持原值，不因去容器而变小。 */
 #dm-tools {
-  gap: 2px;
-  padding: 3px 5px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-full);
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
-  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 #dm-tools .dm-tool-btn,
 #dm-model-btn {
