@@ -13,6 +13,7 @@ import { MODEL_BUTTON_HTML } from './model-button.ts'
 import { EMOJI_ICON_HTML } from './emoji-icon.ts'
 import { TURN_PILL_HTML } from './turn-pill.ts'
 import { PRESET_BTN_HTML } from './preset-btn.ts'
+import { PRESET_STATUS_HTML } from './preset-status.ts'
 import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
 import { USAGE_INLINE_HTML } from './usage-inline.ts'
 import { PENDING_ALERTS_HTML } from './pending-alerts.ts'
@@ -22,6 +23,7 @@ const TOOLBAR_ORDER: readonly string[] = [
   EMOJI_ICON_HTML,
   TURN_PILL_HTML,
   PRESET_BTN_HTML,
+  PRESET_STATUS_HTML,
   QUEUE_DOCK_PLACE_HTML,
   USAGE_INLINE_HTML,
   PENDING_ALERTS_HTML
