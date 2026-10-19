@@ -356,10 +356,9 @@ export const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" t
       var key = iconKeyOf(it);
       var icon = key === '' ? undefined : CMD_ICONS[key];
       if (!icon) return '';
-      // 图标按 22px 画（桌面菜单也是这个观感）。桌面图标的 stroke-width 是按 16 单位
-      // viewBox 给的（1 = 1px）；放大到 22px 后若沿用原值，线条会变成 1.375px 显得发粗，
-      // 所以按 16/22 折算，让描边保持 1px 的绝对粗细，而填充细节（笔尖、齿轮齿）随尺寸放大。
-      var ICON_BOX = 22;
+      // 图标按 16px 画，与同组其它命令图标一致；stroke-width 仍按 16 视框给值
+      //（倍率为 1），所以描边就是 1px，和「文件/目标/反馈」那几颗完全相同。
+      var ICON_BOX = 16;
       var ICON_SW = (icon.sw === undefined ? 1.2 : Number(icon.sw)) * (16 / ICON_BOX);
       return '<svg class="dm-cmd-icon" width="' + ICON_BOX + '" height="' + ICON_BOX + '" viewBox="' + icon.vb + '" fill="none" stroke="currentColor" stroke-width="' + ICON_SW.toFixed(3) + '" style="width:' + ICON_BOX + 'px;height:' + ICON_BOX + 'px" aria-hidden="true">' + icon.html + '</svg>';
     }
