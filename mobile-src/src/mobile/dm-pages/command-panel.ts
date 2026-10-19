@@ -1,4 +1,4 @@
-import { iconParts } from '../design/icons.tsx'
+import { ICONS, iconParts, type IconName } from '../design/icons.tsx'
 
 /**
  * 迁移 A：1:1 搬自宿主 index.js 的 `COMMAND_PANEL_HTML` 注入字符串。
@@ -8,29 +8,82 @@ import { iconParts } from '../design/icons.tsx'
  * `dm-pages/index.ts` 在 bundle 启动时按原顺序安装到 document。
  */
 /**
- * 命令面板 8 条宿主命令的图标：桌面端同源（design/icons.tsx）。
- *   file→commandFile · goal→commandGoal · plan→commandPlan · feedback→commandFeedback
- *   compact→commandCompact · permission→commandPermission · model→commandModel
- *   export→commandExport
- * 「skill」（宿主动态技能组）与「orchestrate」（本机插件命令）桌面端没有对应图标，
- * 继续用原内联形状，并在设计报告里列为「桌面端缺失/借用」。
+ * 命令面板的全部图标都来自 `design/icons.tsx`（唯一图标源，桌面端同一份 svg），
+ * 这里**不画任何形状**，只做「名字 → catalog 键」的映射：
+ *   · 宿主命令：file/goal/plan/feedback/compact/permission/model/export 与桌面
+ *     ui-commands 的 HOST_FACES 一一对应；orchestrate 桌面没有 → catalog 里是
+ *     借用项（commandOrchestrate，来源见 icons.tsx 的 borrowed 注释）。
+ *   · 技能行：桌面 slash 候选本身不带图标（ui-skill 的 candidates 只给
+ *     name/description），所以按技能的 name/description 语义映射到桌面 primitives
+ *     里现成的图标（SKILL_ICON_RULES）；没有任何命中的回退到 commandSkill
+ *     （桌面 SkillRow 用的那枚 IconSkillOutlineRegular）。
  */
+type IconKey = IconName
+
+const ICON_CATALOG: Readonly<Record<string, IconKey>> = {
+  // 宿主命令 / 本机动作（与桌面命令 face 同名）
+  file: 'commandFile',
+  goal: 'commandGoal',
+  plan: 'commandPlan',
+  feedback: 'commandFeedback',
+  compact: 'commandCompact',
+  permission: 'commandPermission',
+  model: 'commandModel',
+  export: 'commandExport',
+  orchestrate: 'commandOrchestrate',
+  skill: 'commandSkill',
+  // 技能语义规则可用的桌面现成图标
+  search: 'actionSearch',
+  edit: 'actionEdit',
+  download: 'actionDownload',
+  refresh: 'actionRefresh',
+  terminal: 'pageBuiltinTerminal',
+  plugins: 'pagePlugins',
+  subagent: 'pageBuiltinSubagent',
+  shield: 'commandPermission',
+  usage: 'pageUsage',
+  models: 'pageModels',
+}
+
+/**
+ * 技能 → 桌面现成图标的语义规则（按顺序命中；pattern 在页面里构造成 RegExp）。
+ * 桌面端自己不给每个技能配图标，这里只挑**已存在的桌面图标**做语义近似，
+ * 绝不新增/自绘形状；未命中任何规则时回退 commandSkill。
+ */
+const SKILL_ICON_RULES: ReadonlyArray<readonly [string, string]> = [
+  ['orchestrat', 'orchestrate'],
+  ['find[-_ ]?skills?|skill.*(discover|install)', 'search'],
+  ['computer[-_ ]use|gui|screen|browser', 'models'],
+  ['diagnos|sandbox|acl', 'shield'],
+  ['orca[-_ ]?cli|terminal|shell|bash|\\bcli\\b', 'terminal'],
+  ['^office-export-pdf|export-pdf', 'download'],
+  ['^office-recalculate|recalculate|formula', 'refresh'],
+  ['^office-render|render', 'models'],
+  ['^office-docx|docx|\\bword\\b', 'edit'],
+  ['^office-xlsx|xlsx|excel|spreadsheet|\\bsheet\\b', 'usage'],
+  ['^office-pptx|pptx|powerpoint|slide', 'models'],
+  ['^office\\b|\\boffice', 'file'],
+  ['cordis|plugin|composition|preset', 'plugins'],
+  ['subagent|agent[-_ ]team|team|worker', 'subagent'],
+]
+
 const CMD_ICON_PARTS: Readonly<Record<string, { vb: string; html: string; sw?: string }>> = (() => {
-  const map: Record<string, string> = {
-    file: 'commandFile',
-    goal: 'commandGoal',
-    plan: 'commandPlan',
-    feedback: 'commandFeedback',
-    compact: 'commandCompact',
-    permission: 'commandPermission',
-    model: 'commandModel',
-    export: 'commandExport',
-  }
   const out: Record<string, { vb: string; html: string; sw?: string }> = {}
-  for (const [command, icon] of Object.entries(map)) {
-    const parts = iconParts(icon as Parameters<typeof iconParts>[0])
-    const sw = parts.rootAttrs['stroke-width']
-    out[command] = { vb: parts.viewBox, html: parts.inner, ...(sw === undefined ? {} : { sw: String(sw) }) }
+  for (const [logical, catalogKey] of Object.entries(ICON_CATALOG)) {
+    const parts = iconParts(catalogKey)
+    // 图标根属性用 camelCase（strokeWidth），兼容 kebab-case 写法。
+    const sw = parts.rootAttrs['stroke-width'] ?? parts.rootAttrs.strokeWidth
+    out[logical] = { vb: parts.viewBox, html: parts.inner, ...(sw === undefined ? {} : { sw: String(sw) }) }
+  }
+  return out
+})()
+
+/** 逻辑键 → 出处（打印/验收用：包名 + 文件 + 图标键）。 */
+const CMD_ICON_SOURCES: Readonly<Record<string, string>> = (() => {
+  const out: Record<string, string> = {}
+  for (const [logical, catalogKey] of Object.entries(ICON_CATALOG)) {
+    const meta = ICONS[catalogKey]
+    out[logical] = meta.borrowed === undefined ? meta.source : `${meta.source}（借用：${meta.borrowed}）`
   }
   return out
 })()
@@ -316,30 +369,39 @@ export const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" t
       return parts.join(' ').toLowerCase();
     }
 
-    // ── 行首图标：与宿主（桌面端 / 命令菜单）同一套 16×16 线性图标 ──────────────
-    // 路径直接取自宿主 client-ui-primitives 的 *Regular 图标（file 用回形针、
-    // goal 准星、plan 计划页、feedback 纸飞机、compact 圆环、permission 盾牌、
-    // model 数据库、export 下载）。技能组的命令是动态名字，统一用技能图标；
-    // 其它未知命令留一个空盒子，保证文字仍然对齐（和宿主菜单一致）。
-    var CMD_ICONS = Object.assign(${JSON.stringify(CMD_ICON_PARTS)}, {
-            skill: { vb: '0 0 17 17', html: '<path d="M4.57788 5.77124H10.7029" fill="none" stroke="currentColor"/><path d="M4.57788 8.89819H7.91879" fill="none" stroke="currentColor"/><path d="M12.1404 1.19446C12.9442 1.19446 13.6404 1.81999 13.6404 2.64465V8.89856H12.6404V2.64465C12.6404 2.42015 12.4411 2.19446 12.1404 2.19446H3.14038C2.83968 2.19446 2.64038 2.42015 2.64038 2.64465V13.0929C2.64082 13.3172 2.84001 13.5421 3.14038 13.5421H8.88159V14.5421H3.14038C2.33675 14.5421 1.6408 13.9172 1.64038 13.0929V2.64465C1.64038 1.81999 2.33651 1.19446 3.14038 1.19446H12.1404Z" fill="currentColor" stroke="none"/><path d="M12.0051 15.1056C12.0051 13.6395 10.8166 12.451 9.35059 12.451C10.8166 12.451 12.0051 11.2626 12.0051 9.79651C12.0051 11.2626 13.1936 12.451 14.6597 12.451C13.1936 12.451 12.0051 13.6395 12.0051 15.1056Z" fill="none" stroke="currentColor"/>' },
-            orchestrate: { vb: '0 0 24 24', sw: '1.8', html: '<circle cx="4.5" cy="12" r="2.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.6 12H10.4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.4 12L15.2 7.2H19.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 5.1L19.1 7.2L17 9.3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.4 12L15.2 16.8H19.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 14.7L19.1 16.8L17 18.9" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/>' },
+    // ── 行首图标：全部来自 design/icons.tsx 的桌面端图标（唯一来源）─────────────
+    // 宿主命令与桌面 ui-commands 的 HOST_FACES 一一对应；orchestrate 桌面没有 →
+    // catalog 里是借用项；技能行按 name/description 语义映射到桌面现成图标
+    // （SKILL_ICON_RULES），未命中回退到桌面 SkillRow 的技能图标（commandSkill）。
+    var CMD_ICONS = ${JSON.stringify(CMD_ICON_PARTS)};
+    var CMD_ICON_SOURCES = ${JSON.stringify(CMD_ICON_SOURCES)};
+    var SKILL_ICON_RULES = ${JSON.stringify(SKILL_ICON_RULES)}.map(function (rule) {
+      return [new RegExp(rule[0], 'i'), rule[1]];
     });
+    window.__dmCommandIconSources = CMD_ICON_SOURCES;
 
-    // 图标键：文件/模型等本机动作按 name 命中；技能统一用「技能」图标；
-    // 没有任何命中时返回空（渲染成空盒子，保持文字对齐，但验收要求 0 个空图标）。
+    // 图标键：命令/本机动作按 name 命中；技能行先走语义规则，再回退 skill。
     function iconKeyOf(it) {
       var key = it && typeof it.name === 'string' ? it.name : '';
       if (CMD_ICONS[key]) return key;
-      if (it && it.group === '技能') return 'skill';
+      if (it && it.group === '技能') {
+        var hay = String(it.name || '') + ' ' + String(it.description || '');
+        for (var i = 0; i < SKILL_ICON_RULES.length; i++) {
+          if (CMD_ICONS[SKILL_ICON_RULES[i][1]] && SKILL_ICON_RULES[i][0].test(hay)) return SKILL_ICON_RULES[i][1];
+        }
+        if (CMD_ICONS.skill) return 'skill';
+      }
       return '';
     }
 
+    // 尺寸归一：所有行统一 16×16 渲染（桌面命令 face 的默认尺寸），描边用图标
+    // 自己的 rootProps（16 视框 = 1）。inline style 覆盖 theme.css 里 19px 的旧值，
+    // 行高/字号/间距一律不动。
     function iconHtml(it) {
       var key = iconKeyOf(it);
       var icon = key === '' ? undefined : CMD_ICONS[key];
       if (!icon) return '';
-      return '<svg class="dm-cmd-icon" viewBox="' + icon.vb + '" fill="none" stroke="currentColor" stroke-width="' + (icon.sw || '1.2') + '" aria-hidden="true">' + icon.html + '</svg>';
+      return '<svg class="dm-cmd-icon" width="16" height="16" viewBox="' + icon.vb + '" fill="none" stroke="currentColor" stroke-width="' + (icon.sw || '1.2') + '" style="width:16px;height:16px" aria-hidden="true">' + icon.html + '</svg>';
     }
 
     // 一行 = [图标] [/name 中文标签] [右侧说明，单行省略]
@@ -354,6 +416,8 @@ export const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" t
       if (it.source) row.setAttribute('data-source', it.source);
       if (it.group) row.setAttribute('data-group', it.group);
       row.setAttribute('data-icon', iconKeyOf(it));
+      var iconKey = iconKeyOf(it);
+      if (iconKey !== '') row.setAttribute('data-icon-src', CMD_ICON_SOURCES[iconKey] || iconKey);
       var icon = iconHtml(it);
       var iconBox = el('span', 'dm-cmd-iconbox');
       if (icon !== '') iconBox.innerHTML = icon;
