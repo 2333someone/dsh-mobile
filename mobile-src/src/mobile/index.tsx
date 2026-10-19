@@ -17,6 +17,7 @@ import { registerMobilePwa } from '../mobile-pwa.ts'
 import { consumeMobilePairUrl } from './pairing.ts'
 import { installDmPages } from './dm-pages/index.ts'
 import { installDmToolbar } from './dm-toolbar/index.ts'
+import { installDmPatches } from './dm-patches/index.ts'
 
 // Apply the persisted (or default system) theme and the local display
 // preferences before first paint, so the page never flashes the wrong look.
@@ -34,6 +35,8 @@ document.head.appendChild(style)
 installDmPages()
 // 迁移 B：工具栏/行内控件（原 index.js 的 *_HTML 注入）。
 installDmToolbar()
+// 迁移 C：行为补丁（原 index.js 的 *_HTML 注入）。
+installDmPatches()
 
 const root = document.getElementById('root')
 if (root === null) throw new Error('mobile: #root missing')
