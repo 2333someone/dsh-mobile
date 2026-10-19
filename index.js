@@ -5496,8 +5496,9 @@ const INPUT_TEXT_CENTER_HTML = `<script>
 
     var inkCache = {};
     var lastKey = '';
-    // 单行文字整体上移的默认量（px）。用户反馈：几何居中后仍觉得略低，故上移 1px。
-    var DEFAULT_BIAS = 1;
+    // 单行文字整体上移的默认量（px）。用户反馈：几何居中后仍觉得略低；
+    // 先上移 1px，仍偏低，再上移 1px → 共 2px。
+    var DEFAULT_BIAS = 2;
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext ? canvas.getContext('2d') : null;
 
