@@ -21,7 +21,7 @@ import { join, basename, resolve as resolvePath, relative as relativePath, isAbs
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
-import { textOfEventData, muxLineOf, queueItemView, createMuxRuntime } from './sse.js'
+import { textOfEventData, muxLineOf, queueItemView, createMuxRuntime, createSseRuntime } from './sse.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
@@ -547,6 +547,10 @@ export function createHost(ctx, config) {
   const state = createHostState({ devices: loadDevices(cfg.devicesFile) })
   const devices = state.devices
   const { muxVisibleTo, emitMux } = createMuxRuntime({ state })
+  const {
+    forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent,
+  } = createSseRuntime({ state })
+
   const {
     deviceTokensOf, authenticatedDevice, describeDeviceUA, createDevice,
     fixedPairCode, issuePairToken, acceptPairCode,
@@ -4551,21 +4555,7 @@ export function createHost(ctx, config) {
   const lastStep = state.lastStep
 
   /** 记下真事件里的 turn/step 边界（step/start、turn/start 都带 turn，step/start 另带 step）。 */
-  function noteStepEvent(sessionId, event) {
-    if (!event || typeof event !== 'object') return
-    if (event.type !== 'step/start' && event.type !== 'turn/start') return
-    const data = event.data && typeof event.data === 'object' ? event.data : {}
-    const turn = typeof data.turn === 'number' ? data.turn : undefined
-    const step = typeof data.step === 'number' ? data.step : undefined
-    if (turn === undefined) return
-    const prev = lastStep.get(sessionId)
-    // 只进不退：乱序/重放不会把 turn 拉回去。
-    if (prev !== undefined && (prev.turn > turn || (prev.turn === turn && (prev.step ?? -1) > (step ?? -1)))) return
-    lastStep.set(sessionId, { turn, ...(step === undefined ? {} : { step }) })
-    if (lastStep.size > 256) {
-      for (const k of [...lastStep.keys()].slice(0, lastStep.size - 256)) lastStep.delete(k)
-    }
-  }
+
 
   /**
    * 取（必要时新建）某会话当前 attempt 的流式状态。
@@ -4582,34 +4572,7 @@ export function createHost(ctx, config) {
    *      逐字效果退化成「每来一个字就新开一个气泡」。
    * 真正的「换一轮」是 attemptId 变了（新一轮 index 从 0 重来），只按它判。
    */
-  function streamStateFor(sessionId, attemptId, revision) {
-    const key = `${sessionId}\u0000${attemptId ?? ''}`
-    let st = streamStates.get(key)
-    if (st === undefined || st.attemptId !== attemptId) {
-      // 换 attempt：上一套状态整块作废（同时把旧的收走，避免 Map 膨胀）。
-      if (st !== undefined) streamStates.delete(key)
-      st = {
-        key,
-        attemptId,
-        revision,
-        seen: new Set(),
-        lastIndex: -1,
-        turn: undefined,
-        step: undefined,
-        seq: 0,
-        seqBase: 0,
-      }
-      streamStates.set(key, st)
-      // 兜底上限：异常多的 attemptId 时不让 Map 无界增长。
-      if (streamStates.size > 64) {
-        for (const k of [...streamStates.keys()].slice(0, streamStates.size - 64)) streamStates.delete(k)
-      }
-    } else if (typeof revision === 'number') {
-      // 同一轮内的后续帧：只把 revision 往前推（它是帧序号，不是身份）。
-      st.revision = revision
-    }
-    return st
-  }
+
 
   /**
    * 把宿主的一个 assistant-stream 帧翻译成手机 bundle 认识的 `session/event`。
@@ -4620,64 +4583,7 @@ export function createHost(ctx, config) {
    *
    * @returns 合成的事件对象；返回 undefined 表示该帧不必推给手机。
    */
-  function assistantStreamEvent(sessionId, frame) {
-    if (!frame || typeof frame !== 'object') return undefined
-    const attemptId = typeof frame.attemptId === 'string' ? frame.attemptId : undefined
-    const revision = typeof frame.revision === 'number' ? frame.revision : undefined
 
-    // start：只记 turn/step，供后续 chunk 定位同一个气泡。不推帧。
-    if (frame.type === 'start') {
-      const st = streamStateFor(sessionId, attemptId, revision)
-      if (typeof frame.turn === 'number') st.turn = frame.turn
-      if (typeof frame.step === 'number') st.step = frame.step
-      // startedAfterSeq = 「这一轮开始时，会话里最后一个已落盘的 seq」。
-      // 合成 chunk 的 seq 必须以它为基准，否则 fold() 按 seq 排序时会把正在生成的
-      // 气泡排到已有历史消息**前面**去（假 seq 从 0 起会闹这个笑话）。
-      if (typeof frame.startedAfterSeq === 'number' && Number.isFinite(frame.startedAfterSeq)) {
-        st.seqBase = frame.startedAfterSeq
-      }
-      return undefined
-    }
-    // end：收尾，丢弃这一轮的状态。不推帧。
-    if (frame.type === 'end') {
-      const st = streamStates.get(`${sessionId}\u0000${attemptId ?? ''}`)
-      if (st !== undefined) streamStates.delete(st.key)
-      return undefined
-    }
-    if (frame.type !== 'chunk') return undefined
-
-    const st = streamStateFor(sessionId, attemptId, revision)
-    // ── 去重：同一个 index 只推一次（重复推会让气泡里的字重复出现）──────────
-    if (typeof frame.index === 'number' && Number.isFinite(frame.index)) {
-      if (st.seen.has(frame.index)) return undefined
-      if (st.seen.size >= STREAM_SEEN_INDEX_MAX) {
-        // 触顶：退化成「只接受递增的 index」，不再无界记录。
-        if (frame.index <= st.lastIndex) return undefined
-      } else {
-        st.seen.add(frame.index)
-      }
-      // ── 顺序：乱序会让气泡里的字错乱，落后的 index 直接丢 ──────────────────
-      //（宿主按 index 递增产出；真乱序时丢一个字好过把整段文字打乱）
-      if (frame.index < st.lastIndex) return undefined
-      st.lastIndex = frame.index
-    }
-
-    // bundle 的 `ze()` 归一化器只认 chunk.type ∈ {'text-delta','reasoning-delta'}，
-    // 且 text 是非空字符串；其余（如 tool-call-delta）它直接返回 null → 不渲染。
-    const chunk = frame.chunk
-    if (!chunk || typeof chunk !== 'object') return undefined
-    if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') return undefined
-    if (typeof chunk.text !== 'string' || chunk.text === '') return undefined
-
-    // 合成 assistant/chunk 事件。seq 必须落在 (lastPersisted, lastPersisted+1)
-    // 这个**开区间**里 —— 见 STREAM_SEQ_SLOTS 的注释：用整数（旧实现 startedAfterSeq+index+1）
-    // 会把手机端的 maxSeq 顶到真事件之后，随后落盘的 assistant/message、tool/call、
-    // step/end、turn/end 全部被 bundle 的 fold() 当「旧事件」丢掉，手机只剩半截流式文本。
-    // 基准取「已经流过去的真事件里最大的 seq」而不是只取 startedAfterSeq：宿主一轮里
-    // 会连续落盘多条事件，每落一条水位就抬一次，chunk 必须跟着抬，否则会被判旧。
-    let slot = typeof frame.index === 'number' && Number.isFinite(frame.index) ? frame.index + 1 : ++st.seq
-    return buildAssistantChunkEvent(sessionId, st, slot, frame.time, chunk)
-  }
 
   /**
    * 用「流式状态 + slot」合成一条 `assistant/chunk` 事件（live chunk 与快照补放共用）。
@@ -4972,13 +4878,7 @@ export function createHost(ctx, config) {
   }
 
   /** 让某会话的队列帧对每条流重新可见（下次 emitQueue 必推）。 */
-  function forgetQueue(sessionId) {
-    const sid = String(sessionId || '')
-    if (sid === '') return
-    for (const stream of muxStreams) {
-      if (stream.queueFp instanceof Map) stream.queueFp.delete(sid)
-    }
-  }
+
 
   /**
    * 子代理会话必须走 durable 父地址，否则宿主 validateAddress 会抛 session/agent-busy
