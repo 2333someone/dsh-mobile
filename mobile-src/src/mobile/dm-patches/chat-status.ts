@@ -111,6 +111,46 @@ export const CHAT_STATUS_HTML = `<script>
       }
     }
 
+    // ── 2c) 运行中显示已用时：深度求索中，用时 N 秒 ─────────────────────────
+    // 起点 = 原始 SSE 的 turn/start（§5 的 EventSource 包装里置位）；没收到
+    // turn/start（例如刚进页面时回合已经在跑）时退回「第一次看到运行中的状态行」。
+    // 每秒刷新走共享的 __dmEnsureTick，不新开 setInterval；turn 结束后停表、把最后
+    // 一次的用时原样保留（不跳回 0），下一轮 turn/start 重新计时。
+    var turnStart = 0;
+    var elapsedEl = null;
+    var ELAPSED_CLASS = 'dm-turn-elapsed';
+
+    function fmtElapsed(ms) {
+      var total = Math.floor(ms / 1000);
+      if (total < 0) total = 0;
+      if (total < 60) return total + ' 秒';
+      return Math.floor(total / 60) + ' 分 ' + (total % 60) + ' 秒';
+    }
+
+    function syncElapsed() {
+      var rows = document.querySelectorAll(TURN);
+      var row = rows.length ? rows[0] : null;
+      if (!row) { elapsedEl = null; return; }
+      var running = !TURN_ENDED && turnState(row) === RUNNING;
+      if (!running) return;                       // 结束态：冻结在最后一秒，不重写
+      var textNode = null;
+      for (var k = 0; k < row.childNodes.length; k++) {
+        var n = row.childNodes[k];
+        if (n.nodeType === 3 && trim(n.nodeValue) !== '') { textNode = n; break; }
+      }
+      if (!textNode) return;
+      if (turnStart === 0) turnStart = Date.now();
+      if (!elapsedEl || elapsedEl.parentNode !== row) {
+        elapsedEl = document.createElement('span');
+        elapsedEl.className = ELAPSED_CLASS;
+        // 等宽数字：秒数跳动时行宽不抖，320 下不换行、不挤压。
+        elapsedEl.style.fontVariantNumeric = 'tabular-nums';
+        row.insertBefore(elapsedEl, textNode.nextSibling);
+      }
+      var label = '，用时 ' + fmtElapsed(Date.now() - turnStart);
+      if (elapsedEl.textContent !== label) elapsedEl.textContent = label;
+    }
+
     function syncTurn() {
       var rows = document.querySelectorAll(TURN);
       for (var i = 0; i < rows.length; i++) {
@@ -373,6 +413,7 @@ export const CHAT_STATUS_HTML = `<script>
               var event = msg && msg.event;
               if (!event || msg.type !== 'session/event') return;
               if (event.type === 'turn/start') {
+                turnStart = Date.now();
                 if (TURN_ENDED) { TURN_ENDED = false; schedule(); }
               } else if (event.type === 'turn/end') {
                 if (!TURN_ENDED) { TURN_ENDED = true; schedule(); }
@@ -398,6 +439,7 @@ export const CHAT_STATUS_HTML = `<script>
       try { dedupeProcCurrent(); } catch (e) {}
       try { progressiveStep(); } catch (e) {}
       try { renameTurnText(); } catch (e) {}
+      try { syncElapsed(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
       try { syncStatusText(); } catch (e) {}
     }
@@ -423,6 +465,10 @@ export const CHAT_STATUS_HTML = `<script>
       attributeFilter: ['aria-label']
     });
     }
+    // 用时每秒刷新：复用共享 ensure tick（120ms 一条表，任务按 period 到期才跑），
+    // 不新开 setInterval；状态行不在时 ready() 为假，整条 tick 会自己停表。
+    if (window.__dmEnsureTick) window.__dmEnsureTick.add(syncElapsed, 1000, function () { return !!document.querySelector(TURN); });
+
     // 必须在 bundle 的模块脚本执行前装上（本脚本是内联 classic，早于 deferred
     // module），这样 mux 的 new EventSource 才会经过我们的包装。
     watchTurnEnd();
