@@ -10886,6 +10886,19 @@ export function apply(ctx, config) {
       ...(entry.callId === undefined ? {} : { callId: entry.callId }),
       ...(entry.reason === undefined ? {} : { reason: mobileReason(entry) }),
     }, rpcId)
+    // 系统通知面：页面在后台/锁屏时 events.notify 会弹通知 + 震动。
+    // 「隐藏详情」开关走服务端 notifyConfig.hideDetails（与第三方推送同一份配置）。
+    const hideNotificationDetail = !!(notifyConfig && notifyConfig.hideDetails === true)
+    const approvalTitle = `需要审批 · ${typeof entry.toolName === 'string' ? entry.toolName : '工具'}`
+    const approvalBody = hideNotificationDetail ? '有一个审批正等着你处理' : (mobileReason(entry) || '有一个审批正等着你处理')
+    emitNotify({
+      title: approvalTitle,
+      body: approvalBody,
+      id: `approval-${approvalId}`,
+      sessionId,
+    })
+    // 浏览器通知不可用（页面已关/权限没给）时，已配置的第三方通道仍能提醒。
+    deliverNotify(notifyConfig, { title: approvalTitle, body: approvalBody }).catch(() => {})
     return entry
   }
 
@@ -10922,6 +10935,18 @@ export function apply(ctx, config) {
       sessionId,
       questions: entry.questions,
     }, rpcId)
+    // 系统通知面：提问也要提醒（否则手机在后台时同样静默）。
+    const firstQuestion = entry.questions[0] && typeof entry.questions[0].question === 'string'
+      ? entry.questions[0].question
+      : ''
+    const questionBody = notifyConfig && notifyConfig.hideDetails === true ? '有一个提问正等着你' : (firstQuestion || '有一个提问正等着你')
+    emitNotify({
+      title: '需要你回答',
+      body: questionBody,
+      id: `question-${rpcId}`,
+      sessionId,
+    })
+    deliverNotify(notifyConfig, { title: '需要你回答', body: questionBody }).catch(() => {})
     return entry
   }
 
@@ -15042,6 +15067,94 @@ export function apply(ctx, config) {
     // follow 单例不随它回收 —— 回收的是这条 socket，不是会话跟随。
     lifetimeTimer = setTimeout(closeStream, SSE_MAX_LIFETIME_MS)
   }
+
+  // ── 浏览器通知流：GET /m/api/events.notify ────────────────────────────────
+  // 手机 bundle 在页面切到后台时会订阅这条 SSE（bundle 的 mr() / _r()）：
+  // 收到 {type:'notify', payload:{title, body, id, sessionId}} 就弹系统通知，
+  // 并按「震动」开关 navigator.vibrate(15)。以前这里固定 404，于是
+  // 「dsh 端审批出现了，手机没有任何提醒」——只剩前台铃铛角标。
+  // 现在审批/提问登记时各推一帧；没有手机连着时零开销。
+  const notifyStreams = new Set()
+
+  function emitNotify(event) {
+    if (notifyStreams.size === 0) return
+    const json = JSON.stringify({ type: 'notify', payload: event })
+    for (const stream of [...notifyStreams]) stream.write(json)
+  }
+
+  function openNotify(req, res) {
+    if ((req.method || 'GET').toUpperCase() !== 'GET') {
+      res.statusCode = 405
+      res.end()
+      return
+    }
+    // 与 events.mux 同一套鉴权：未配对设备 403（bundle 会走降级路径）。
+    const device = authenticatedDevice(req)
+    if (!device) {
+      req.resume()
+      sendJson(res, 403, { ok: false, error: { code: 'unpaired', message: 'mobile session is not paired' } })
+      return
+    }
+    if (notifyStreams.size >= MAX_SSE_SUBSCRIBERS) {
+      sendJson(res, 429, { ok: false, error: { code: 'too-many-events', message: 'too many live streams' } })
+      return
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    try {
+      if (res.socket && typeof res.socket.setNoDelay === 'function') res.socket.setNoDelay(true)
+    } catch {}
+    try {
+      if (typeof res.flushHeaders === 'function') res.flushHeaders()
+    } catch {}
+
+    let heartbeat
+    const stream = {
+      deviceId: device.deviceId,
+      closed: false,
+      write(json) {
+        if (this.closed) return
+        try {
+          res.write(`data: ${json}\n\n`)
+        } catch {
+          closeStream()
+        }
+      },
+    }
+    function closeStream() {
+      if (stream.closed) return
+      stream.closed = true
+      notifyStreams.delete(stream)
+      clearInterval(heartbeat)
+      try {
+        res.end()
+      } catch {}
+    }
+    notifyStreams.add(stream)
+    try {
+      res.write(': notify\n\n')
+    } catch {}
+    heartbeat = setInterval(() => {
+      if (stream.closed) return
+      // 设备被撤销/停用后立即断流（与 mux 一致）。
+      if (devices.get(stream.deviceId) === undefined) {
+        closeStream()
+        return
+      }
+      try {
+        res.write(': ping\n\n')
+      } catch {
+        closeStream()
+      }
+    }, SSE_HEARTBEAT_MS)
+    req.on('close', closeStream)
+    res.on('close', closeStream)
+  }
+
   // ── API dispatch ──────────────────────────────────────────────────────────
   async function handleApi(req, res, url) {
     const sub = url.pathname.slice(API_PREFIX.length)
@@ -15073,12 +15186,8 @@ export function apply(ctx, config) {
 
     // SSE：实时 mux 流。手机用它取代轮询；拿不到就退化为轮询（与 404 时同一结果）。
     if (sub === '/events.mux') return openMux(req, res)
-    // events.notify 未实现：保持 404，bundle 会降级（通知走轮询/Web Push）。
-    if (sub === '/events.notify') {
-      res.statusCode = 404
-      res.end()
-      return
-    }
+    // SSE：浏览器通知流（页面在后台时 bundle 用它弹系统通知 + 震动）。
+    if (sub === '/events.notify') return openNotify(req, res)
 
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
