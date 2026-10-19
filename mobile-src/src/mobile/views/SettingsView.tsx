@@ -41,6 +41,33 @@ export interface SettingsViewProps {
   onBack(): void
 }
 
+/**
+ * 发送模式：真值是宿主的 `window.__dmSendMode`（dm-patches/send-mode.ts 装上去的）。
+ * 这里只做「读当前值 / 写新值」的薄封装，取不到时退化成 queue，不抛错。
+ */
+type SendMode = 'queue' | 'steer'
+
+const SEND_MODE_LABEL: Record<SendMode, string> = { queue: '排队', steer: '直接插入' }
+
+function readSendMode(): SendMode {
+  try {
+    const api = typeof window !== 'undefined' ? (window as any).__dmSendMode : undefined
+    const value = api && typeof api.get === 'function' ? api.get() : undefined
+    return value === 'steer' ? 'steer' : 'queue'
+  } catch {
+    return 'queue'
+  }
+}
+
+function writeSendMode(next: SendMode): void {
+  try {
+    const api = typeof window !== 'undefined' ? (window as any).__dmSendMode : undefined
+    if (api && typeof api.set === 'function') void api.set(next)
+  } catch {
+    /* 宿主没装好就保持原值，不影响其它设置 */
+  }
+}
+
 /** Source badge: where a setting takes effect / can be changed. */
 function ScopeBadge({ scope }: { scope: 'phone' | 'sync' | 'desktop' | 'ro' | 'recommend' }) {
   const label = scope === 'phone' ? '本机' : scope === 'sync' ? '同步桌面' : scope === 'desktop' ? '桌面端' : scope === 'ro' ? '只读' : '推荐'
@@ -545,7 +572,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [lineNumbers, setLineNumbersState] = useState(() => getLineNumbers())
   const [autoScroll, setAutoScrollState] = useState(() => getAutoScroll())
   const [haptics, setHapticsState] = useState(() => getHaptics())
-  const [sheet, setSheet] = useState<'theme' | 'font' | 'density' | 'about' | null>(null)
+  // 发送模式：真值在宿主（window.__dmSendMode），这里只镜像出来给行右侧显示。
+  const [sendMode, setSendModeState] = useState<SendMode>(() => readSendMode())
+  const [sheet, setSheet] = useState<'theme' | 'font' | 'density' | 'sendmode' | 'about' | null>(null)
   /** 右上角「?」的说明面板：解释「本机 / 同步桌面 / 桌面端」三种范围。 */
   const [scopeHelpOpen, setScopeHelpOpen] = useState(false)
   // Full-page sub-view: the unified notification page.
@@ -1487,37 +1516,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               onClick={() => { setSheet('density') }}
             />
           )}
-          {hit('发送模式', '发送', '排队', '插入', 'steer') && (
-            <SettingsRow
-              icon={(
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M6.5 8.5h11" />
-                  <path d="M6.5 12h11" />
-                  <path d="M6.5 15.5h11" />
-                </svg>
-              )}
-              title="发送模式"
-              desc="排队 / 直接插入"
-              locateId="sendmode"
-              action={(
-                <select
-                  className="settings-input dm-sendmode-select"
-                  defaultValue={typeof window !== 'undefined' && (window as any).__dmSendMode
-                    ? (window as any).__dmSendMode.get()
-                    : 'queue'}
-                  onChange={(event) => {
-                    const next = event && event.target ? (event.target as HTMLSelectElement).value : 'queue'
-                    if (typeof window !== 'undefined' && (window as any).__dmSendMode) {
-                      (window as any).__dmSendMode.set(next)
-                    }
-                  }}
-                >
-                  <option value="queue">排队</option>
-                  <option value="steer">直接插入</option>
-                </select>
-              )}
-            />
-          )}
           {hit('代码块行号', '行号', 'line') && (
             <ToggleRow
               icon={<HashIcon />}
@@ -1547,6 +1545,24 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               desc="任务完成、审批到达时轻震一下"
               value={haptics}
               onChange={(next) => { setHaptics(next); setHapticsState(next) }}
+            />
+          )}
+          {/* 发送模式是聊天行为，放在「对话」组；选择方式与主题/字体/密度一致：
+              右侧显示当前值 + ›，点开底部弹层选。原来是行内 <select>，与上面几行不统一。 */}
+          {hit('发送模式', '发送', '排队', '插入', 'steer') && (
+            <SettingsRow
+              icon={(
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6.5 8.5h11" />
+                  <path d="M6.5 12h11" />
+                  <path d="M6.5 15.5h11" />
+                </svg>
+              )}
+              title="发送模式"
+              desc="排队 / 直接插入"
+              locateId="sendmode"
+              action={<><span className="settings-rowValue">{SEND_MODE_LABEL[sendMode]}</span><RowChevron /></>}
+              onClick={() => { setSheet('sendmode') }}
             />
           )}
         </ul>
@@ -1728,6 +1744,18 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             { value: 'cozy', label: '舒适' },
           ]}
           onPick={(value: Density) => { setDensity(value); setDensityState(value); applyDisplayPrefs() }}
+          onClose={() => { setSheet(null) }}
+        />
+      )}
+      {sheet === 'sendmode' && (
+        <OptionSheet
+          title="发送模式"
+          value={sendMode}
+          options={[
+            { value: 'queue', label: '排队（等当前回复结束）' },
+            { value: 'steer', label: '直接插入（插队立即生效）' },
+          ]}
+          onPick={(value: SendMode) => { setSendModeState(value); writeSendMode(value) }}
           onClose={() => { setSheet(null) }}
         />
       )}
