@@ -10,10 +10,12 @@
  * 同步执行；只做搬家，不改页面行为与视觉。
  */
 import { TURN_PILL_HTML } from './turn-pill.ts'
+import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
 import { USAGE_INLINE_HTML } from './usage-inline.ts'
 
 const TOOLBAR_ORDER: readonly string[] = [
   TURN_PILL_HTML,
+  QUEUE_DOCK_PLACE_HTML,
   USAGE_INLINE_HTML
 ]
 
