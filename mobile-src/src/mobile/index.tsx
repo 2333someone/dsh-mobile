@@ -15,6 +15,7 @@ import { initMobileTheme } from './mobile-theme.ts'
 import { applyDisplayPrefs } from './display-prefs.ts'
 import { registerMobilePwa } from '../mobile-pwa.ts'
 import { consumeMobilePairUrl } from './pairing.ts'
+import { installDmPages } from './dm-pages/index.ts'
 
 // Apply the persisted (or default system) theme and the local display
 // preferences before first paint, so the page never flashes the wrong look.
@@ -26,6 +27,10 @@ const style = document.createElement('style')
 style.dataset.plugin = 'dsh-palm/mobile'
 style.textContent = mobileCss
 document.head.appendChild(style)
+
+// 迁移 A：这四个页面型注入已从宿主 index.js 搬到这里（见 dm-pages/）。
+// 在 React 挂载前安装，保持「页面 DOM 先于应用」的原有时序。
+installDmPages()
 
 const root = document.getElementById('root')
 if (root === null) throw new Error('mobile: #root missing')
