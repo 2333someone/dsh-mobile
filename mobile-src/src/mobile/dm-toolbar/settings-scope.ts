@@ -451,6 +451,27 @@ export const SETTINGS_SCOPE_HTML = `<script>
         mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
       }
     } catch (e) {}
+
+    // ── 首帧装饰：徽标不再等 500ms 轮询 ────────────────────────────────────
+    // 原来只有 setInterval(ensure, 500) 兜底，而 __dmMutationBus 并不为
+    // React 的渲染提交发事件，于是徽标要等下一个 500ms 相位才补上（实测：首次
+    // 进入 t≈310ms、再次进入 t≈696ms 才出现），行标题宽度会跳一下 —— 这正是
+    // 「进入设置页选项闪一下」的直接来源之一。MutationObserver 的回调在 React
+    // commit 之后、浏览器绘制之前执行，这里直接 ensure()（不再 setTimeout）就能
+    // 让徽标、用量行与首帧一起画出来，不再有后补的跳变。
+    var fastBusy = false;
+    try {
+      var fastObserver = new MutationObserver(function () {
+        if (fastBusy) return;
+        // 只在设置页上工作：.settings-legend 是 bundle 渲染图例的容器。
+        if (!document.querySelector('.settings-legend')) return;
+        fastBusy = true;
+        try { ensure(); } catch (e) {}
+        fastBusy = false;
+      });
+      fastObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    } catch (e) {}
+
     setInterval(ensure, 500);
     ensure();
   } catch (e) {}

@@ -75,13 +75,23 @@ export const MODELS_CENTER_HTML = `<script>
   function scheduleSettingsFilter() {
     if (filterQueued) return;
     filterQueued = true;
-    window.setTimeout(function () {
+    // 用 rAF 而不是 60ms 定时：React commit 之后、绘制之前就过滤掉多余行，
+    // 否则「主机配置」组会先按完整高度渲染、再在 300ms~1s 后塌下去（下方内容上跳）。
+    var raf = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
+    raf(function () {
       filterQueued = false;
       try { applySettingsFilter(); } catch (e) {}
-    }, 60);
+    });
   }
   try {
-    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(scheduleSettingsFilter); else new MutationObserver(scheduleSettingsFilter).observe(document.documentElement, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(scheduleSettingsFilter);
+    // __dmMutationBus 不为 React commit 发事件（它只覆盖 bundle 自己的 mutator），
+    // 所以自己盯 DOM。这里**同步**过滤：MutationObserver 回调是微任务，在本帧绘制前
+    // 执行，能消掉「React 把行重新渲染出来 → 下一帧才被隐藏」的闪回（rAF 会晚一帧）。
+    // 不在设置页时 settingsGroup() 立刻返回 null，开销可忽略。
+    new MutationObserver(function () {
+      try { applySettingsFilter(); } catch (e) {}
+    }).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {}
   window.setInterval(function () { try { applySettingsFilter(); } catch (e) {} }, 1000);
   applySettingsFilter();

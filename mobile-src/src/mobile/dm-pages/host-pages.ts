@@ -102,6 +102,84 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
   //   agent-loop= PluginArtworkLoop      (紫色循环)
   //   shell     = PluginArtworkTerminal  (蓝色 >_)
   var CONFIG_ART = ${JSON.stringify(CONFIG_ART_SVG)};
+  // 实验性插件的说明覆盖表：宿主 mobile.plugins 只下发 bundle.description（包内
+  // 英文原文）或 meta.description，读者无法据此判断「开启后到底多出什么」。
+  // 这里对官方实验性包统一换成一句具体说明（多出什么 / 影响什么）；没收录的
+  // 新包仍回退宿主文案，不编造。标题只在宿主没给本地化标题时兜底。
+  var EXPERIMENTAL_INFO = {
+    '@deepseek-ai/dsh-experimental-agent-team-profile': {
+      title: '智能体团队',
+      desc: '开启后模型多出团队工具：可派生并指挥子代理成员、共享任务看板；团队界面只在桌面 Web 出现。'
+    },
+    '@deepseek-ai/dsh-experimental-voice-input-bundle': {
+      title: '语音输入',
+      desc: '桌面 Web 输入框多出麦克风，用本机 SenseVoice 把录音转成文字；首次使用要先下载本地模型（占磁盘、需等待）。手机页没有该按钮。'
+    },
+    '@deepseek-ai/dsh-experimental-auto-review': {
+      title: '自动授权审查',
+      desc: '权限预设多出「自动审查」：每次工具调用前先让模型判断是否放行；更稳，但每步多一次模型请求，更慢也更耗额度。'
+    },
+    '@deepseek-ai/dsh-experimental-inspector-profile': {
+      title: '开发者工具',
+      desc: '桌面 Web 多出「会话数据诊断」入口：可查看原始 Session 日志、聊天节点分组和后端信息；纯调试用，手机页没有入口。'
+    },
+    '@deepseek-ai/dsh-experimental-plugin-market-bundle': {
+      title: '自定义插件市场',
+      desc: '插件页多出「发现」标签页，可从你添加的插件市场索引搜索并安装插件；未添加索引时该页为空。手机插件页不显示这个标签。'
+    },
+    '@deepseek-ai/dsh-experimental-terminal-bundle': {
+      title: '持久终端',
+      desc: 'shell 工具改用持久交互式 shell：进程、cwd、环境变量和 REPL 状态跨工具调用保留；占用更多后台资源。'
+    },
+    '@deepseek-ai/dsh-experimental-tool-worktree': {
+      title: 'Git 工作树',
+      desc: '模型多一个工作树工具：可在当前仓库新建并进入独立 Git worktree（会切换本会话工作目录）；不开就没有这个工具。'
+    },
+    '@deepseek-ai/dsh-experimental-session-search': {
+      title: '会话搜索',
+      desc: '所有智能体（含 minimal 预设）多出会话搜索、读取工具，可检索当前工作区的历史会话；侧边栏搜索行为不变。'
+    },
+    '@deepseek-ai/dsh-experimental-session-titles-bundle': {
+      title: '随对话更新的标题',
+      desc: '会话标题改为随新的用户提示持续更新（替换首条提示标题）；每轮会多一次生成标题的模型调用，产生额外用量。'
+    },
+    '@deepseek-ai/dsh-experimental-cot-translation-bundle': {
+      title: '思考过程机器翻译',
+      desc: '桌面 Web 展开的思考内容可机器翻译成其他语言；原文会发送给所选外部翻译服务（可能含私有代码或对话）。手机页不显示译文。'
+    },
+    '@deepseek-ai/dsh-experimental-ralph-bundle': {
+      title: 'Ralph 循环',
+      desc: '所有智能体多出 Ralph 工具：对明确要求反复执行的任务，用全新子智能体多轮重跑；很耗 token 和时间，普通任务不会自动用。'
+    },
+    '@deepseek-ai/dsh-experimental-badge-skill-bundle': {
+      title: 'DSH 徽章技能',
+      desc: '加载技能的智能体多一个「dsh 徽章」技能：可在文档、PR 等产出中加 powered by dsh 标记；不新增模型工具。'
+    },
+    '@deepseek-ai/dsh-subagent-codex': {
+      title: 'Codex 子智能体',
+      desc: '需本机已安装并登录 Codex CLI：模型可把单个任务委派给 Codex 子智能体，用它自己的认证和设置。'
+    },
+    '@deepseek-ai/dsh-subagent-claude-code': {
+      title: 'Claude Code 子智能体',
+      desc: '需本机已安装并登录 Claude Code：模型可把单个任务委派给 Claude Code 子智能体，用它自己的认证和设置。'
+    }
+  };
+  // 宿主 RPC 会过滤掉「默认关闭的官方可选包」（桌面插件页的「更多」列表），
+  // 所以手机端拿不到它们。要在原地展开全部，这里只收录当前 DSH 安装里真实
+  // 存在、且被宿主过滤的官方实验性包（Git 工作树 / 持久终端 / 会话搜索 /
+  // 随对话更新的标题 / 思考过程机器翻译 / Ralph 循环 / DSH 徽章技能 /
+  // 自定义插件市场）。开启仍走宿主的 mobile.pluginBundleEnabled 真实接口，
+  // 成功后宿主会把它重新下发到实验性列表，这一行就从本地兜底换成真实数据。
+  var EXPERIMENTAL_MORE = [
+    '@deepseek-ai/dsh-experimental-plugin-market-bundle',
+    '@deepseek-ai/dsh-experimental-terminal-bundle',
+    '@deepseek-ai/dsh-experimental-tool-worktree',
+    '@deepseek-ai/dsh-experimental-session-search',
+    '@deepseek-ai/dsh-experimental-session-titles-bundle',
+    '@deepseek-ai/dsh-experimental-cot-translation-bundle',
+    '@deepseek-ai/dsh-experimental-ralph-bundle',
+    '@deepseek-ai/dsh-experimental-badge-skill-bundle'
+  ];
   var current = null;      // { kind, el } —— 当前打开的信息页（列表层）
   var detailName = null;   // 当前打开的插件详情（bundle name 或 entry:entryId）
   var seq = 0;             // 每次 load 递增，晚到的响应不许覆盖新页面
@@ -111,6 +189,7 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
   var autoTab = 'active';  // 桌面默认选中「已开启」
   var autoQuery = '';
   var toastTimer = null;
+  var extExpanded = false; // 实验性插件是否已「更多」展开（只在列表内原地展开）
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -324,6 +403,47 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
     return '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">' + esc(title) + '</span><span class="dm-section-count">' + esc(countText) + '</span></div>' + rowsHtml + '</section>';
   }
 
+  /** 实验性包的一句具体说明：本地覆盖优先，其次宿主中文 meta，最后包内英文原文。 */
+  function experimentalDescription(bundle) {
+    var info = bundle && EXPERIMENTAL_INFO[bundle.name];
+    if (info && info.desc) return info.desc;
+    return localized(bundle && bundle.meta && bundle.meta.description) || (bundle && bundle.description) || '';
+  }
+
+  /**
+   * 宿主没下发的实验性包：按本地表渲染一行（开关仍是宿主真实接口）。
+   * 这些包一定是「当前未启用」——启用中的包宿主会放进 extensions 下发。
+   */
+  function localExperimentalRowHtml(name) {
+    var info = EXPERIMENTAL_INFO[name] || {};
+    var title = info.title || shortName(name);
+    var description = info.desc || '';
+    return '<div class="dm-card">' +
+      iconHtml(null, title) +
+      '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span><span class="dm-badge dm-badge-beta">实验性</span></div>' +
+      (description ? '<div class="dm-card-desc" style="display:block;overflow:visible;-webkit-line-clamp:unset">' + esc(description) + '</div>' : '') +
+      '<div class="dm-card-sub">未启用 · 开启后由宿主下发版本与详情</div></div>' +
+      '<div class="dm-card-side">' + switchHtml(false, ' data-toggle-bundle="' + esc(name) + '"', false, '启停 ' + title) + '</div></div>';
+  }
+
+  /** 原地展开/收起实验性插件：只动本分组的行与计数，不重渲整页、不影响其它分组。 */
+  function setExperimentalExpanded(next, button) {
+    extExpanded = next === true;
+    var btn = button || document.querySelector('[data-dm-ext-more]');
+    var rows = document.querySelector('[data-dm-ext-rows]');
+    if (rows) rows.hidden = !extExpanded;
+    var visible = btn ? Number(btn.getAttribute('data-dm-ext-visible')) : 0;
+    var extra = btn ? Number(btn.getAttribute('data-dm-ext-hidden')) : 0;
+    if (!isFinite(visible)) visible = 0;
+    if (!isFinite(extra)) extra = 0;
+    var count = document.querySelector('[data-dm-ext-count]');
+    if (count) count.textContent = '共 ' + (extExpanded ? visible + extra : visible) + ' 个';
+    if (btn) {
+      btn.textContent = extExpanded ? '收起' : '更多 ' + extra + ' 个';
+      btn.setAttribute('aria-expanded', extExpanded ? 'true' : 'false');
+    }
+  }
+
   // ── 插件：列表（内置插件配置 / 实验性插件 / 已安装插件）─────────────────
   function renderPlugins() {
     var body = pageBody('plugins');
@@ -363,9 +483,29 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
         '<div class="dm-card-sub">' + esc(item.moduleName) + '</div></div>' +
         '<span class="dm-chevron" aria-hidden="true">›</span></div>';
     }).join(''));
-    html += sectionHtml('实验性插件', '共 ' + extensions.length + ' 个', extensions.map(function (bundle) {
+    var extMainRows = extensions.map(function (bundle) {
       return bundleRowHtml(bundle, true);
-    }).join(''));
+    }).join('');
+    // 宿主只下发「非更多 + 已启用的更多」；其余官方可选包从本地表补进来，
+    // 保证「更多」能把全部实验性插件原地展开（再点收起）。
+    var listedNames = {};
+    for (var e = 0; e < extensions.length; e++) listedNames[extensions[e].name] = true;
+    var extraNames = [];
+    for (var m = 0; m < EXPERIMENTAL_MORE.length; m++) {
+      if (!listedNames[EXPERIMENTAL_MORE[m]]) extraNames.push(EXPERIMENTAL_MORE[m]);
+    }
+    var extRows = extraNames.map(localExperimentalRowHtml).join('');
+    var extTotal = extensions.length + extraNames.length;
+    var extCountText = '共 ' + (extExpanded ? extTotal : extensions.length) + ' 个';
+    var extMoreBtn = extRows
+      ? '<button class="dm-section-more" type="button" data-dm-ext-more="1" data-dm-ext-visible="' + extensions.length + '" data-dm-ext-hidden="' + extraNames.length + '" aria-expanded="' + (extExpanded ? 'true' : 'false') + '" style="margin-left:10px;padding:2px 0;border:0;background:none;font:inherit;font-size:12px;font-weight:600;color:var(--accent,#6366f1);cursor:pointer;-webkit-tap-highlight-color:transparent">' + (extExpanded ? '收起' : '更多 ' + extraNames.length + ' 个') + '</button>'
+      : '';
+    if (extMainRows || extRows) {
+      html += '<section class="dm-section"><div class="dm-section-head"><span class="dm-section-title">实验性插件</span><span style="display:inline-flex;align-items:baseline"><span class="dm-section-count" data-dm-ext-count="1">' + esc(extCountText) + '</span>' + extMoreBtn + '</span></div>' +
+        extMainRows +
+        (extRows ? '<div data-dm-ext-rows="1"' + (extExpanded ? '' : ' hidden') + '>' + extRows + '</div>' : '') +
+        '</section>';
+    }
     html += sectionHtml('已安装插件', '共 ' + installed.length + ' 个', installed.map(function (bundle) {
       return bundleRowHtml(bundle, false);
     }).join(''));
@@ -374,7 +514,10 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
 
   function bundleRowHtml(bundle, experimental) {
     var title = localized(bundle.meta && bundle.meta.title) || shortName(bundle.name);
-    var description = bundle.description || localized(bundle.meta && bundle.meta.description);
+    // 实验性插件优先用本地覆盖的一句话说明；其余包保持原逻辑（包内描述优先）。
+    var description = experimental
+      ? experimentalDescription(bundle)
+      : (bundle.description || localized(bundle.meta && bundle.meta.description));
     var protectedMobile = bundle.name === 'dsh-mobile';
     var badge = experimental ? '<span class="dm-badge dm-badge-beta">实验性</span>' : '';
     var side = switchHtml(bundle.enabled, ' data-toggle-bundle="' + esc(bundle.name) + '"', protectedMobile, '启停 ' + title);
@@ -385,7 +528,7 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
     return '<div class="dm-card" data-open-bundle="' + esc(bundle.name) + '" role="button" tabindex="0">' +
       iconHtml(bundle.meta && bundle.meta.icon, title) +
       '<div class="dm-card-main"><div class="dm-card-titleRow"><span class="dm-card-title">' + esc(title) + '</span>' + badge + '</div>' +
-      (description ? '<div class="dm-card-desc">' + esc(description) + '</div>' : '') +
+      (description ? '<div class="dm-card-desc"' + (experimental ? ' style="display:block;overflow:visible;-webkit-line-clamp:unset"' : '') + '>' + esc(description) + '</div>' : '') +
       (meta.length ? '<div class="dm-card-sub">' + esc(meta.join(' · ')) + '</div>' : '') +
       '</div><div class="dm-card-side">' + side + '</div></div>';
   }
@@ -444,7 +587,9 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
 
   function renderBundleDetail(body, bundle, experimental) {
     var title = localized(bundle.meta && bundle.meta.title) || shortName(bundle.name);
-    var description = bundle.description || localized(bundle.meta && bundle.meta.description);
+    var description = experimental
+      ? experimentalDescription(bundle)
+      : (bundle.description || localized(bundle.meta && bundle.meta.description));
     var protectedMobile = bundle.name === 'dsh-mobile';
     var rows = Array.isArray(bundle.rows) ? bundle.rows : [];
     var runningRows = rows.filter(function (row) { return row.enabled === true; }).length;
@@ -601,6 +746,12 @@ export const HOST_PAGES_HTML = `<div id="dm-host-pages">
     if (target.closest('[data-dm-new]')) {
       event.preventDefault();
       toast('请在桌面端或会话中创建自动化任务');
+      return;
+    }
+    var extMore = target.closest('[data-dm-ext-more]');
+    if (extMore) {
+      event.preventDefault();
+      setExperimentalExpanded(!extExpanded, extMore);
       return;
     }
     var tab = target.closest('[data-dm-tab]');

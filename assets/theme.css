@@ -3074,16 +3074,77 @@ html.dm-host-page-open body {
   transform: translateX(-100px) !important;
 }
 
-/* ── 设置页范围徽标：只压深前景色，保证 10px 小字可读 ─────────────────────
-   bundle 自带的 .settings-badge-* 背景/色相都保留（与设置页顶部图例一致），
-   但它两档前景色偏浅（实测对比度：本机 3.12:1、桌面端 2.39:1，深色主题下更糊）。
-   这里只改前景色：本机 3.12→4.50，桌面端 2.39→5.51。图例用同一批 class，
-   所以会一起变清楚，标签与图例仍然完全同色同规格。 */
+/* ── 设置页范围徽标：改回 dsh 原生的克制观感 ─────────────────────────────
+   bundle 自带的是彩色药丸（本机绿底绿字、同步桌面紫底紫字、桌面端浅灰底），
+   用户觉得「不像 dsh 原生」。这里统一改成中性色 + 1px 细边框的标签：
+   · 尺寸/内边距与 bundle 同高（10px 字、16px 高），不会让设置行重排；
+   · 三档默认都是中性色，只有「同步桌面」（会写电脑端配置的那一档）用强调色；
+   · 「只读 / 推荐」这两档也一并收成中性，避免旧的彩色残留。
+   徽标同时也出现在顶部图例和设置子页（SettingsForm），所以是同一套观感。 */
+.settings-badge {
+  background: transparent !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 6px !important;
+  padding: 2px 6px !important;
+  color: var(--text-secondary) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+}
 .settings-badge-phone {
-  color: #14804a !important;
+  color: var(--text-secondary) !important;
+  border-color: var(--border-default) !important;
+}
+/* 唯一的强调色：只有「同步桌面」用 accent，提示这一档会写进电脑端配置。 */
+.settings-badge-sync {
+  color: var(--accent) !important;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border-default)) !important;
 }
 .settings-badge-desktop {
-  color: #5b6370 !important;
+  color: var(--text-tertiary) !important;
+  border-color: var(--border-default) !important;
+}
+/* 旧文案的兜底 class（dm-patch 会把 ro 归一成 desktop，这里是首帧兜底）。 */
+.settings-badge-ro {
+  color: var(--text-tertiary) !important;
+  border-color: var(--border-default) !important;
+}
+.settings-badge-recommend {
+  color: var(--text-secondary) !important;
+  border-color: var(--border-default) !important;
+}
+
+/* ── 设置页「范围说明」面板（右上角 ?）──────────────────────────────────
+   Sheet 的 .sheet-body 只有 12px 内边距，这里按 .sheet-confirm-desc 的口径
+   收 4px；三档各一行徽标 + 一段说明，底部一句判断提示。 */
+.dm-scope-help {
+  margin: 0 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dm-scope-helpItem {
+  margin: 0;
+}
+.dm-scope-helpHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+.dm-scope-helpDesc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.dm-scope-helpNote {
+  margin: 2px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
 }
 
 /* ── 宿主唤醒卡（.chat-trigger）：图标放大到 18px + 文字左对齐 ─────────────

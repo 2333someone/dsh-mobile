@@ -29,9 +29,9 @@ import { toast } from '../toast.tsx'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
 import {
-  ChevronUpIcon, ContrastIcon, GaugeIcon, HashIcon, InfoIcon,
+  BellIcon, ChevronUpIcon, ContrastIcon, GaugeIcon, HashIcon, HelpIcon, InfoIcon,
   PencilIcon, PlusIcon, RowsIcon, ScrollDownIcon, ShieldIcon, SlidersIcon,
-  TrashIcon, TypeIcon, UpperRightIcon, VibrateIcon, BellIcon,
+  TrashIcon, TypeIcon, UpperRightIcon, VibrateIcon,
 } from '../icons.tsx'
 import { MarketView } from './MarketView.tsx'
 import { SettingsForm, isWritableField, namespaceTitle } from './SettingsForm.tsx'
@@ -546,6 +546,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [autoScroll, setAutoScrollState] = useState(() => getAutoScroll())
   const [haptics, setHapticsState] = useState(() => getHaptics())
   const [sheet, setSheet] = useState<'theme' | 'font' | 'density' | 'about' | null>(null)
+  /** 右上角「?」的说明面板：解释「本机 / 同步桌面 / 桌面端」三种范围。 */
+  const [scopeHelpOpen, setScopeHelpOpen] = useState(false)
   // Full-page sub-view: the unified notification page.
   const [notifyOpen, setNotifyOpen] = useState(false)
   // Paired-device management sub-page (P2): list devices, revoke, rename,
@@ -1398,7 +1400,18 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           <button type="button" className="mobile-back" aria-label="返回" onClick={onBack}>‹</button>
         </div>
         <h1 className="mobile-title">设置</h1>
-        <div className="mobile-headerSlot mobile-headerSlot-right" />
+        <div className="mobile-headerSlot mobile-headerSlot-right">
+          {/* 范围说明：与页面其它 header 图标同规格（.mobile-iconbtn 48×48、svg 20px）。 */}
+          <button
+            type="button"
+            className="mobile-iconbtn"
+            aria-label="范围说明"
+            aria-haspopup="dialog"
+            onClick={() => { setScopeHelpOpen(true) }}
+          >
+            <HelpIcon />
+          </button>
+        </div>
       </header>
       <div className="mobile-scroll">
         {error !== undefined && <p className="mobile-error mobile-pad" role="alert">{error}</p>}
@@ -1436,7 +1449,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           </ul>
         )}
 
-        <div className="settings-legend settings-legend-inline" title="本机：仅影响本机；同步桌面：改动同步到桌面端；桌面端：请在桌面端修改">
+        <div
+          className="settings-legend settings-legend-inline"
+          title="本机：只存在这台手机上，不影响电脑端；同步桌面：写进电脑端配置，手机与桌面共用一份；桌面端：值由电脑端管理，手机上只读。点右上角 ? 看完整说明。"
+        >
           <ScopeBadge scope="phone" /><span className="dm-legend-sep" aria-hidden="true">·</span>
           <ScopeBadge scope="sync" /><span className="dm-legend-sep" aria-hidden="true">·</span>
           <ScopeBadge scope="desktop" />
@@ -1627,7 +1643,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                   <span className="card-main">
                     <span className="card-title">
                       <span className="card-titleText">{group.title}</span>
-                      {writable ? <ScopeBadge scope="sync" /> : <ScopeBadge scope="ro" />}
+                      {/* 不可写的分组直接标「桌面端」：以前先渲染红「只读」再由
+                          dm-patch 改写成「桌面端」，首帧会看到一次文字变化。 */}
+                      {writable ? <ScopeBadge scope="sync" /> : <ScopeBadge scope="desktop" />}
                     </span>
                     <span className="card-desc">{summary}</span>
                   </span>
@@ -1762,6 +1780,39 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             >
               {diagnosticsBusy ? '读取中…' : '刷新自检'}
             </button>
+          </div>
+        </Sheet>
+      )}
+
+      {/* 范围说明：本机 / 同步桌面 / 桌面端到底差在哪、会带来什么影响。
+          与每行徽标、顶部图例同一套文案口径（见 settings-legend）。 */}
+      {scopeHelpOpen && (
+        <Sheet title="范围说明" onClose={() => { setScopeHelpOpen(false) }}>
+          <div className="dm-scope-help">
+            <div className="dm-scope-helpItem">
+              <p className="dm-scope-helpHead"><ScopeBadge scope="phone" /></p>
+              <p className="dm-scope-helpDesc">
+                只存在这台手机上（浏览器本地存储），改完立即生效，不影响电脑端。
+                换手机、清浏览器数据或重装后需要重新设置；聊天记录与电脑端配置都不受影响。
+              </p>
+            </div>
+            <div className="dm-scope-helpItem">
+              <p className="dm-scope-helpHead"><ScopeBadge scope="sync" /></p>
+              <p className="dm-scope-helpDesc">
+                写入电脑端的 DSH 配置，手机与桌面共用同一份值。在这里改，电脑端会同步变化；
+                在电脑端改，手机这边也会跟着变。只影响行为的选项，不会上传聊天内容。
+              </p>
+            </div>
+            <div className="dm-scope-helpItem">
+              <p className="dm-scope-helpHead"><ScopeBadge scope="desktop" /></p>
+              <p className="dm-scope-helpDesc">
+                值由电脑端管理，手机上只展示、不能修改（密钥类配置也永远不会下发到手机）。
+                需要调整时，请到电脑端的 DSH 设置里改。
+              </p>
+            </div>
+            <p className="dm-scope-helpNote">
+              设置项标题后的徽标就是它的作用范围。拿不准某项会不会影响电脑端时，先看徽标再改。
+            </p>
           </div>
         </Sheet>
       )}
