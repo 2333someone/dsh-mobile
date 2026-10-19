@@ -53,7 +53,6 @@ export const SETTINGS_SCOPE_HTML = `<script>
       '工具': 'sync',
       '系统': 'desktop',
       // 通用
-      '清除缓存': 'phone',
       '反馈与建议': 'phone',
       '关于': 'desktop'
     };
