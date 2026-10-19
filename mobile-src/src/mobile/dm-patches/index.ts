@@ -9,11 +9,17 @@
 import { SEND_DECODE_GUARD_HTML } from './send-decode-guard.ts'
 import { SHEET_CLOSE_HTML } from './sheet-close.ts'
 import { PERMISSION_BTN_HTML } from './permission-btn.ts'
+import { SEND_MODE_HTML } from './send-mode.ts'
+import { CHAT_STATUS_HTML } from './chat-status.ts'
+import { SEND_MODE_SETTINGS_HTML } from './send-mode-settings.ts'
 
 const PATCH_ORDER: readonly string[] = [
   SEND_DECODE_GUARD_HTML,
   SHEET_CLOSE_HTML,
-  PERMISSION_BTN_HTML
+  PERMISSION_BTN_HTML,
+  SEND_MODE_HTML,
+  CHAT_STATUS_HTML,
+  SEND_MODE_SETTINGS_HTML
 ]
 
 let installed = false
