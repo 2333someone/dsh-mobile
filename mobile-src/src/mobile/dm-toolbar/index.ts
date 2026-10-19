@@ -12,6 +12,7 @@
 import { MODEL_BUTTON_HTML } from './model-button.ts'
 import { EMOJI_ICON_HTML } from './emoji-icon.ts'
 import { TURN_PILL_HTML } from './turn-pill.ts'
+import { SUBAGENT_STATUS_BTN_HTML } from './subagent-status-btn.ts'
 import { PRESET_BTN_HTML } from './preset-btn.ts'
 import { PRESET_STATUS_HTML } from './preset-status.ts'
 import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
@@ -23,6 +24,7 @@ const TOOLBAR_ORDER: readonly string[] = [
   MODEL_BUTTON_HTML,
   EMOJI_ICON_HTML,
   TURN_PILL_HTML,
+  SUBAGENT_STATUS_BTN_HTML,
   PRESET_BTN_HTML,
   PRESET_STATUS_HTML,
   QUEUE_DOCK_PLACE_HTML,
