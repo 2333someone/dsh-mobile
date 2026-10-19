@@ -21,7 +21,7 @@ import { join, basename, resolve as resolvePath, relative as relativePath, isAbs
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
-import { textOfEventData, muxLineOf, queueItemView } from './sse.js'
+import { textOfEventData, muxLineOf, queueItemView, createMuxRuntime } from './sse.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR } from './config.js'
@@ -1036,6 +1036,7 @@ export function createHost(ctx, config) {
 
   const state = createHostState({ devices: loadDevices(cfg.devicesFile) })
   const devices = state.devices
+  const { muxVisibleTo, emitMux } = createMuxRuntime({ state })
   const {
     deviceTokensOf, authenticatedDevice, describeDeviceUA, createDevice,
     fixedPairCode, issuePairToken, acceptPairCode,
@@ -4943,15 +4944,7 @@ export function createHost(ctx, config) {
   }
 
   /** SSE 是否推某帧给某设备：全局面总推，会话帧只推手机正在看的那个。 */
-  function muxVisibleTo(deviceId, frame) {
-    // 控制镜像 / 会话列表状态 / 审批 / 提问 / 错误 —— 手机上的全局面
-    //（任务条、名单、待处理面板），与 dsh-palm 的 MUX_ALWAYS_FORWARDED 同义。
-    if (MUX_ALWAYS_FORWARDED.has(frame.type)) return true
-    const sessionId = frame.sessionId
-    if (typeof sessionId !== 'string') return true
-    const set = observers.get(deviceId)
-    return set !== undefined && set.has(sessionId)
-  }
+
   /**
    * session/event 的来源之一：sessionController.follow({address}, signal)。
    *
@@ -5364,11 +5357,7 @@ export function createHost(ctx, config) {
 
 
   /** 向所有 SSE 连接推一帧。frame 必须是 bundle 认识的 mux 帧形。 */
-  function emitMux(frame, rpcId) {
-    const line = muxLineOf(frame, rpcId)
-    if (line === undefined) return
-    for (const stream of [...muxStreams]) stream.write(line, frame)
-  }
+
 
   // ── 排队消息（需求 C 的数据面）：session/queue 帧 ───────────────────────────
   //

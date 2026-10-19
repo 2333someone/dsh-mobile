@@ -3,6 +3,7 @@
  * 连接/观察者/follow 等有状态编排仍在 core（RPC 注册表轮再显式化 ctxBag）。
  */
 import { randomBytes } from 'node:crypto'
+import { MUX_ALWAYS_FORWARDED } from './config.js'
 
 export function textOfEventData(data) {
 if (!data || typeof data !== 'object') return ''
@@ -48,4 +49,29 @@ export function queueItemView(message, placement) {
       content.push({ type: typeof b.type === 'string' ? b.type : 'text' })
     }
     return { id, placement, message: { content } }
+}
+
+/**
+ * mux 运行时：帧过滤与扇出（容器来自 state bag）。
+ * core 创建一次后解构使用；有状态的 openMux/follow 编排仍留在 core，
+ * 等下一步与注册表一起显式化。
+ */
+export function createMuxRuntime({ state }) {
+    function muxVisibleTo(deviceId, frame) {
+      // 控制镜像 / 会话列表状态 / 审批 / 提问 / 错误 —— 手机上的全局面
+      //（任务条、名单、待处理面板），与 dsh-palm 的 MUX_ALWAYS_FORWARDED 同义。
+      if (MUX_ALWAYS_FORWARDED.has(frame.type)) return true
+      const sessionId = frame.sessionId
+      if (typeof sessionId !== 'string') return true
+      const set = observers.get(deviceId)
+      return set !== undefined && set.has(sessionId)
+    }
+
+    function emitMux(frame, rpcId) {
+      const line = muxLineOf(frame, rpcId)
+      if (line === undefined) return
+      for (const stream of [...muxStreams]) stream.write(line, frame)
+    }
+
+  return { muxVisibleTo, emitMux }
 }
