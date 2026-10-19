@@ -1,0 +1,3957 @@
+/**
+ * Chat level: one session. Loads the history tail page on open, appends
+ * pages upward (loadOlder), folds live mux frames in as they arrive, sends
+ * prompts through session.prompt, and runs `/`-lines through the host
+ * command registry (mobile.commandExec — the prompt channel never
+ * dispatches commands).
+ *
+ * Rendering mirrors the desktop web UI's fold discipline on a small screen:
+ * - reasoning text hides behind a collapsed "深度思考" disclosure,
+ * - tool calls behind a collapsed tool disclosure (name + arguments),
+ * - very long assistant text collapses with an explicit expand toggle,
+ * - a toolbar above the composer carries the model (+ thinking effort) and
+ *   permission pickers, both as bottom sheets.
+ */
+
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import type { MuxFrame } from '../../api-proxy-types'
+import { loadChatPage, prompt, type ChatPageResult, type SessionView } from './App.tsx'
+import { dropSessionFromCaches, loadDraft, loadReadingTurn, removeDraft, removeReadingTurn, saveDraft, saveReadingTurn } from '../list-persist.ts'
+import { usePageVisible } from '../foreground.ts'
+import { loadCachedHistory } from '../history-cache.ts'
+import { errorText, staleHostHint } from './App.tsx'
+import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, transcribeVoice, listSessions, history, type CommandDescriptor } from '../api.ts'
+import type { SessionModels } from '../../api-proxy-types'
+import type { PendingApproval, PendingQuestionItem } from '../api.ts'
+import { buildPromptParts, compressImageFile, imageFromClipboard, MAX_ATTACHED_IMAGES, type AttachedImage, type PromptPart } from '../image.ts'
+import { coalesceTurnMessages, EventFolder, foldEvents, parseTodoList, type RenderMessage, type TodoSnapshot, type WireEvent } from '../messages.ts'
+import { perfMark } from '../perf.ts'
+import { adoptPolledQuestions, answeredQuestionsFor, noteAnsweredQuestion } from '../question-batches.ts'
+import { adoptPolledApprovals, answeredApprovalsFor, noteAnsweredApproval } from '../approval-batches.ts'
+
+/**
+ * Stable row key: (turn, step) when the row carries them, else the id.
+ * Streaming rows keep (turn, step) across the pending→settled id swap
+ * (synthetic `assistant,<turn>.<step>#<seq>` → host id), while the id
+ * itself changes — keying by id would remount the whole message when it
+ * settles, replaying the msg-in animation and dropping open states
+ * (expanded diff cards, reasoning folds).
+ */
+function messageKey(message: RenderMessage): string {
+  return message.turn !== undefined && message.step !== undefined
+    ? `t${message.turn}.${message.step}`
+    : message.id
+}
+
+/**
+ * 折叠里最新的一轮号（只看 assistant 行：user 行不带 turn 字段，轮次尾报告卡
+ * 只是产出清单、不承载过程）。活跃轮次号缺席时的兜底 —— 中途重开一个还开着的
+ * 回合时，running 是从会话名单或尾页锚点恢复的，那一帧 turn/start 没经手，
+ * 而正在跑的那一轮必然是折叠里最后出现的一轮。
+ */
+function newestFoldTurn(messages: readonly RenderMessage[]): number | undefined {
+  let newest: number | undefined
+  for (const message of messages) {
+    if (message.kind !== 'assistant' || message.turn === undefined) continue
+    if (newest === undefined || message.turn > newest) newest = message.turn
+  }
+  return newest
+}
+
+/** 回合边界事件（turn/start / turn/end）data 里的轮号；缺失或非数字即 undefined。 */
+function turnNumberOf(event: WireEvent): number | undefined {
+  const data = event.data
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined
+  const turn = (data as Record<string, unknown>)['turn']
+  return typeof turn === 'number' && Number.isFinite(turn) ? turn : undefined
+}
+import { RunStatusBar, RunStatusSheet } from '../run-status.tsx'
+import { copyText, openFilePath, shareText } from '../code-actions.ts'
+import { MuxClient } from '../mux.ts'
+import { ThemeToggle } from '../theme-toggle.tsx'
+import { getAutoScroll } from '../display-prefs.ts'
+import { timeVisibility } from '../ui-text.ts'
+import { enqueuePrompt, flushOutbox, listOutbox, removeFromOutbox, removeOutboxForSession, type OutboxEntry } from '../offline.ts'
+import { QueueDock } from '../queue-dock.tsx'
+import { FilePreviewSheet } from '../file-preview-sheet.tsx'
+import { ImageLightbox } from '../image-lightbox.tsx'
+import { updateQueue, queueItemViewOf, type QueueItemView } from '../api.ts'
+import { RpcCallError } from '../rpc.ts'
+import { startVoiceRecording, voiceSupported, type VoiceRecording } from '../voice-input.ts'
+import { getVoiceServices } from '../voice-services.ts'
+import { toast } from '../toast.tsx'
+import { Sheet } from '../sheet.tsx'
+import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
+import { CheckIcon, ChevronDownIcon, CloseIcon, MicIcon, ModelIcon, MoreIcon, PencilIcon, PlusIcon, SendIcon, ShieldIcon } from '../icons.tsx'
+import { MessageRow } from '../message-row.tsx'
+import { LONG_TEXT_LIMIT, LONG_TEXT_PREVIEW } from '../markdown-text.tsx'
+import { ApprovalPanel, ModelSheet, PermissionSheet, PlusSheet, QuestionPanel, TurnListSheet, parsePermissionSelect, type PermissionSelectValue } from '../sheets.tsx'
+import type { PointerEvent as ReactPointerEvent } from 'react'
+import { mergeTurnEntries, parseTurnOutline, localTurnEntries, readingTurnAt, scrubTurnIndex, turnRowIndex, type TurnEntry } from '../turn-outline.ts'
+import { TurnScrubber } from '../turn-scrubber.tsx'
+import { TaskStatusBar } from '../task-status.tsx'
+import type { JobView } from '../../api-proxy-types'
+import { SUBAGENT_POLL_MS, fetchSubagentsFlat, type SubagentFlatNode } from '../subagent-tree.ts'
+
+/** D1 handle-gesture tunables: the travel (px) a press must exceed before it
+ *  counts as a scrub drag, and the horizontal inset of the scrub card's track
+ *  inside the viewport (card margin + padding). The inset mirrors .turn-scrub in
+ *  the stylesheet, because the finger position is mapped onto that track. */
+const TURN_SCRUB_MOVE_PX = 8
+const TURN_SCRUB_TRACK_INSET_PX = 30
+
+/** Right-hand x of the scrub track inside the viewport (kept above the left edge
+ *  even on an absurdly narrow window, so the span can never invert). */
+function scrubTrackRight(): number {
+  return Math.max(TURN_SCRUB_TRACK_INSET_PX + 40, window.innerWidth - TURN_SCRUB_TRACK_INSET_PX)
+}
+
+/** Page budget for one turn jump. The first request jumps straight to the
+ *  target turn's page, so this only bounds a jump whose cursor missed. */
+const TURN_JUMP_MAX_PAGES = 24
+
+/** Props for the chat view. */
+export interface ChatViewProps {
+  session: SessionView
+  /** The page-lifetime mux client (undefined before the first effect tick). */
+  mux?: MuxClient | undefined
+  onBack(): void
+  /** Show tool-call disclosures (owned by the app, persisted via display-prefs). */
+  showToolCalls: boolean
+  /** Show injected system messages (owned by the app, persisted via display-prefs). */
+  showSystemMessages: boolean
+  /** Message event seq retained as a history paging fallback. */
+  initialFocusSeq?: number
+  /** Stable folded message identity for exact locate. */
+  initialFocusMessageId?: string
+  /** Stable text-part identity for exact locate. */
+  initialFocusPartId?: string
+  /** Query paired with the target: expands and marks the visible prose. */
+  initialFocusQuery?: string
+}
+
+/**
+ * Hard cap on live events buffered while the initial history tail page is in
+ * flight. Beyond this the oldest buffered event is dropped and a follow-up
+ * history tail re-pull closes the seam.
+ */
+export const MAX_TAIL_BUFFER_EVENTS = 500
+
+/** Compact token count for the context meter: 800 → "800", 30k, 1.2M. */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(n)
+}
+
+/** Lazy in-place model-catalog state for the quick picker strip. */
+type ModelPickerCatalog =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; data: SessionModels }
+
+/** Compact model label for the pill: drop a provider-y prefix, keep the
+ *  last two dash segments (x-preview-f-free → f-free, deepseek-v4-flash →
+ *  v4-flash); short ids stay verbatim. The full id lives in the title. */
+function compactModelName(id: string): string {
+  const parts = id.split('-').filter(Boolean)
+  return parts.length <= 2 ? id : parts.slice(-2).join('-')
+}
+
+/** Permission tone for the shield pill: read = neutral, write = accent,
+ *  full access = danger (the human-vision status channel). */
+function permissionTone(value: string): 'read' | 'write' | 'full' | undefined {
+  if (value === 'danger-full-access') return 'full'
+  if (value.includes('write')) return 'write'
+  if (value.includes('read')) return 'read'
+  return undefined
+}
+
+/**
+ * Distance from the bottom (px) within which streaming output still auto-follows.
+ * A reader who scrolled farther up than this is left alone while new chunks
+ * arrive.
+ */
+export const BOTTOM_FOLLOW_THRESHOLD_PX = 80
+
+/** Pending-item poll cadence while the SSE stream is delivering (safety net only). */
+export const PENDING_POLL_IDLE_MS = 15_000
+/** Pending-item poll cadence while the SSE stream is stalled (fast coverage). */
+export const PENDING_POLL_FAST_MS = 1_500
+/** Host running-reconciliation cadence while the indicator is on (self-heals a lost turn/end). */
+export const RUNNING_RECONCILE_MS = 10_000
+/** Consecutive listSessions failures (each RUNNING_RECONCILE_MS apart) that
+ * prove the host is unreachable - the process stopped or the link is down.
+ * The reconciliation can only self-heal a lost turn/end while the host answers;
+ * once it has been silent this long, the indicator can never clear on its own,
+ * so drop it instead of showing 输出中 for a host that is no longer running. */
+export const RECONCILE_FAILURE_LIMIT = 3
+/** Frame silence that flips the indicator from 输出中 to 后台处理中 (the turn
+ * is still open but nothing visible is streaming - subagent memory upkeep
+ * and other back-office work the phone does not render). */
+export const TURN_QUIET_MS = 6_000
+/** The turn clock (desktop parity) appears once the turn has clearly been
+ * running this long; shorter turns keep the plain label. */
+export const TURN_CLOCK_THRESHOLD_MS = 3_000
+/** Composer draft debounce: localStorage writes wait this long after the
+ *  last keystroke (unmount flushes immediately regardless). */
+export const DRAFT_SAVE_DEBOUNCE_MS = 1_500
+/** Ceiling for one "load older messages" request before it aborts and errors. */
+export const LOAD_OLDER_TIMEOUT_MS = 15_000
+
+/* ── windowed rendering (long sessions) ────────────────────────────────
+   Below the threshold the list renders in full (the common case and the
+   one every existing test exercises). Past it, only the messages around the
+   scroll position render, with estimated-height spacers above and below.
+   The estimate is deliberately coarse — the overscan absorbs the error and
+   every scroll re-locates from the scroll position, so errors never
+   accumulate into drift. */
+
+/** Message count above which the chat renders windowed instead of in full. */
+export const WINDOW_THRESHOLD = 120
+/**
+ * Rows at the tail that always render with real layout (no content-visibility)
+ * in the non-windowed path. The auto-follow reads `el.scrollHeight` to pin the
+ * bottom; content-visibility substitutes `contain-intrinsic-size` estimates for
+ * off-screen rows, which would make that height approximate and land the
+ * follower off the true bottom. Keeping the last ~1.5 viewports real keeps the
+ * follow exact while the rows above (history) skip layout/paint.
+ */
+export const CONTENT_VISIBILITY_KEEP_BOTTOM = 30
+/** Older pages paged for a focus-locate before giving up (bounded IO). */
+// Search can scan deep history (mobile-api SEARCH_MESSAGES_PAGES). Keep locate
+// paging bounded, but large enough to reach any result that search can return.
+export const FOCUS_MAX_PAGES = 4096
+/** Messages rendered ahead of / behind the located row. */
+export const WINDOW_OVERSCAN = 20
+/** Target visible message rows per window. */
+export const WINDOW_VISIBLE = 24
+
+/** Estimated line height of one rendered message row (px). */
+const ESTIMATE_LINE_HEIGHT = 22
+/** Approximate CJK-friendly characters per line on a phone-width column. */
+const ESTIMATE_CHARS_PER_LINE = 38
+/** Rows a collapsed long message clamps to (matches chat-md-collapsed). */
+const ESTIMATE_MAX_LINES = 12
+
+/** Escape a value for use inside a quoted CSS attribute selector, safe on
+ *  every runtime (no reliance on `CSS.escape`, which is missing in jsdom and
+ *  some embedded webviews). Message ids carry only `"`/`\` that need it. */
+function escapeAttr(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+/**
+ * Fixed prefix height for a STREAMING (pending) row. Its real height grows
+ * every chunk, so measuring it (or estimating from its growing text) would
+ * drift the prefix sum and make the located window edge walk backwards —
+ * unmounting already-rendered paragraphs above. A stable placeholder keeps
+ * the window pinned; the row is measured once it settles.
+ */
+const PENDING_ROW_ESTIMATE = 96
+
+/** 一张消息图片的估算高度（缩略图上限 + 间距，见 .chat-msg-image）。 */
+const IMAGE_TILE_ESTIMATE = 220
+
+/** Estimate one message row's rendered height in px (spacers use this). */
+export function estimateMessageHeight(message: RenderMessage): number {
+  if (message.kind === 'user') {
+    const lines = Math.max(1, Math.ceil(message.text.length / ESTIMATE_CHARS_PER_LINE))
+    // 图片是固定高的缩略图（.chat-msg-image 的 max-height）：按张数补高度，
+    // 否则含图的行在窗口化路径里会被低估，滚动位置会跳。
+    const imageHeight = (message.images?.length ?? 0) * IMAGE_TILE_ESTIMATE
+    return 28 + lines * ESTIMATE_LINE_HEIGHT + imageHeight
+  }
+  let height = 20
+  if (message.reasoning !== undefined && message.reasoning !== '') height += 32
+  if (message.tools !== undefined && message.tools.length > 0) height += 28
+  const text = message.text
+  if (text === '') return height + 24
+  const collapsed = !message.pending && text.length > LONG_TEXT_LIMIT
+  const shownChars = collapsed ? LONG_TEXT_PREVIEW : text.length
+  const lines = Math.max(1, Math.ceil(shownChars / ESTIMATE_CHARS_PER_LINE))
+  height += Math.min(lines, ESTIMATE_MAX_LINES) * ESTIMATE_LINE_HEIGHT
+  if (collapsed) height += 30
+  return height + 16
+}
+
+/** One display-name transform for kebab-case machine names (web-UI parity). */
+function displayName(name: string): string {
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) return name
+  return name.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+}
+
+
+/**
+ * Render one session's chat.
+ * @param props - the session, the mux client, and the back action.
+ * @returns the chat surface.
+ */
+export function ChatView({
+  session,
+  mux,
+  onBack,
+  showToolCalls,
+  showSystemMessages,
+  initialFocusSeq,
+  initialFocusMessageId,
+  initialFocusPartId,
+  initialFocusQuery,
+}: ChatViewProps) {
+  const [messages, setMessages] = useState<RenderMessage[]>([])
+  // Foreground gate for every poll on this view: a frozen background PWA must
+  // not keep issuing RPCs (the stream and the host-side follow are released by
+  // App's observe effect; returning resyncs them).
+  const foreground = usePageVisible()
+
+  /**
+   * Surface-state wrapper for setMessages: coalesce consecutive same-turn
+   * assistant step rows (each model step emits its own assistant/message —
+   * a busy turn would otherwise fill a history tail page with step rows and
+   * push the real prior conversation, code fences included, out of view).
+   */
+  const applyMessages = (rows: RenderMessage[]): void => { setMessages(coalesceTurnMessages(rows)) }
+  const [hasOlder, setHasOlder] = useState(false)
+  // Latest loadOlder (the tail-load effect's closure is stale by the time the
+  // page lands); the auto-extend on open calls through this ref. Assigned
+  // after the useCallback below (TDZ).
+  const loadOlderRef = useRef<(silent?: boolean, beforeSeq?: number) => void>(() => {})
+  // One silent auto-extend per session open (see the tail-load effect).
+  const autoExtendedRef = useRef(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const [input, setInput] = useState(() => loadDraft(session.sessionId))
+  // Live mirror of `input` for the unmount draft flush (the cleanup closure
+  // must read the CURRENT text, not the one its render captured).
+  const inputRef = useRef(input)
+  inputRef.current = input
+  const [sending, setSending] = useState(false)
+  // Live mirror of `sending` for the back handler (a stale closure must not
+  // treat an in-flight send as "nothing sent yet" and revoke the session).
+  const sendingRef = useRef(sending)
+  sendingRef.current = sending
+  const scrollRef = useRef<HTMLDivElement | undefined>(undefined)
+  const pendingRef = useRef(false)
+  // Windowed rendering: prefix sum of estimated row heights over `messages`,
+  // rebuilt when the list changes (undefined below the window threshold).
+  const prefixRef = useRef<number[] | undefined>(undefined)
+  // Live mirror of `messages` for the rAF locate callback: the callback may
+  // run long after it was scheduled (a first-frame rAF can outlive the tail
+  // load), so it must read the CURRENT list, not the one its closure was
+  // created with.
+  const messagesRef = useRef(messages)
+  const [win, setWin] = useState<{ start: number; end: number }>({ start: 0, end: 0 })
+  // Live mirror of `win` for the rAF locate callback (the callback may run
+  // long after it was scheduled, so it must read the CURRENT window).
+  const winRef = useRef(win)
+  winRef.current = win
+  const rafRef = useRef<number | undefined>(undefined)
+  const scrollTopRef = useRef(0)
+  /**
+   * True while a programmatic scroll (the opening tail pin, the locate, a
+   * prepend anchor correction) is in flight, so handleScroll can tell it apart
+   * from a user gesture: the FIRST scroll event consumes the flag, and that
+   * event may neither release the locate lock nor record a reading bookmark —
+   * it is the echo of a write, not the reader leaving the bottom.
+   */
+  const programmaticScrollRef = useRef(false)
+  /**
+   * One deferred re-follow after the silent auto-extend prepend (open-time
+   * older page). The old implementation re-followed from a rAF that reads
+   * `el.scrollHeight` — but on a real browser the rAF can run BEFORE React
+   * commits the prepended rows (each heavy row is expensive to render), so
+   * the follow read the STALE height, pinned to the old tail, and — with the
+   * prepend committed on top of it — the view stranded mid-history with no
+   * corrector left (the stream follower key is unchanged by a prepend, the
+   * windowed re-pin effect is gated on `windowed`, and the correction effect
+   * returns on a missing prefix). Pinned instead by the commit-time effect
+   * below, where the DOM already contains the new rows.
+   */
+  const followAfterPrependRef = useRef(false)
+  // The bottom gap at the USER's last gesture (recorded on every scroll
+  // event). Passive content growth — a pending message finalizing into
+  // taller markdown, an appended reply — changes scrollHeight without firing
+  // a scroll event, so this snapshot keeps its gesture-time truth: the
+  // follower never mistakes a content-driven height change for "user scrolled
+  // up". Programmatic writes (scrollToBottom) land at the bottom (gap 0) and
+  // are equally harmless.
+  const bottomGapAtUserScrollRef = useRef(0)
+  // Windowed-height correction: real content height minus the estimated
+  // prefix sum, measured on the last full (non-windowed) render frame. The
+  // windowed DOM's scrollHeight is an estimate (spacers stand in for
+  // unrendered rows); adding this correction to the top spacer makes the
+  // real total height match, so scrolling reaches the true bottom. Zero in
+  // jsdom (no layout) and below the window threshold.
+  const heightCorrectionRef = useRef(0)
+  // Measured real heights of rendered rows (messageId → px). Windowed mode
+  // measures every rendered row after commit and blends the real heights
+  // into the prefix sum, so the estimate only stands in for rows that are
+  // not currently on screen. Zero in jsdom (no layout) — the estimate path
+  // stays authoritative there.
+  const measuredRef = useRef<Map<string, number>>(new Map())
+  const [measuredTick, setMeasuredTick] = useState(0)
+  messagesRef.current = messages
+  /**
+   * True while the initial tail page is in flight. Live events arriving in
+   * that window go to {@link liveBufferRef} instead of the message list: the
+   * tail load replaces the list wholesale, so a directly folded event would
+   * flash once, be discarded by the snapshot, and then be skipped forever by
+   * the seq watermark.
+   */
+  const tailLoadingRef = useRef(true)
+  /** Live session events buffered while the initial tail page loads. */
+  const liveBufferRef = useRef<WireEvent[]>([])
+  /** Incremental folder for this session's stream (indexes stay hot across events). */
+  const folderRef = useRef<EventFolder | undefined>(undefined)
+  /**
+   * rAF micro-batch for live message events. SSE `onmessage` is a separate
+   * macrotask per frame, so folding each event straight into `setMessages`
+   * triggers one React reconcile per chunk — a fast model + many tool calls
+   * can push 30+ reconciles/sec. Events are buffered here and folded together
+   * on the next animation frame (one reconcile per frame, ~60/s). The fold is
+   * incremental and seq-idempotent, so batching is safe; the auto-follow only
+   * lags by one frame (~16ms), which is imperceptible. Non-message frames
+   * (jobs/queue/approvals) and the turn/start·end·todo side-effects stay
+   * immediate.
+   */
+  const eventBatchRef = useRef<WireEvent[]>([])
+  const eventFlushRafRef = useRef<number | undefined>(undefined)
+  /** Schedule one rAF flush of the buffered message events (idempotent). */
+  const scheduleEventFlush = useCallback((): void => {
+    if (eventFlushRafRef.current !== undefined) return
+    eventFlushRafRef.current = requestAnimationFrame(() => {
+      eventFlushRafRef.current = undefined
+      const batch = eventBatchRef.current
+      eventBatchRef.current = []
+      if (batch.length === 0) return
+      const folder = folderRef.current
+      // Opt-in perf mark: decode/fold/coalesce done, state update about to
+      // schedule (span recv→state measures the whole client pipeline). The
+      // batch is stamped with its newest event's seq.
+      const last = batch[batch.length - 1]
+      perfMark('state', { seq: last?.seq, frame: 'session/event', detail: `batch:${batch.length}` })
+      setMessages(previous => coalesceTurnMessages(
+        folder === undefined ? foldEvents(batch, previous) : folder.fold(batch),
+      ))
+    })
+  }, [])
+  /** True once the live buffer hit its cap (oldest events were dropped). */
+  const liveBufferOverflowRef = useRef(false)
+  /** Seq window of the events dropped from the tail-load buffer (refill). */
+  const dropWindowRef = useRef<{ from: number; to: number } | undefined>(undefined)
+  /** Monotonic reload epoch: only the newest reloadTail lands. */
+  const reloadEpochRef = useRef(0)
+  /** Abort the previous reloadTail when a new one starts (no cross-resolve). */
+  const reloadControllerRef = useRef<AbortController | undefined>(undefined)
+
+  /** The session's permission select (absent = capability not composed). */
+  const [permissions, setPermissions] = useState<PermissionSelectValue | undefined>(undefined)
+  /** Host context-pressure projection (token-meter): the authoritative
+   *  per-session occupancy source. Fed by the history baseline and live
+   *  session/projection frames; `undefined` until the first data lands. */
+  const [contextPressure, setContextPressure] = useState<ContextPressureData | undefined>(undefined)
+  /** The current model selection for the toolbar chip (best-effort label). */
+  const [currentModel, setCurrentModel] = useState<{ provider: string; model: string; reasoningEffort?: string } | undefined>(undefined)
+  /** Which bottom sheet is open. */
+  const [sheet, setSheet] = useState<'model' | 'permission' | null>(null)
+  /** File path awaiting in-chat preview (a .file-link tap without a host opener). */
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  /** In-chat <img> source opened in the full-screen lightbox (tap-to-view). */
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  /** Which in-place quick picker strip is open below the toolbar. */
+  const [picker, setPicker] = useState<'model' | 'permission' | null>(null)
+  /** Whether the context-usage popover (ring tap) is open. */
+  const [contextOpen, setContextOpen] = useState(false)
+  /** In-flight guard for one-shot picker actions. */
+  const [pickerBusy, setPickerBusy] = useState(false)
+  /** Lazily cached model directory backing the quick picker (fresh per open
+   *  until it loads once; the full sheet re-fetches on its own). */
+  const [modelCatalog, setModelCatalog] = useState<ModelPickerCatalog>({ status: 'idle' })
+  /** Whether the composer's + menu is open (图片 / 命令). */
+  const [plusOpen, setPlusOpen] = useState(false)
+  /** Images picked or pasted into the composer, awaiting send (community-style attach). */
+  const [attachImages, setAttachImages] = useState<AttachedImage[]>([])
+  /** Live mirror of attachImages for the async addImage cap check (no stale closure). */
+  const attachImagesRef = useRef(attachImages)
+  useEffect(() => { attachImagesRef.current = attachImages }, [attachImages])
+
+  /**
+   * Composer draft persistence: debounced writes while typing (a keystroke
+   * must not hit localStorage every key), an immediate flush on unmount /
+   * session switch, and removal once the text is sent (or emptied). The
+   * draft survives chat round-trips and PWA cold starts, per session.
+   */
+  useEffect(() => {
+    if (input === '') {
+      removeDraft(session.sessionId)
+      return
+    }
+    const id = setTimeout(() => { saveDraft(session.sessionId, input) }, DRAFT_SAVE_DEBOUNCE_MS)
+    return () => { clearTimeout(id) }
+  }, [input, session.sessionId])
+  useEffect(() => {
+    return () => {
+      // Unmount / session switch: flush the CURRENT text immediately (the
+      // debounce timer may never fire if the view is torn down first).
+      if (inputRef.current !== '') saveDraft(session.sessionId, inputRef.current)
+    }
+  }, [session.sessionId])
+  /** Hidden file chooser backing the + menu's 图片 entry. */
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  /** Hidden camera capture input backing the + menu's 拍照 entry (mobile
+   *  `capture` attribute opens the device camera directly). */
+  const cameraInputRef = useRef<HTMLInputElement | null>(null)
+  /** Host slash-command directory (fetched lazily when the + menu opens). */
+  const [commands, setCommands] = useState<CommandDescriptor[] | undefined>(undefined)
+  /** Quoted message (context bar above the composer; sent as a blockquote preamble). */
+  const [quoted, setQuoted] = useState<string | undefined>(undefined)
+  /** Whether the composer holds focus (quick-command bar shows with the keyboard). */
+  const [composerFocused, setComposerFocused] = useState(false)
+  /** Offline state + queued-prompt count (banner above the chat). */
+  const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false)
+  const [queuedCount, setQueuedCount] = useState(0)
+  /** The queued outbox entries (banner lets the user remove one at a time). */
+  const [queuedEntries, setQueuedEntries] = useState<OutboxEntry[]>([])
+  /** Voice recording sheet + the live recorder handle and its phase. */
+  const [voiceOpen, setVoiceOpen] = useState(false)
+  const [voicePartial, setVoicePartial] = useState('')
+  const [voicePhase, setVoicePhase] = useState<'recording' | 'transcribing'>('recording')
+  const voiceRef = useRef<VoiceRecording | undefined>(undefined)
+  /** True while the chat is mounted; guards async voice callbacks after unmount. */
+  const mountedRef = useRef(true)
+  /** Pinch-zoom state for code blocks (one active gesture at a time). */
+  const pinchRef = useRef<{ block: HTMLElement; dist0: number; scale0: number } | undefined>(undefined)
+  /**
+   * Composer preference from the plugin's host settings (default true keeps
+   * the legacy Enter-to-send behavior until the preference loads).
+   */
+  const [mobileEnterToSend, setMobileEnterToSend] = useState(true)
+  /** Whether the assistant is currently generating (turn/start..turn/end). */
+  const [running, setRunning] = useState(false)
+  /**
+   * 当前活跃轮次的**轮号**（turn/start 帧里带回来的那一个）。它与 {@link running}
+   * 同生同灭：凡是写 running 的地方都一起写这里（帧里的 turn/start、turn/end、
+   * 名单/尾页锚点的恢复、reconcile 探针、steer 被拒），所以行级判据看到的活跃
+   * 轮次永远就是底部状态行看到的那一轮。轮号缺席（中途重开时 running 是从名单
+   * 或尾页锚点恢复的，手上没有那一帧）时由 {@link liveTurn} 退回折叠里的最新一轮。
+   */
+  const [runningTurn, setRunningTurn] = useState<number | undefined>(undefined)
+  /** Pending-message queue for this session (desktop QueueDock equivalent),
+   *  seeded from the mux's retained snapshot so a freshly opened chat shows
+   *  messages queued before it mounted. */
+  const [queueItems, setQueueItems] = useState<QueueItemView[]>(
+    () => mux?.cachedQueueFor(session.sessionId) ?? [],
+  )
+  /**
+   * The running turn's logged `turn/start` event time (epoch ms), the turn
+   * clock's anchor (desktop parity). Null while no turn is open or when the
+   * boundary fell outside the loaded window — the clock then falls back to
+   * the view's mount time, exactly like the desktop TurnStatus.
+   */
+  const [turnStartAt, setTurnStartAt] = useState<number | null>(null)
+  /** Turn-clock mount fallback (see turnStartAt). */
+  const mountTimeRef = useRef(Date.now())
+  /** Host−phone clock delta, calibrated by every live frame (see onFrame). */
+  const hostClockOffsetRef = useRef(0)
+  /** Wall-clock of the last mux frame of ANY kind (the activity probe behind
+   * the quiet-state wording - subagent sessions stream on the same mux). */
+  const lastFrameAtRef = useRef(Date.now())
+  /** Running but nothing has streamed for TURN_QUIET_MS: the host is in
+   * invisible back-office work (subagent memory upkeep etc.). */
+  const [turnQuiet, setTurnQuiet] = useState(false)
+  /** Sustained host silence (RECONCILE_FAILURE_LIMIT failed roster reads):
+   * the live channel is gone and nothing local can prove the turn ended. The
+   * clock and its anchor are deliberately KEPT - a phone that switched
+   * networks or woke from a locked screen must not lose the elapsed time it
+   * was watching - and only the wording changes until an answer (or a live
+   * frame) comes back. */
+  const [hostLost, setHostLost] = useState(false)
+  /** Latest `session/jobs` snapshot for this session (background tasks the
+   * parent owns: subagent delegations, bash/pwsh runs, …). The host pushes a
+   * full snapshot after every registry commit; empty = no tasks. The initial
+   * value replays the mux client's cached snapshot so tasks already running
+   * when this chat opens are visible immediately (the mux baseline arrives at
+   * app boot, before any chat is mounted). */
+  const [jobs, setJobs] = useState<JobView[]>(() => mux?.cachedJobsFor(session.sessionId) ?? [])
+  /** Latest `todo/write` snapshot for this session (the plan strip above the
+   * newest message). Adoption is last-write-wins by seq: history pages and
+   * live frames can race, and an older page must never clobber a newer live
+   * snapshot. Cleared on turn/start (the host clears the projection there). */
+  const [todo, setTodo] = useState<TodoSnapshot | undefined>(undefined)
+  const adoptTodo = useCallback((next: TodoSnapshot | undefined): void => {
+    if (next === undefined) return
+    setTodo(previous => (previous !== undefined && next.seq <= previous.seq ? previous : next))
+  }, [])
+  /** Adopt one live `todo/write` event into the plan strip (malformed → keep). */
+  const adoptTodoLatest = useCallback((event: WireEvent): void => {
+    const items = parseTodoList(event.data)
+    if (items === undefined) return
+    adoptTodo({ seq: event.seq, items })
+  }, [adoptTodo])
+  /** On turn/end, mirror the host projection's normalization: a task still
+   * `in_progress` when the turn ends reads as completed (agents routinely skip
+   * the final all-done write, which would otherwise leave the strip stuck on an
+   * intermediate state until the next turn/start). `pending` items were never
+   * started and stay untouched; the next turn/start clears the whole list. */
+  const normalizeTurnEndTodo = useCallback((): void => {
+    setTodo(previous => previous === undefined ? previous : {
+      seq: previous.seq,
+      items: previous.items.map(item => item.status === 'in_progress'
+        ? { ...item, status: 'completed' }
+        : item),
+    })
+  }, [])
+  /** Foreground subagents for this session (the flat live delegation list).
+   * Built from `subagents.list` and overlaid with host/session-status flips. */
+  const [subagents, setSubagents] = useState<SubagentFlatNode[]>([])
+  /** Whether the run-status bottom sheet (subagents + todo plan + background jobs) is up. */
+  const [runStatusOpen, setRunStatusOpen] = useState(false)
+  /** Whether a stop request is in flight (guards the composer's stop button). */
+  const [stopping, setStopping] = useState(false)
+  /** Pending tool approvals awaiting user decision (#1025). */
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([])
+  /** Pending questions awaiting user answer (#1025). */
+  const [pendingQuestions, setPendingQuestions] = useState<PendingQuestionItem[]>([])
+  /** Displayed title (renames apply locally right away). */
+  const [title, setTitle] = useState(session.title)
+  /** The header 更多 menu (rename / copy session id). */
+  const [moreOpen, setMoreOpen] = useState(false)
+  /** Turn-list bottom sheet visibility. */
+  const [turnListOpen, setTurnListOpen] = useState(false)
+  /** The host `turnOutline` projection raw value (parsed into the merged
+   *  list below). Absent until the tail projection baseline lands. */
+  const [turnOutlineRaw, setTurnOutlineRaw] = useState<unknown>(undefined)
+  /** Merged host outline + locally-loaded turns, sorted by turn ascending. */
+  const turnEntries = useMemo(
+    () => mergeTurnEntries(parseTurnOutline(turnOutlineRaw), localTurnEntries(messages)),
+    [turnOutlineRaw, messages],
+  )
+  /** The highest turn NUMBER in the outline: the "of N" denominator. The turn
+   *  number, not the entry count, so an outline that starts after turn 1 (or is
+   *  only partly merged) still reads "7 / 43" instead of "7 / 12". */
+  const maxTurn = turnEntries[turnEntries.length - 1]?.turn ?? 0
+  /** The host outline's own newest turn (0 until the projection lands). The
+   *  host projection is the session's FULL turn list, so — unlike `maxTurn`,
+   *  which only sees the rows currently loaded — it does not grow while deep
+   *  history pages in. It is the stable source for "is this the newest turn?":
+   *  a bookmark compared against a growing value would resurface as a bogus
+   *  「回到上次」 chip. */
+  const hostNewestTurn = useMemo(
+    () => parseTurnOutline(turnOutlineRaw).reduce((newest, entry) => Math.max(newest, entry.turn), 0),
+    [turnOutlineRaw],
+  )
+  /** The newest turn the bookmark is judged against: the host outline when it
+   *  has landed, the merged outline (local rows only) before that. */
+  const newestTurn = hostNewestTurn > 0 ? hostNewestTurn : maxTurn
+  /** The currently-viewed turn (the row nearest the top of the viewport). */
+  const [currentTurn, setCurrentTurn] = useState(0)
+  /** What the handle and the sheet highlight show: the tracked reading turn,
+   *  falling back to the newest turn until the first scroll reports a position. */
+  const shownTurn = currentTurn > 0 ? currentTurn : maxTurn
+  /* Reading-position memory (the 「回到上次」 chip): the loaded bookmark plus
+     live mirror refs, so the debounced scroll save and the unmount flush never
+     read a stale closure. */
+  const [lastReadTurn, setLastReadTurn] = useState<number | undefined>(() => loadReadingTurn(session.sessionId))
+  const currentTurnRef = useRef(currentTurn)
+  currentTurnRef.current = currentTurn
+  const turnEntriesRef = useRef(turnEntries)
+  turnEntriesRef.current = turnEntries
+  /** Live mirror of {@link newestTurn} for the deferred bookmark writes (the
+   *  scroll-settle debounce and the unmount flush must read the CURRENT newest
+   *  turn, not the one their closure captured). */
+  const newestTurnRef = useRef(newestTurn)
+  newestTurnRef.current = newestTurn
+  const sessionIdRef = useRef(session.sessionId)
+  sessionIdRef.current = session.sessionId
+  /** Debounce handle for the scroll-settle reading save. */
+  const readingTimerRef = useRef<number | undefined>(undefined)
+  /** Pending turn-jump target seq while paging it in (see jumpToTurn). */
+  /** Target of a turn jump that must page history in first: the outline's
+   *  boundary seq, the turn NUMBER to match once a page lands (the seq alone
+   *  cannot match — see locateSeq), and how many follow-up pages this jump has
+   *  already spent. */
+  const pendingTurnSeqRef = useRef<number | undefined>(undefined)
+  const pendingTurnNumberRef = useRef<number | undefined>(undefined)
+  const pendingTurnPagesRef = useRef(0)
+  /** D1 scrub state: the index into `turnEntries` the finger points at while the
+   *  handle is held; undefined means the scrubber is closed. */
+  const [scrubIndex, setScrubIndex] = useState<number | undefined>(undefined)
+  /** Live bookkeeping for one handle gesture: where the press landed (the drag
+   *  threshold is measured against it) and whether it ever travelled, so the
+   *  release can tell a tap (open the list) from a scrub. */
+  const scrubGestureRef = useRef<
+    { pointerId: number; startX: number; moved: boolean } | undefined
+  >(undefined)
+  /** Rename dialog visibility. */
+  const [renaming, setRenaming] = useState(false)
+  /** Delete-session confirm dialog visibility. */
+  const [deleting, setDeleting] = useState(false)
+  /** Long-press message menu: viewport position + the bubble's plain text,
+   *  plus the message's RAW markdown when it differs (tool-interleaved flow
+   *  turns carry their payload in flow runs, invisible in `text`). */
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number
+    y: number
+    text: string
+    raw?: string
+    /** Message kind drives the message-specific actions (edit for user). */
+    kind?: RenderMessage['kind']
+    messageId?: string
+  } | undefined>(undefined)
+  /** The user message being edited-and-resent (回填后重发为新 prompt). */
+  const [editMessage, setEditMessage] = useState<{ messageId: string; text: string } | undefined>(undefined)
+  /** Auto-scroll preference (设置 → 自动滚动); read once per mount. */
+  const [autoScroll] = useState(() => getAutoScroll())
+
+  // Read-only mobile display preferences ride the plugin's local
+  // `/m/api` method; a failure keeps the default (Enter sends).
+  useEffect(() => {
+    let cancelled = false
+    void fetchMobilePreferences().then(
+      (preferences) => {
+        if (!cancelled) setMobileEnterToSend(preferences.mobileEnterToSend !== false)
+      },
+      () => { /* keep the default */ },
+    )
+    return () => { cancelled = true }
+  }, [])
+
+  /* ── offline mode ──────────────────────────────────────────────────── */
+
+  /** Refresh the queued count + entry list (banner reads both). */
+  const refreshOutbox = useCallback((): void => {
+    void listOutbox().then(entries => {
+      setQueuedCount(entries.length)
+      setQueuedEntries(entries)
+    })
+  }, [])
+
+  // Track the connection and refresh the queued count alongside it; the
+  // banner and the composer's queueing logic both read these.
+  useEffect(() => {
+    const update = (): void => {
+      setOffline(typeof navigator !== 'undefined' && navigator.onLine === false)
+      refreshOutbox()
+    }
+    update()
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [refreshOutbox])
+
+  /** Drop one queued prompt (the banner's per-entry remove button). */
+  const removeQueuedEntry = useCallback((id: string): void => {
+    void removeFromOutbox(id).then(() => { refreshOutbox() })
+  }, [refreshOutbox])
+
+  /** Deliver the queued prompts once the connection is back. */
+  const flushQueue = useCallback((): void => {
+    void flushOutbox(entry => prompt(entry.sessionId, textParts(entry.text))).then(
+      ({ sent, failed }) => {
+        if (sent > 0) toast(failed > 0 ? `已同步 ${sent} 条，${failed} 条待重试` : `已同步 ${sent} 条消息`)
+        refreshOutbox()
+        if (sent > 0) mux?.poke()
+      },
+    )
+  }, [mux, refreshOutbox])
+
+  /** Edit a queued message's text on the host (desktop QueueDock parity).
+   *  Resolves when the host answers — rejected included — so the dock's
+   *  in-flight guard releases. */
+  const handleQueueEdit = useCallback(async (itemId: string, text: string): Promise<void> => {
+    try {
+      await updateQueue(session.sessionId, itemId, { kind: 'edit', content: [{ type: 'text', text }] })
+    } catch {
+      // The host rejected the mutation (item already claimed, or the agent
+      // detached so the session went cold). The queue view is authoritative
+      // host data, not local state: a rejection means the snapshot is about
+      // to change, and the next session/queue frame — or the
+      // session/subscribed re-baseline after a reconnect — converges it.
+      // Clearing here would drop rows that are still genuinely queued, so
+      // the dock is left alone and the failure is surfaced instead.
+      toast('消息已开始发送，无法编辑')
+    }
+  }, [session.sessionId])
+
+  /** Remove a queued message on the host. */
+  const handleQueueRemove = useCallback(async (itemId: string): Promise<void> => {
+    try {
+      await updateQueue(session.sessionId, itemId, { kind: 'remove' })
+    } catch {
+      toast('消息已开始发送，无法删除')
+    }
+  }, [session.sessionId])
+
+  /** Steer a queued message into the running turn (only while running). */
+  const handleQueueSteer = useCallback(async (itemId: string): Promise<void> => {
+    try {
+      await updateQueue(session.sessionId, itemId, { kind: 'steer' })
+    } catch (reason: unknown) {
+      const code = reason instanceof RpcCallError ? reason.error.code : undefined
+      if (code === 'steer-unavailable') {
+        // The host says the current turn no longer accepts steering — it
+        // ended, but the turn/end frame may have been lost to a degraded
+        // SSE channel. Mirror the host's running state so the UI stops
+        // offering steer on a finished turn.
+        toast('当前轮次已结束，无法插话')
+        setRunning(false)
+        setRunningTurn(undefined)
+        setTurnStartAt(null)
+        return
+      }
+      // queue-item-not-found (already claimed / cold session) or a
+      // transport failure: the agent may still be running, so the running
+      // indicator stays untouched. The queue dock itself is authoritative
+      // host data and is never cleared here — the next session/queue frame
+      // (or the session/subscribed re-baseline) converges it.
+      toast(code === 'queue-item-not-found' ? '消息已开始发送，无法插话' : '插话失败')
+    }
+  }, [session.sessionId])
+
+  // Connection restored: drain the outbox automatically.
+  useEffect(() => {
+    if (offline) return
+    void listOutbox().then(entries => {
+      if (entries.length === 0) return
+      flushQueue()
+    })
+  }, [offline, flushQueue])
+
+  // The + menu's command directory loads lazily on first open (weak links
+  // never pay for it up front); a failure degrades to an empty list. The
+  // session id resolves the agent's effective command view (per-agent rows
+  // like /plan and /compact live in agent presets on the Web deployment).
+  useEffect(() => {
+    if (!plusOpen || commands !== undefined) return
+    let cancelled = false
+    void listCommands(session.sessionId).then(
+      (items) => { if (!cancelled) setCommands(items) },
+      () => { if (!cancelled) setCommands([]) },
+    )
+    return () => { cancelled = true }
+  }, [plusOpen, commands, session.sessionId])
+
+  /** Refill a dropped seq window (tail overflow) page by page, from its
+   * newest edge backwards, trimming rows already present in the fold (the
+   * page below the window's bottom overlaps the tail snapshot). Best-effort:
+   * a failure only logs. */
+  const refillGap = useCallback((gap: { from: number; to: number }, signal: AbortSignal, isCancelled: () => boolean): void => {
+    let beforeSeq = gap.to + 1
+    const refill = (): void => {
+      void loadChatPage(session.sessionId, beforeSeq, signal).then(
+        (fresh) => {
+          if (isCancelled()) return
+          const folder = folderRef.current
+          const older = coalesceTurnMessages(fresh.rows)
+          // Drop rows at/below the window's bottom edge: they already live in
+          // the tail snapshot and prepending them would duplicate rows.
+          const trimmed = older.filter(row => (row.startSeq ?? row.seq) >= gap.from)
+          if (trimmed.length > 0) {
+            if (folder === undefined) {
+              setMessages(previous => coalesceTurnMessages([...trimmed, ...previous]))
+            } else {
+              folder.prepend(trimmed)
+              setMessages(coalesceTurnMessages(folder.snapshot()))
+            }
+          }
+          const oldestSeq = trimmed.length > 0 ? (trimmed[0]?.startSeq ?? trimmed[0]?.seq) : undefined
+          // Stop when the page reached the window's bottom edge, history
+          // ended, or the cursor failed to advance (no older rows).
+          if (oldestSeq === undefined || oldestSeq <= gap.from || !fresh.hasMore) return
+          if (oldestSeq >= beforeSeq) return
+          beforeSeq = oldestSeq
+          refill()
+        },
+        (reason: unknown) => {
+          if (!isCancelled()) console.warn('history gap refill failed', reason)
+        },
+      )
+    }
+    refill()
+  }, [session.sessionId])
+
+  // Tail page on open (content loads only when the session is opened).
+  useEffect(() => {
+    let cancelled = false
+    const controller = new AbortController()
+    // A stuck history load must not keep the chat empty (or the live buffer
+    // growing) forever: abort it and surface the transport error. 30s gives a
+    // slow phone link enough headroom to pull a large tool-heavy page.
+    const timeout = setTimeout(() => {
+      controller.abort(new DOMException('history load timed out', 'TimeoutError'))
+    }, 30_000)
+    tailLoadingRef.current = true
+    liveBufferRef.current = []
+    liveBufferOverflowRef.current = false
+    dropWindowRef.current = undefined
+    autoExtendedRef.current = false
+    folderRef.current = undefined
+    // A session switch must not let a pending rAF flush fold the PREVIOUS
+    // session's buffered events into the new session's folder: drop the batch
+    // and cancel the scheduled flush.
+    eventBatchRef.current = []
+    if (eventFlushRafRef.current !== undefined) {
+      cancelAnimationFrame(eventFlushRafRef.current)
+      eventFlushRafRef.current = undefined
+    }
+    setTitle(session.title)
+    // A session switch starts a fresh read position: the next fold key change
+    // (the new tail page) must follow to the bottom unconditionally.
+    followedBottomRef.current = false
+    lastMessageKeyRef.current = undefined
+    setLoading(true)
+    setError(undefined)
+    setMessages([])
+    // Pending approvals/questions are per-session state: without this a
+    // switch leaks session A's cards into session B, where the user could
+    // approve a tool call for the wrong chat. The next poll/frame repopulates
+    // the new session's own items.
+    setPendingApprovals([])
+    setPendingQuestions([])
+    // The answered-item memory is per session and lives at module scope
+    // (question-batches.ts / approval-batches.ts): a switch neither leaks it into
+    // the next chat nor has to clear it — pending rpcIds are never reused.
+    setContextPressure(undefined)
+    // The plan strip is per-session state too (the loaded tail re-seeds it).
+    setTodo(undefined)
+    // The turn indicator starts from the list page's last-known state; the
+    // live turn/start frame corrects it as soon as the agent emits anything.
+    // The clock anchor is unknown here (turn/start may sit outside the
+    // window) — null falls back to mount time, like the desktop TurnStatus.
+    setRunning(session.running === true)
+    // 会话切换：上一轮的轮号绝不能留给下一场（名单恢复的 running 会把它当成
+    // 活跃轮次，把上一场那一轮的卡片误判成运行中）。
+    setRunningTurn(undefined)
+    setTurnStartAt(null)
+    // Cache-first: seed the view from the cached tail page immediately so a
+    // reopen paints instantly (stale-while-revalidate); the network load
+    // below overwrites with fresh data and refreshes the cache. `networkLanded`
+    // guards the race — once the network load resolves, a late cache seed
+    // must not clobber the fresh page.
+    let networkLanded = false
+    // True when the cache-first seed painted a cached tail page. On a cache
+    // hit we skip the auto-extend (one less network page + re-render), so a
+    // reopen stays instant; the manual loadOlder button still pages further.
+    let cacheHit = false
+    void loadCachedHistory<ChatPageResult>(session.sessionId).then(cached => {
+      if (cancelled || networkLanded || cached === undefined) return
+      cacheHit = true
+      const folder = new EventFolder(cached.rows, cached.maxSeq)
+      folderRef.current = folder
+      applyMessages(folder.fold([]))
+      setHasOlder(cached.hasMore)
+      setLoading(false)
+    })
+    void loadChatPage(session.sessionId, undefined, controller.signal).then(
+      (page) => {
+        if (cancelled) return
+        networkLanded = true
+        // Buffered live events re-fold on top of the snapshot; the watermark
+        // (page.maxSeq — the host window's event floor) drops any the
+        // snapshot already includes, so nothing is lost or doubled.
+        const buffered = liveBufferRef.current
+        liveBufferRef.current = []
+        tailLoadingRef.current = false
+        const folder = new EventFolder(page.rows, page.maxSeq)
+        folderRef.current = folder
+        applyMessages(folder.fold(buffered))
+        setHasOlder(page.hasMore)
+        // Seed the plan strip from the page's todo snapshot (newest
+        // todo/write in the window; live frames adopt above it by seq).
+        // Buffered live events already adopted on arrival.
+        if (page.todo !== undefined) adoptTodo(page.todo)
+        // Auto-extend the opening context: pull one more page silently so the
+        // first screen shows ~50 messages without a manual tap. Best-effort —
+        // a failure keeps the loaded tail and the manual button. Skipped on a
+        // cache hit (the cached tail already painted; one less page + re-render).
+        if (page.hasMore && !autoExtendedRef.current && !cacheHit) {
+          autoExtendedRef.current = true
+          loadOlderRef.current(true)
+        }
+        setLoading(false)
+        // Restore the turn-clock anchor from the tail window (desktop
+        // parity): the window carries the open turn/start's logged time when
+        // the boundary is within reach, so a mid-turn reload keeps the real
+        // elapsed time instead of counting from mount. A live turn/start
+        // frame already anchored it (newer) — never overwrite that.
+        if (page.turnStartAt !== undefined) {
+          setTurnStartAt(prev => prev ?? page.turnStartAt ?? null)
+          // An open turn/start inside the window is proof the turn is still
+          // open, even when the roster's running flag (agent liveness) says
+          // otherwise - the agent parks while a subagent runs. Reopening a
+          // chat mid-turn must not leave the indicator dark: nothing else
+          // turns it back on, because the reconcile only runs while running.
+          setRunning(true)
+          // 尾页锚点只有时间、没有轮号：活跃轮次退回折叠里最新的一轮（正在跑的
+          // 那一轮必然是最后出现的一轮），绝不留着上一场的旧轮号。
+          setRunningTurn(undefined)
+        }
+        // The page's projection baseline seeds the permission picker.
+        // The `permissions` key is declared by the deployment's permission
+        // plugin (augmentation), so the base SDK map is indexed loosely.
+        const projections = page.projections?.values as Record<string, unknown> | undefined
+        setPermissions(parsePermissionSelect(projections?.['permissions']))
+        setContextPressure(parseContextPressure(projections?.['contextPressure']))
+        setTurnOutlineRaw(projections?.['turnOutline'])
+        // The buffer overflowed while waiting (oldest events were dropped):
+        // refill the dropped seq window page by page, from its newest edge
+        // backwards, until the whole window is covered or history ends. A
+        // flat tail re-pull would only return events the fold already
+        // consumed (seq <= maxSeq) and the dropped range would stay missing.
+        // Best-effort: a failure here only logs, it must not replace the
+        // loaded state with an error.
+        if (dropWindowRef.current !== undefined) {
+          const gap = dropWindowRef.current
+          dropWindowRef.current = undefined
+          liveBufferOverflowRef.current = false
+          refillGap(gap, controller.signal, () => cancelled)
+        }
+      },
+      (reason: unknown) => {
+        if (cancelled) return
+        // Load failed: flush the buffer so the live stream still renders.
+        const buffered = liveBufferRef.current
+        liveBufferRef.current = []
+        tailLoadingRef.current = false
+        if (buffered.length > 0) {
+          const folder = folderRef.current
+          setMessages(coalesceTurnMessages(folder === undefined ? foldEvents(buffered) : folder.fold(buffered)))
+        }
+        setError(errorText(reason))
+        setLoading(false)
+      },
+    )
+    // Best-effort current-model label for the toolbar chip; the sheet
+    // always re-reads a fresh directory on open. The same fetch seeds the
+    // quick-picker catalog, so opening the strip right after mount never
+    // issues a duplicate request.
+    void models(session.sessionId).then(
+      (directory) => {
+        if (cancelled) return
+        setCurrentModel(directory.current)
+        setModelCatalog(previous => previous.status === 'idle' ? { status: 'ready', data: directory } : previous)
+      },
+      (reason: unknown) => {
+        if (cancelled) return
+        setModelCatalog(previous => previous.status === 'idle' ? { status: 'error', message: errorText(reason) } : previous)
+      },
+    )
+    return () => {
+      cancelled = true
+      clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [session.sessionId])
+
+  // Live frames: fold session events for this session in as they arrive.
+  useEffect(() => {
+    if (mux === undefined) return
+    return mux.onFrame((frame: MuxFrame, frameRpcId?: string) => {
+      // Every live host event frame carries a `time` the host wrote moments
+      // before dispatch, so it calibrates the host-clock offset. The running
+      // turn's elapsed math then matches the DESKTOP clock (same host)
+      // instead of drifting fast/slow by the phone's NTP skew over a public
+      // link (a few seconds is normal phone-vs-PC clock difference). The
+      // turn/start boundary frame is excluded: it anchors the clock and may
+      // legitimately carry an older logged time.
+      const frameEvent = (frame as { event?: { type?: unknown; time?: unknown } }).event
+      if (typeof frameEvent?.time === 'number'
+        && Number.isFinite(frameEvent.time)
+        && frameEvent.type !== 'turn/start') {
+        hostClockOffsetRef.current = frameEvent.time - Date.now()
+      }
+      // Any frame at all (other sessions' too - the memory-upkeep subagent
+      // streams on this same mux) proves the host is actively working; it
+      // keeps the indicator in the 输出中 wording. First touch, before the
+      // per-session filters below.
+      lastFrameAtRef.current = Date.now()
+      setTurnQuiet(false)
+      // Any frame proves the link is back (and the host alive).
+      setHostLost(false)
+      if (frame.type === 'session/event') {
+        if (frame.sessionId !== session.sessionId) return
+        const event = frame.view === undefined
+          ? frame.event as WireEvent
+          : { ...frame.event, view: frame.view } as WireEvent
+        // Track the turn running state for the "outputting" indicator (#1017).
+        if (typeof event.type === 'string') {
+          if (event.type === 'turn/start') {
+            setRunning(true); setTurnQuiet(false)
+            // 同一帧带着轮号：行级"还在跑"判据靠它认出"这一步属于正在跑的那一轮"
+            // （宿主按步发 assistant/message，按步定格的行自己看不出回合还开着）。
+            setRunningTurn(turnNumberOf(event))
+            // Anchor the turn clock at the logged start (desktop parity):
+            // a mid-turn reload keeps the real elapsed time.
+            setTurnStartAt(typeof event.time === 'number' && Number.isFinite(event.time) ? event.time : Date.now())
+            // A turn start is when subagents spawn; refresh the tree.
+            refreshSubagentsRef.current()
+            // The host clears the todo projection at turn/start; mirror it so
+            // a stale plan never outlives the turn that wrote it.
+            setTodo(undefined)
+            // A turn start claims the pending queue (the agent picks up the
+            // next queued message in FIFO order). The host broadcasts a fresh
+            // session/queue snapshot, but that frame can be lost when the SSE
+            // channel degrades to fallback polling (which does not replay
+            // session/queue). Clear the local queue view so a claimed message
+            // never lingers as a phantom row that can no longer be edited or
+            // removed.
+            startTransition(() => { setQueueItems([]) })
+          }
+          if (event.type === 'turn/end') {
+            setRunning(false)
+            // 活跃轮次随之清空：按步定格的行立刻回到 已完成/已中断/失败。
+            setRunningTurn(undefined)
+            setTurnStartAt(null)
+            // Mirror the host's turn/end normalization (see normalizeTurnEndTodo).
+            normalizeTurnEndTodo()
+          }
+          // todo/write is a full-list snapshot (last-write-wins): adopt it
+          // into the plan strip. It keeps flowing into the fold below, which
+          // ignores unknown types, so the message stream is unaffected.
+          if (event.type === 'todo/write') startTransition(() => { adoptTodoLatest(event) })
+        }
+        if (tailLoadingRef.current) {
+          if (liveBufferRef.current.length >= MAX_TAIL_BUFFER_EVENTS) {
+            // Bound the tail-load window: drop the oldest buffered event and
+            // remember its seq window so the follow-up refill can re-fetch
+            // exactly the dropped range (a flat tail re-pull would only
+            // return events the fold already consumed). Warn once per load.
+            const dropped = liveBufferRef.current.shift()
+            if (dropped !== undefined) {
+              const current = dropWindowRef.current
+              dropWindowRef.current = current === undefined
+                ? { from: dropped.seq, to: dropped.seq }
+                : { from: Math.min(current.from, dropped.seq), to: Math.max(current.to, dropped.seq) }
+            }
+            if (!liveBufferOverflowRef.current) {
+              console.warn(
+                `history tail is slow: live buffer reached ${MAX_TAIL_BUFFER_EVENTS} events; the dropped seq window will be re-fetched`,
+              )
+              liveBufferOverflowRef.current = true
+            }
+          }
+          liveBufferRef.current.push(event)
+          return
+        }
+        // rAF micro-batch: buffer the event and fold all buffered events on
+        // the next animation frame (one reconcile per frame instead of one
+        // per SSE chunk). The immediate side-effects above (turn/start·end,
+        // todo/write) already ran synchronously, so the running indicator and
+        // plan strip stay responsive; only the message fold is deferred.
+        eventBatchRef.current.push(event)
+        scheduleEventFlush()
+        return
+      }
+      // Live projection pushes keep the permission picker and the context
+      // usage chip current.
+      if (frame.type === 'session/projection' && frame.sessionId === session.sessionId) {
+        if (frame.key === 'permissions') setPermissions(parsePermissionSelect(frame.value))
+        if (frame.key === 'contextPressure') setContextPressure(parseContextPressure(frame.value))
+        return
+      }
+      // Background-task snapshot for this session (subagent delegations etc.).
+      // The host sends a full set after every registry commit; adopt it whole.
+      if (frame.type === 'session/jobs' && frame.sessionId === session.sessionId) {
+        startTransition(() => { setJobs(frame.jobs) })
+        return
+      }
+      // New mux-generation baseline: the host re-subscribes every session on
+      // each stream (re)open and pushes its queue/jobs snapshots right after —
+      // and only when non-empty. An omitted baseline means "empty", so any
+      // rows retained from the previous generation would linger as phantoms
+      // (the same re-baseline reset the desktop runtime applies to its queue
+      // mirror on session/subscribed). Drop both views; the frames that follow
+      // this one — if any — repopulate them.
+      if (frame.type === 'session/subscribed' && frame.sessionId === session.sessionId) {
+        startTransition(() => { setQueueItems([]); setJobs([]) })
+        return
+      }
+      // Pending-message queue snapshot for this session (desktop QueueDock
+      // equivalent): adopt the whole set on every change.
+      if (frame.type === 'session/queue' && frame.sessionId === session.sessionId) {
+        startTransition(() => {
+          setQueueItems((frame.items ?? []).map(item => queueItemViewOf({
+            id: String(item.id),
+            placement: item.placement,
+            message: item.message as never,
+          })))
+        })
+        return
+      }
+      // Approval/question frames for this session (#1025).
+      if (!('sessionId' in frame) || frame.sessionId !== session.sessionId) return
+      if (frame.type === 'approval/requested') {
+        startTransition(() => {
+          setPendingApprovals(previous => {
+            // This phone already answered it: the host replays what it still
+            // holds, and a replay must never resurrect an answered panel.
+            if (answeredApprovalsFor(session.sessionId).has(frame.approvalId as string)) return previous
+            if (previous.some(a => a.approvalId === frame.approvalId)) return previous
+            return [...previous, {
+              rpcId: frameRpcId ?? '',
+              approvalId: frame.approvalId as string,
+              toolName: frame.toolName,
+              callId: frame.callId as string | undefined,
+              reason: frame.reason,
+            }]
+          })
+        })
+        return
+      }
+      if (frame.type === 'approval/resolved') {
+        startTransition(() => {
+          setPendingApprovals(previous => previous.filter(a => a.approvalId !== frame.approvalId))
+        })
+        return
+      }
+      if (frame.type === 'question/requested') {
+        const items = (frame.questions as Array<{
+          id: string; question: string; detail?: string; header?: string
+          options?: Array<{ label: string; description?: string }>; multiSelect?: boolean
+        }>).map(item => ({ rpcId: frameRpcId ?? '', ...item }))
+        // A batch this phone already answered is never re-shown: the host
+        // replays every still-pending question on each mux (re)subscribe, so a
+        // late replay must not resurrect an answered panel.
+        const unanswered = items.filter(q => !answeredQuestionsFor(session.sessionId).has(q.rpcId))
+        startTransition(() => { setPendingQuestions(unanswered) })
+        return
+      }
+      if (frame.type === 'question/resolved') {
+        startTransition(() => { setPendingQuestions([]) })
+        return
+      }
+    })
+  }, [mux, session.sessionId])
+
+  // Weak-network polling fallback: when the assistant is running, poll for
+  // pending approvals/questions so the phone can act even if the SSE channel
+  // drops frames (#1025). The cadence adapts to the live stream: while SSE is
+  // delivering (pending items also arrive as frames) poll slowly as a safety
+  // net; only while it is stalled does the poll go fast.
+  useEffect(() => {
+    if (!running || !foreground) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = (): void => {
+      if (cancelled) return
+      void fetchPending(session.sessionId).then(
+        (state) => {
+          if (cancelled) return
+          // Polling is a weak-network fallback: never let an empty poll result
+          // clobber a panel the live SSE stream already showed. A dropped
+          // question/requested frame (tunnel blip) would otherwise make the
+          // panel vanish seconds after it appears. Only adopt non-empty results.
+          startTransition(() => {
+            // A response already in flight when the user answered still carries
+            // the retired approval: filtered out like the question batch is.
+            setPendingApprovals(prev =>
+              adoptPolledApprovals(prev, state.approvals, answeredApprovalsFor(session.sessionId)))
+            // The poll is authoritative for what the host still holds, but the
+            // tracker behind it can carry a batch this phone already answered
+            // (its question/resolved frame was missed): see question-batches.ts.
+            setPendingQuestions(prev =>
+              adoptPolledQuestions(prev, state.questions, answeredQuestionsFor(session.sessionId)))
+          })
+        },
+        () => { /* transient; next tick retries */ },
+      )
+      const live = mux?.isSseLive() ?? true
+      // While SSE is delivering, pending items also arrive as frames — the
+      // poll is only a safety net for dropped frames, so it runs at a long
+      // cadence (4× the idle interval) instead of adding a request every
+      // 15 s on a weak link. Only a stalled SSE goes fast.
+      timer = setTimeout(tick, live ? PENDING_POLL_IDLE_MS * 4 : PENDING_POLL_FAST_MS)
+    }
+    tick()
+    return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer) }
+  }, [running, session.sessionId, mux, foreground])
+
+  // Running reconciliation: the live turn/end frame can be lost to a tunnel
+  // blip - the EventSource reconnects, its keep-alives resume, the polling
+  // fallback never arms, and the indicator would stay on for a finished turn
+  // until the next full reload. While running, re-check the host's own view
+  // of this session on a slow cadence and adopt it (the host answer is
+  // authoritative - it also covers a dropped stopTurn ack the same way).
+  useEffect(() => {
+    if (!running || !foreground) return
+    let cancelled = false
+    let failures = 0
+    const id = setInterval(() => {
+      // While the live stream is delivering, this reconcile is only a safety
+      // net for a frame that was lost without the stream noticing — and a lost
+      // turn/end is exactly what makes the stream go quiet. So skip the roster
+      // read while frames are still arriving and pay it only once the chat has
+      // been silent for a full cadence (cuts ~2/3 of the RPCs on a live turn).
+      if (mux?.isSseLive() === true && Date.now() - lastFrameAtRef.current < RUNNING_RECONCILE_MS) return
+      void listSessions().then(
+        (page) => {
+          if (cancelled) return
+          // A successful answer proves the host is reachable; reset the
+          // unreachable streak so a single blip never clears the indicator.
+          failures = 0
+          setHostLost(false)
+          const row = page.items.find(item => item.sessionId === session.sessionId)
+          // Only a row that explicitly says the agent is running short-circuits
+          // the history scan. A MISSING row is deliberately NOT a short-circuit:
+          // the phone's /m/api session.list sorts by updatedAt (= max(createdAt,
+          // lastPromptAt), not activity) and pages, so a session that has been
+          // quiet for a while can fall off the first page while its turn is (or
+          // was) open. Treating "not on this page" as "skip" made the indicator
+          // stick forever for exactly those sessions.
+          if (row !== undefined && row.running !== false) return
+          // The list's running flag is AGENT liveness (agent?.status ===
+          // 'running'), which can be false while the turn is still open: the
+          // agent parks while a subagent runs and resumes when it returns.
+          // Only clear the indicator when the turn itself has ended - scan
+          // the history tail for the last turn boundary. One message's tail
+          // window is enough: turn/end follows the closing assistant message
+          // (turn/start precedes the opening user message), so the scan sees
+          // the boundary when the turn ended and finds nothing to act on while
+          // a turn is open - keeping the indicator either way.
+          void history(session.sessionId, undefined, 1).then(
+            (hpage) => {
+              if (cancelled) return
+              for (let i = hpage.events.length - 1; i >= 0; i--) {
+                const t = hpage.events[i]?.event?.type
+                if (t === 'turn/end') {
+                  setRunning(false)
+                  // 探针也是 turn/end：活跃轮次同样清空，行级判据不能停在旧轮上。
+                  setRunningTurn(undefined)
+                  // The reconcile path is the one place a lost turn/end frame
+                  // surfaces without the live handler: mirror the host's
+                  // normalization here too, so a plan strip seeded from the
+                  // loaded page cannot stay stuck on an in_progress leftover
+                  // after the turn actually ended.
+                  normalizeTurnEndTodo()
+                  return
+                }
+                if (t === 'turn/start') {
+                  // The reconcile window is the one other place a
+                  // window-external turn/start can surface: anchor the clock
+                  // at its logged time (desktop parity) unless a live frame
+                  // already supplied a newer one.
+                  const time = hpage.events[i]?.event?.time
+                  if (typeof time === 'number' && Number.isFinite(time)) {
+                    setTurnStartAt(prev => prev ?? time)
+                  }
+                  return // still open - agent parked on a subagent
+                }
+              }
+            },
+            () => { /* transient; the next interval retries */ },
+          )
+        },
+        () => {
+          // The host is unreachable (process stopped / link down). A single
+          // blip is transient, but sustained failure means the live channel
+          // is gone and the indicator can never self-heal - clear it so the
+          // phone does not show 输出中 for a host that is no longer running.
+          if (cancelled) return
+          failures += 1
+          // Sustained silence: flag the LINK, never the turn. Dropping the
+          // turn here is what made the running clock vanish mid-work on a
+          // flaky phone link (see the hostLost state comment).
+          if (failures >= RECONCILE_FAILURE_LIMIT) setHostLost(true)
+        },
+      )
+    }, RUNNING_RECONCILE_MS)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [running, session.sessionId, normalizeTurnEndTodo, foreground])
+
+  // Foreground subagents: fetch on mount/session-switch, and refetch on
+  // turn/start (see onFrame). One flat subagents.list call — no recursive
+  // tree walk. The live host/session-status overlay keeps running flips
+  // instant between fetches.
+  const refreshSubagents = useCallback(() => {
+    void fetchSubagentsFlat(session.sessionId).then(
+      (nodes) => { startTransition(() => { setSubagents(nodes) }) },
+      () => { /* transient; the next trigger retries */ },
+    )
+  }, [session.sessionId])
+  const refreshSubagentsRef = useRef(refreshSubagents)
+  refreshSubagentsRef.current = refreshSubagents
+  useEffect(() => {
+    refreshSubagents()
+  }, [refreshSubagents])
+  // While the turn is open, poll the flat list so the run-status sheet stays
+  // fresh (new subagents spawn mid-turn; the host stream is not forwarded).
+  useEffect(() => {
+    if (!running || !foreground) return
+    const id = setInterval(() => { refreshSubagentsRef.current() }, SUBAGENT_POLL_MS)
+    return () => { clearInterval(id) }
+  }, [running, foreground])
+
+  // Quiet flip: while the turn is open but the mux has been silent past
+  // TURN_QUIET_MS, the wording flips from 输出中 to 后台处理中 — the host is
+  // still on the turn though nothing visible is streaming (subagent memory
+  // upkeep and other back-office work the phone does not render). setQuiet
+  // with an unchanged value does not re-render.
+  //
+  // The turn clock (desktop parity) rides the SAME tick rather than owning a
+  // second 1 s interval: it anchors at the logged turn/start (fallback: mount
+  // time) and recomputes elapsed from that anchor instead of accumulating, so
+  // a throttled background tab snaps back to the true duration — and a running
+  // turn wakes the phone once a second, not twice. The clock span itself only
+  // renders past TURN_CLOCK_THRESHOLD_MS (short turns keep the plain label).
+  // 秒表已搬到过程组第一行（"输出中…"后面不再数秒）。这里仍每秒重算一次，
+  // 但只用它判静默（输出中 / 后台处理中）这个措辞切换。
+  const [, setTurnElapsedMs] = useState(0)
+  // The clock rides the turn ANCHOR, not the running flag: that flag is a
+  // liveness heuristic (roster seed, reconcile verdict) which flaps on a
+  // flaky phone link, and every flap used to zero the elapsed time the user
+  // was watching. The anchor is written by the turn/start boundary (live
+  // frame or history tail) and cleared only by the matching turn/end. The
+  // mount fallback stays for a turn seeded by the roster without an anchor.
+  const clockAnchor = turnStartAt ?? (running ? mountTimeRef.current : null)
+  /**
+   * 当前活跃轮次（没有活跃回合时 undefined）—— 逐层传给 MessageRow → AssistantBody
+   * → ProcessGroup 的 liveTurn，行级"还在跑"判据的第三个分量。
+   *
+   * 门控就是底部状态行的门控：那条 `输出中 / 后台处理中 / 连接中断` 行是
+   * `{running && ...}` 渲染出来的，所以这里也只能看 running —— 否则会出现
+   * "状态行说结束了、某张卡还在数秒"的自相矛盾。running 为假时任何行都不是
+   * 运行中：turn/end（或 reconcile 探针）一到，活跃轮次立刻消失，按步定格的行
+   * 马上回到 已完成/已中断/失败。
+   *
+   * 轮号优先用 turn/start 帧带回来的（runningTurn）；中途重开这种没有帧的场景
+   * 退回折叠里最新的一轮 assistant 行。
+   */
+  const liveTurn = running ? (runningTurn ?? newestFoldTurn(messages)) : undefined
+  useEffect(() => {
+    if (clockAnchor === null) {
+      setTurnQuiet(false)
+      setTurnElapsedMs(0)
+      return
+    }
+    if (!foreground) return
+    const anchor = clockAnchor
+    const tick = (): void => {
+      const quiet = Date.now() - lastFrameAtRef.current > TURN_QUIET_MS
+      setTurnQuiet(prev => prev === quiet ? prev : quiet)
+      // Elapsed counts on HOST time (local now + the frame-calibrated skew),
+      // so the running clock agrees with the desktop instead of running fast
+      // or slow by the phone's NTP difference.
+      setTurnElapsedMs(Math.max(0, Date.now() + hostClockOffsetRef.current - anchor))
+    }
+    tick()
+    const id = setInterval(tick, 1_000)
+    return () => clearInterval(id)
+  }, [clockAnchor, foreground])
+
+  // Windowed rendering: rebuild the estimated-height prefix whenever the
+  // message list changes (or a row measurement lands), then keep the window
+  // around the scroll position. Measured rows use their real height; the
+  // estimate only stands in for rows that are not currently rendered.
+  // correctionTick is a dependency so a correction re-render rebuilds the
+  // prefix from the CURRENT measured rows — otherwise the correction loop
+  // would keep reading the stale (estimated) prefix and drift every pass.
+  const [correctionTick, setCorrectionTick] = useState(0)
+  useEffect(() => {
+    if (messages.length < WINDOW_THRESHOLD) {
+      prefixRef.current = undefined
+      return
+    }
+    const prefix = [0]
+    let acc = 0
+    for (const message of messages) {
+      // Streaming rows use a stable placeholder (see PENDING_ROW_ESTIMATE):
+      // their height changes every chunk, and a drifting prefix would move
+      // the located window edge and remount already-rendered paragraphs.
+      acc += message.pending === true
+        ? PENDING_ROW_ESTIMATE
+        : (measuredRef.current.get(message.id) ?? estimateMessageHeight(message))
+      prefix.push(acc)
+    }
+    prefixRef.current = prefix
+  }, [messages, measuredTick, correctionTick])
+
+  const locateWindow = useCallback(() => {
+    const prefix = prefixRef.current
+    if (prefix === undefined) return
+    // A search-locate owns the window until its anchor scrolls in; recomputing
+    // from the (still opening) scrollTop would repurpose the window to the
+    // tail and window the located row out before the anchor can render.
+    if (locatingRef.current) return
+    const el = scrollRef.current
+    const count = messagesRef.current.length
+    // The window is already at the tail and the reader never left the
+    // bottom: keep it. The scrollTop→row conversion subtracts the height
+    // correction, which is only exact while the prefix is purely estimated —
+    // once the windowed rows are measured the conversion drifts and would
+    // yank the window mid-history (a tall bottom spacer appears, and the
+    // view strands there until the measurement settles). The opening
+    // scrollToBottom already pinned the window to the tail, so re-locating
+    // here buys nothing while the reader is at the bottom.
+    if (winRef.current.end === count && bottomGapAtUserScrollRef.current <= BOTTOM_FOLLOW_THRESHOLD_PX) {
+      return
+    }
+    // The windowed DOM's scrollHeight is corrected to the real content
+    // height (top spacer += heightCorrection), so scrollTop lives in real
+    // space; the prefix sum is estimated space — subtract the correction
+    // before binary-searching the row.
+    const scrollTop = (el?.scrollTop ?? scrollTopRef.current) - heightCorrectionRef.current
+    // Binary-search the row whose estimated top is at/below the scroll top.
+    // Reads the live message count via the ref: the callback can run after
+    // the list changed since it was scheduled.
+    let low = 0
+    let high = count - 1
+    while (low < high) {
+      const mid = (low + high + 1) >> 1
+      if (prefix[mid] !== undefined && prefix[mid]! <= scrollTop) low = mid
+      else high = mid - 1
+    }
+    const start = Math.max(0, low - WINDOW_OVERSCAN)
+    // While the newest message is still streaming, render the tail in full:
+    // the bottom spacer is an estimate, and the streaming follower scrolls
+    // to the real bottom every chunk — an estimated spacer under/over-shoots
+    // each frame and the view jitters. With the tail real (spacer 0) the
+    // follow target is exact. Settled/history views keep the window.
+    const last = messagesRef.current[count - 1]
+    const streaming = last !== undefined && last.pending === true
+    const end = streaming
+      ? count
+      : Math.min(count, low + WINDOW_VISIBLE + WINDOW_OVERSCAN)
+    setWin(previous => previous.start === start && previous.end === end ? previous : { start, end })
+  }, [])
+
+  const scheduleLocate = useCallback(() => {
+    if (rafRef.current !== undefined) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = undefined
+      locateWindow()
+    })
+  }, [locateWindow])
+
+  /** Mark everything seen: advance the seen-turn baseline to the newest
+   * turn and clear the unread badge. */
+  const markSeen = useCallback(() => {
+    const last = messagesRef.current[messagesRef.current.length - 1]
+    if (last !== undefined) {
+      lastSeenTurnRef.current = Math.max(lastSeenTurnRef.current, last.turn ?? 0)
+    }
+    setUnreadCount(0)
+  }, [])
+
+  /** The turn of the row nearest the top of the viewport. Mirrors
+   *  locateWindow's scrollTop→row conversion: windowed sessions use the
+   *  estimated-height prefix (minus the height correction, which shifts the DOM
+   *  scrollTop into estimated space); non-windowed sessions accumulate row
+   *  estimates.
+   *
+   *  Only assistant rows carry a `turn` (user prompts and command rows do not —
+   *  see messages.ts chunkTarget), so the top row itself often has none. The
+   *  reading turn is therefore the first row AT OR BELOW the top row that has a
+   *  turn (the prompt above it began that turn), scanning upward only as a
+   *  fallback. It never falls back to the newest turn: doing so made the handle
+   *  report the tail while the reader was deep in history.
+   *
+   *  Returns undefined when no loaded row carries a turn. Reads only stable refs
+   *  + the module-level estimate, so a stale handleScroll closure still gets the
+   *  live values. */
+  const deriveCurrentTurn = (scrollTop: number): number | undefined => {
+    const list = messagesRef.current
+    const count = list.length
+    if (count === 0) return undefined
+    const prefix = prefixRef.current
+    let index: number
+    if (prefix !== undefined) {
+      const st = scrollTop - heightCorrectionRef.current
+      let low = 0
+      let high = count - 1
+      while (low < high) {
+        const mid = (low + high + 1) >> 1
+        if (prefix[mid] !== undefined && prefix[mid]! <= st) low = mid
+        else high = mid - 1
+      }
+      index = low
+    } else {
+      let acc = 0
+      index = count - 1
+      for (let i = 0; i < count; i++) {
+        acc += estimateMessageHeight(list[i])
+        if (acc > scrollTop) { index = i; break }
+      }
+    }
+    return readingTurnAt(list, index)
+  }
+
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (el === undefined) return
+    scrollTopRef.current = el.scrollTop
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+    bottomGapAtUserScrollRef.current = gap
+    // A programmatic scroll (the opening tail pin, the locate, a prepend
+    // anchor correction) must not be mistaken for a user gesture: it would
+    // release the locate lock and let the follower re-pin the viewport to the
+    // tail. Only a genuine user scroll releases the lock — and, below, only a
+    // genuine user gesture may record a reading bookmark.
+    const programmatic = programmaticScrollRef.current
+    if (programmatic) {
+      programmaticScrollRef.current = false
+    } else {
+      locateLockRef.current = false
+    }
+    // The jump-to-latest button appears once the reader scrolled away from
+    // the bottom (same threshold the auto-follower uses); React bails out on
+    // unchanged values, so this costs nothing while scrolling.
+    setShowJumpToLatest(gap > BOTTOM_FOLLOW_THRESHOLD_PX)
+    // A bookmark means "the reader left the bottom to read history", so it is
+    // guarded by the same gap criterion as the 「回到最新消息」 button. Settling
+    // at (or near) the bottom is reading the newest content — the opening pin
+    // lands mid-history only because the container still carries estimated
+    // heights at that moment, and that must never become a bookmark.
+    const leftBottom = gap > BOTTOM_FOLLOW_THRESHOLD_PX
+    if (!programmatic) {
+      // Track the turn whose row sits nearest the top of the viewport (the
+      // reader's position): drives the turn-list highlight and the handle's
+      // current/total readout. Mirrors locateWindow's scrollTop→row conversion.
+      // 0 means "no position yet"; the render falls back to the newest turn
+      // once. A programmatic event is the echo of a write, not the reader's
+      // position, so it must not overwrite the tracked turn either.
+      const readPosition = deriveCurrentTurn(el.scrollTop) ?? 0
+      setCurrentTurn(readPosition)
+      // Reading-position memory: save the settled turn once scrolling pauses
+      // for a second (a live write on every pixel would churn localStorage).
+      // Reading the newest turn does not update the bookmark — the chip points
+      // at the mid-history spot the reader actually left from.
+      if (readingTimerRef.current !== undefined) window.clearTimeout(readingTimerRef.current)
+      readingTimerRef.current = window.setTimeout(() => {
+        readingTimerRef.current = undefined
+        if (!leftBottom) return
+        const newest = newestTurnRef.current
+        if (readPosition > 0 && readPosition !== newest) saveReadingTurn(sessionIdRef.current, readPosition)
+      }, 1000)
+    }
+    // Scrolling back to the bottom counts as reading: clear the unread
+    // badge and advance the seen-turn baseline, so a reader who manually
+    // scrolls down (instead of tapping the jump button) also clears the
+    // tally. React bails out on an unchanged count, so this is free while
+    // the reader is already at the bottom.
+    if (gap <= BOTTOM_FOLLOW_THRESHOLD_PX) markSeen()
+    scheduleLocate()
+  }, [markSeen, scheduleLocate])
+
+  useEffect(() => () => {
+    if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
+    if (eventFlushRafRef.current !== undefined) cancelAnimationFrame(eventFlushRafRef.current)
+  }, [])
+
+  // Reading-position memory: reload the bookmark when the session id changes,
+  // and flush the live position on unmount (the debounce may not have fired
+  // yet). The cleanup closes over the session id it was created for, so a
+  // session switch still writes the OLD session's bookmark.
+  useEffect(() => {
+    setLastReadTurn(loadReadingTurn(session.sessionId))
+    return () => {
+      if (readingTimerRef.current !== undefined) {
+        window.clearTimeout(readingTimerRef.current)
+        readingTimerRef.current = undefined
+      }
+      const turn = currentTurnRef.current
+      const newest = newestTurnRef.current
+      // Same "the reader actually left the bottom" guard as the debounce: the
+      // gap ref holds the distance of their LAST scroll event, so a session
+      // that only ever sat at the tail (the opening pin included) leaves no
+      // bookmark behind.
+      if (bottomGapAtUserScrollRef.current <= BOTTOM_FOLLOW_THRESHOLD_PX) return
+      if (turn > 0 && turn !== newest) saveReadingTurn(session.sessionId, turn)
+    }
+  }, [session.sessionId])
+
+  /**
+   * Write a programmatic scroll position. handleScroll reads the flag as "the
+   * next scroll event is the echo of this write, not a reader gesture" — such
+   * an event neither releases the locate lock nor records a reading bookmark.
+   * Armed only when the write really moves the container: an unchanged
+   * scrollTop fires no scroll event, and the stale flag would then swallow the
+   * reader's next genuine gesture (and with it their bookmark).
+   */
+  const setScrollTopProgrammatically = useCallback((el: HTMLDivElement, value: number): void => {
+    if (el.scrollTop !== value) programmaticScrollRef.current = true
+    el.scrollTop = value
+    scrollTopRef.current = el.scrollTop
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (el === undefined) return
+    setScrollTopProgrammatically(el, el.scrollHeight)
+    // Windowed mode: pin the window to the tail right away. The follow-up
+    // rAF locate would land on the current scroll position, which can still
+    // be 0 here (jsdom, or the very first frames) — the chat opens at the
+    // newest content, so the tail window is the correct target. The window
+    // shape matches locateWindow's (VISIBLE + OVERSCAN above the tail) so a
+    // reader who immediately scrolls up a few rows still has rendered rows
+    // while the locate catches up.
+    const count = messagesRef.current.length
+    if (count > 0) {
+      const start = Math.max(0, count - WINDOW_VISIBLE - WINDOW_OVERSCAN)
+      setWin(previous => previous.start === start && previous.end === count ? previous : { start, end: count })
+    }
+    scheduleLocate()
+  }, [scheduleLocate, setScrollTopProgrammatically])
+
+  /** Pin the viewport to the REAL tail. In windowed mode the DOM scrollHeight
+   * is an estimate (the top spacer carries estimated heights + the opening
+   * correction), and the true content height is prefix[count] + correction —
+   * the measured rows blend in through the prefix rebuild, and the
+   * correction is refreshed alongside it (see the height-correction effect).
+   * Non-windowed sessions render in full, so the exact DOM value is used. */
+  const pinToRealBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (el === undefined) return
+    const prefix = prefixRef.current
+    const count = messagesRef.current.length
+    const target = prefix !== undefined && count > 0
+      ? (prefix[count] ?? el.scrollHeight) + heightCorrectionRef.current
+      : el.scrollHeight
+    setScrollTopProgrammatically(el, target)
+    scheduleLocate()
+  }, [scheduleLocate, setScrollTopProgrammatically])
+
+  // Track the last message's fold key so scrolling only fires when the
+  // newest message actually changes (seq bump and/or pending flip). Runs
+  // after React has committed the render, so scrollHeight reflects the
+  // freshly appended content.
+  const lastMessageKeyRef = useRef<string | undefined>(undefined)
+  /**
+   * True once the first tail page of the CURRENT session was followed to the
+   * bottom. Opening a session always lands at the newest message; afterwards
+   * the follower only acts while the user is already near the bottom, so
+   * streaming output never yanks a reader who scrolled up through history.
+   */
+  const followedBottomRef = useRef(false)
+  /** Whether the reader scrolled away from the bottom (jump-to-latest button). */
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  /** New turns that arrived while the reader was away (badge count). One
+   * agent reply — however many messages and tool calls it spans — counts as
+   * one, so the badge grows at reply pace, not message pace. */
+  const [unreadCount, setUnreadCount] = useState(0)
+  /** Highest turn the reader has seen; the unread tally counts above it. */
+  const lastSeenTurnRef = useRef(0)
+
+  /** Jump back to the newest message and re-arm the auto-follower. */
+  const jumpToLatest = useCallback(() => {
+    bottomGapAtUserScrollRef.current = 0
+    setShowJumpToLatest(false)
+    markSeen()
+    scrollToBottom()
+  }, [markSeen, scrollToBottom])
+
+  /** Locate one message row for a jump, reusing the search-hit locate machinery
+   *  (focusMsgId + focusTargetRef + the layout-effect scroll): sets the same
+   *  guards so the auto-follower and windowing stand down while it renders.
+   *  {@link turnRowIndex} decides the row — a turn jump passes its turn number
+   *  because the outline's boundary seq lands in the gap between rows. */
+  const locateSeq = useCallback((seq: number, turn?: number): void => {
+    const list = messagesRef.current
+    const index = turnRowIndex(list, turn ?? -1, seq)
+    if (index < 0) return
+    const row = list[index]
+    setFocusMsgId(row.id)
+    focusTargetRef.current = seq
+    focusScrolledRef.current = false
+    locatingRef.current = true
+    locateLockRef.current = true
+    bottomGapAtUserScrollRef.current = Number.MAX_SAFE_INTEGER
+    const windowed = list.length >= WINDOW_THRESHOLD
+    if (windowed) {
+      const start = Math.max(0, index - WINDOW_OVERSCAN)
+      const end = Math.min(list.length, index + WINDOW_VISIBLE + WINDOW_OVERSCAN)
+      setWin(previous => previous.start === start && previous.end === end ? previous : { start, end })
+    }
+    const rowTurn = row.turn
+    if (rowTurn !== undefined) setCurrentTurn(rowTurn)
+  }, [])
+
+  /** Jump to a turn from the outline sheet or the scrubber: in-window turns
+   *  scroll in place; turns outside the loaded window page the target's rows in
+   *  first, then the pending effect below finishes the locate.
+   *
+   *  The page cursor is the NEXT turn's boundary, not this turn's own seq: the
+   *  host pages END at the requested beforeSeq, and a turn's seq is its
+   *  turn/start boundary — asking for it fetches everything BEFORE the turn and
+   *  never the turn itself. The next boundary lands this turn's rows instead. */
+  const jumpToTurn = useCallback((entry: TurnEntry): void => {
+    setTurnListOpen(false)
+    const inWindow = turnRowIndex(messagesRef.current, entry.turn, entry.seq) >= 0
+    if (inWindow) {
+      locateSeq(entry.seq, entry.turn)
+      return
+    }
+    if (!hasOlder) {
+      toast('没有更早的轮次')
+      return
+    }
+    const at = turnEntries.findIndex(candidate => candidate.turn === entry.turn)
+    const nextSeq = at >= 0 ? turnEntries[at + 1]?.seq : undefined
+    setCurrentTurn(0)
+    toast('正在载入…')
+    pendingTurnSeqRef.current = entry.seq
+    pendingTurnNumberRef.current = entry.turn
+    pendingTurnPagesRef.current = 0
+    loadOlderRef.current(true, nextSeq ?? entry.seq + 1)
+  }, [hasOlder, locateSeq, turnEntries])
+
+  /** 「回到上次」 chip: jump to the bookmarked turn through the same machine
+   *  the turn list uses (deep turns page in), then retire the bookmark. A
+   *  vanished turn (outline compaction) just drops the chip, no error toast. */
+  const jumpToLastRead = useCallback((): void => {
+    const bookmark = lastReadTurn
+    if (bookmark === undefined) return
+    setLastReadTurn(undefined)
+    removeReadingTurn(sessionIdRef.current)
+    const entry = turnEntriesRef.current.find(candidate => candidate.turn === bookmark)
+    if (entry === undefined) return
+    jumpToTurn(entry)
+  }, [lastReadTurn, jumpToTurn])
+
+  /** Handle touch-down: expand the scrubber in place, already pointing at the
+   *  turn under the finger (the knob sits under the finger from the first
+   *  frame). The RELEASE decides what the press meant — a press that never
+   *  travelled opens the turn list (B), a drag jumps to the pointed turn. */
+  const startScrub = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (turnEntries.length < 2) return
+    scrubGestureRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      moved: false,
+    }
+    setScrubIndex(scrubTurnIndex(event.clientX, TURN_SCRUB_TRACK_INSET_PX, scrubTrackRight(), turnEntries.length))
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [turnEntries.length])
+
+  /** Handle drag: the finger's own position picks the turn, so either screen
+   *  edge reaches the oldest/newest turn instead of stopping wherever the press
+   *  happened to leave room. */
+  const moveScrub = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const gesture = scrubGestureRef.current
+    if (gesture === undefined || gesture.pointerId !== event.pointerId) return
+    if (Math.abs(event.clientX - gesture.startX) > TURN_SCRUB_MOVE_PX) gesture.moved = true
+    setScrubIndex(scrubTurnIndex(event.clientX, TURN_SCRUB_TRACK_INSET_PX, scrubTrackRight(), turnEntries.length))
+  }, [turnEntries.length])
+
+  /** Handle release: travel means a scrub, so the release jumps to the pointed
+   *  turn. A press that never moved keeps B's behaviour and opens the list,
+   *  which also covers a long press — holding never just does nothing. */
+  const endScrub = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const gesture = scrubGestureRef.current
+    if (gesture === undefined || gesture.pointerId !== event.pointerId) return
+    scrubGestureRef.current = undefined
+    const index = scrubIndex
+    setScrubIndex(undefined)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    const tap = !gesture.moved
+    if (tap) {
+      setTurnListOpen(true)
+      return
+    }
+    const entry = index === undefined ? undefined : turnEntries[index]
+    if (entry !== undefined) jumpToTurn(entry)
+  }, [jumpToTurn, scrubIndex, turnEntries])
+
+  /** The browser stole the pointer (scroll takeover, system gesture): close the
+   *  scrubber without jumping. Also fires after our own release, where the
+   *  gesture ref is already cleared and this is a no-op. */
+  const cancelScrub = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const gesture = scrubGestureRef.current
+    if (gesture === undefined || gesture.pointerId !== event.pointerId) return
+    scrubGestureRef.current = undefined
+    setScrubIndex(undefined)
+  }, [])
+
+  // Finish a pending out-of-window turn jump: the moment the target turn's row
+  // shows up, locate it. Until then keep paging back — a jump across hundreds of
+  // turns rarely lands in one page, and a cursor that missed has to be retried
+  // with ordinary paging. The budget stops a hopeless jump from grinding through
+  // the whole log, and the toast says so rather than leaving 「正在载入…」hanging.
+  useEffect(() => {
+    const seq = pendingTurnSeqRef.current
+    if (seq === undefined) return
+    const turn = pendingTurnNumberRef.current
+    const index = turnRowIndex(messagesRef.current, turn ?? -1, seq)
+    if (index >= 0) {
+      pendingTurnSeqRef.current = undefined
+      pendingTurnNumberRef.current = undefined
+      pendingTurnPagesRef.current = 0
+      locateSeq(seq, turn)
+      return
+    }
+    if (!hasOlder || pendingTurnPagesRef.current >= TURN_JUMP_MAX_PAGES) {
+      pendingTurnSeqRef.current = undefined
+      pendingTurnNumberRef.current = undefined
+      pendingTurnPagesRef.current = 0
+      toast('没能跳到那一轮：历史太深了')
+      return
+    }
+    pendingTurnPagesRef.current += 1
+    loadOlderRef.current(true)
+  }, [messages, hasOlder, locateSeq])
+
+  // Keep the newest content visible. This covers the initial tail page (the
+  // effect runs after commit, fixing the stale scrollHeight from the old
+  // open-time scrollToBottom), live streaming chunks on the pending message,
+  // and finalized/appended messages. Prepending older pages via loadOlder
+  // leaves the last message untouched, so it never disturbs the scroll
+  // position. A reader who scrolled away from the bottom is left alone:
+  // follow only within {@link BOTTOM_FOLLOW_THRESHOLD_PX} of the bottom.
+  // Layout (not passive) so the OPENING tail pins BEFORE the first paint —
+  // a passive effect fires after paint, leaving the opening frame painted at
+  // the top of history before the jump (observed as a top-of-history flash
+  // on open). Steady-state streaming keeps the same code path, and its DOM
+  // writes stay in the same phase they always were.
+  useLayoutEffect(() => {
+    const last = messages[messages.length - 1]
+    if (last === undefined) return
+    const key = last.seq + ':' + (last.pending === true ? 'p' : 'f')
+    if (key === lastMessageKeyRef.current) return
+    lastMessageKeyRef.current = key
+    // Opt-in perf mark: React committed the newest message (span recv→commit
+    // is the full client event-to-DOM latency of this frame).
+    perfMark('commit', { seq: last.seq, frame: 'session/event', detail: last.kind })
+    const el = scrollRef.current
+    if (el === undefined) return
+    if (!followedBottomRef.current) {
+      // First tail of this session: always follow (the chat opens at the
+      // newest message, whatever the scroll position left by a previous
+      // session). The opening baseline also seeds the unread tally.
+      followedBottomRef.current = true
+      lastSeenTurnRef.current = last.turn ?? 0
+      scrollToBottom()
+      return
+    }
+    // Unread tally: count turns that arrived after the reader's last seen
+    // turn while they were away from the bottom. A following reader sees the
+    // content immediately and never accumulates a badge; loadOlder prepends
+    // leave the last turn untouched, so they never count. Messages within
+    // one turn (tool calls, follow-up chunks) share the turn and count once.
+    if ((last.turn ?? 0) > lastSeenTurnRef.current) {
+      lastSeenTurnRef.current = last.turn ?? 0
+      if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) {
+        setUnreadCount(count => count + 1)
+      }
+    }
+    // 自动滚动 off (settings): the reader drives the scroll position.
+    if (!autoScroll) return
+    // Follow only while the user's own last gesture kept them near the
+    // bottom (snapshot, see bottomGapAtUserScrollRef). Content growth on its
+    // own never re-pins the view, so a reader who scrolled up through
+    // history is left alone even when the pending message finalizes into
+    // much taller markdown.
+    if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+    // A search-locate is in flight: never re-pin to the tail until the user
+    // scrolls (the locate lock is released by a genuine user scroll).
+    if (locateLockRef.current) return
+    scrollToBottom()
+  }, [messages, scrollToBottom, autoScroll])
+
+  // Silent prepend re-follow, run at COMMIT time: this fires right after
+  // React has committed the prepended auto-extend page (before the next
+  // paint), so scrollToBottom reads the real post-prepend scrollHeight.
+  // See followAfterPrependRef for why the follow cannot run from loadOlder's
+  // own rAF — that can land before the commit and strand the view in
+  // history with nothing left to correct it.
+  useLayoutEffect(() => {
+    if (!followAfterPrependRef.current) return
+    followAfterPrependRef.current = false
+    // The consumer checked the reader was near the bottom when the page
+    // resolved; that snapshot cannot have moved without a scroll event in
+    // between, but re-check anyway so a stray flag never yanks a reader.
+    if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+    scrollToBottom()
+  }, [messages, scrollToBottom])
+
+  // The question/approval panels mount below the message list; when one
+  // appears, bring it into view — the reader is usually watching the turn and
+  // would otherwise never see the panel (it sits past the last message).
+  // A reader who scrolled up through history is still left alone.
+  useEffect(() => {
+    if (pendingQuestions.length === 0 && pendingApprovals.length === 0) return
+    if (!autoScroll) return
+    const el = scrollRef.current
+    if (el === undefined) return
+    if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+    scrollToBottom()
+  }, [pendingQuestions.length, pendingApprovals.length, scrollToBottom, autoScroll])
+
+  // Keyboard: when the visual viewport resizes (soft keyboard opens), keep
+  // the composer pinned above the keyboard and the newest message visible.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (vv == null) return
+    const viewport = vv
+    const onResize = (): void => {
+      if (!autoScroll) return
+      if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+      scrollToBottom()
+    }
+    viewport.addEventListener('resize', onResize)
+    return () => { viewport.removeEventListener('resize', onResize) }
+  }, [autoScroll, scrollToBottom])
+
+  /* ── message context menu (long-press) ─────────────────────────────── */
+
+  /** Auto-dismiss the context menu after 3s without action. */
+  useEffect(() => {
+    if (ctxMenu === undefined) return
+    const timer = window.setTimeout(() => { setCtxMenu(undefined) }, 3000)
+    return () => { clearTimeout(timer) }
+  }, [ctxMenu])
+
+  /** Quote a message: the composer shows a quote bar and the send prepends
+   * the reference context (first 200 chars are enough for the agent). */
+  const quoteIntoComposer = useCallback((text: string): void => {
+    setQuoted(text.slice(0, 200))
+  }, [])
+
+  /** Resend an edited user message as a fresh prompt. The agent session is
+   *  append-only, so the edited text goes out as a new user message (with a
+   *  small note that the user revised the earlier question, so the model
+   *  re-answers against the corrected intent instead of repeating the old). */
+  const sendEditedMessage = useCallback((messageId: string, newText: string): void => {
+    setEditMessage(undefined)
+    void prompt(session.sessionId, textParts(`用户修改了之前的提问，请忽略旧提问的回复，按修改后的内容重新回答：\n\n${newText}`)).then(
+      () => { mux?.poke() },
+      () => { toast('重新发送失败，请重试') },
+    )
+  }, [session.sessionId, mux])
+
+  /** Regenerate the last assistant reply: ask the agent to re-answer the user
+   *  question that immediately preceded it. The session is append-only, so
+   *  this goes out as a fresh prompt (the old reply stays in history); the
+   *  wording tells the model to set it aside and answer anew. */
+  const handleRegenerate = useCallback((message: RenderMessage): void => {
+    const rows = messagesRef.current
+    const index = rows.findIndex(row => row.id === message.id)
+    let question = ''
+    for (let i = index - 1; i >= 0; i--) {
+      const row = rows[i]
+      if (row !== undefined && row.kind === 'user') {
+        question = row.text
+        break
+      }
+    }
+    const body = question !== ''
+      ? `请忽略上一条回答，针对原始问题重新作答：\n\n${question}`
+      : '请忽略上一条回答，重新作答刚才的问题。'
+    void prompt(session.sessionId, textParts(body)).then(
+      () => { mux?.poke() },
+      () => { toast('重新生成失败，请重试') },
+    )
+  }, [session.sessionId, mux])
+
+  /** Re-pull the tail history page: a settled command may rewrite history
+   * (/compact shadows older turns), which live frames alone cannot undo.
+   * Live events arriving DURING the re-pull are buffered (tailLoadingRef)
+   * and re-folded on top of the fresh page — without the guard they would
+   * fold into the old folder and get lost when it is replaced. Only the
+   * newest reload lands (epoch + abort of the previous one), so two rapid
+   * reloads cannot have a slow first resolve overwrite the second's rows. */
+  const reloadTail = useCallback((): void => {
+    reloadControllerRef.current?.abort()
+    const controller = new AbortController()
+    reloadControllerRef.current = controller
+    const epoch = reloadEpochRef.current + 1
+    reloadEpochRef.current = epoch
+    tailLoadingRef.current = true
+    void loadChatPage(session.sessionId, undefined, controller.signal).then(
+      (page) => {
+        if (epoch !== reloadEpochRef.current) return
+        const buffered = liveBufferRef.current
+        liveBufferRef.current = []
+        tailLoadingRef.current = false
+        const folder = new EventFolder(page.rows, page.maxSeq)
+        folderRef.current = folder
+        applyMessages(folder.fold(buffered))
+        setHasOlder(page.hasMore)
+        // The re-pull window overflowed too: refill the dropped range like
+        // the initial load does.
+        const gap = dropWindowRef.current
+        if (gap !== undefined) {
+          dropWindowRef.current = undefined
+          liveBufferOverflowRef.current = false
+          refillGap(gap, controller.signal, () => epoch !== reloadEpochRef.current)
+        }
+      },
+      () => {
+        if (epoch !== reloadEpochRef.current) return
+        tailLoadingRef.current = false
+        // Failure: drain the buffered live events into the old folder, or
+        // they linger in the buffer unseen.
+        const buffered = liveBufferRef.current
+        liveBufferRef.current = []
+        if (buffered.length > 0) {
+          const folder = folderRef.current
+          setMessages(coalesceTurnMessages(folder === undefined ? foldEvents(buffered) : folder.fold(buffered)))
+        }
+      },
+    )
+  }, [session.sessionId, refillGap])
+
+  /**
+   * Run one slash-command line through the host registry. A matched line is
+   * executed host-side (never reaching the model): its result text becomes a
+   * toast and the history tail reloads. An unmatched line falls through to an
+   * ordinary prompt, matching the desktop composer's catalog-miss behavior;
+   * that fallthrough rejects on send failure so a caller can keep the draft.
+   */
+  const runCommand = useCallback((line: string): Promise<void> => {
+    // Immediate acknowledgement: the in-stream command card arrives over the
+    // mux, but on a slow/tunnel link the toast is the first feedback.
+    toast(`正在执行 ${line.trim().split(/\s+/)[0]}…`)
+    return sendCommand(session.sessionId, line).then(
+      (outcome) => {
+        mux?.poke()
+        if (outcome.matched) {
+          reloadTail()
+          if (outcome.text !== undefined && outcome.text !== '') toast(outcome.text)
+          return
+        }
+        return prompt(session.sessionId, textParts(line)).then(() => { mux?.poke() })
+      },
+      (reason: unknown) => { setError(errorText(reason)) },
+    )
+  }, [session.sessionId, mux, reloadTail])
+
+  /** Rename through session.rename; the header title updates immediately. */
+  const handleRename = useCallback(async (value: string): Promise<void> => {
+    setRenaming(false)
+    try {
+      await renameSession(session.sessionId, value)
+      setTitle(value)
+      toast('已重命名')
+    } catch (reason) {
+      toast(errorText(reason))
+    }
+  }, [session.sessionId])
+
+  /**
+   * Delete the session through the host archive RPC (the same semantics the
+   * desktop's delete uses): the workspace-side row leaves every roster and
+   * never reappears after a refresh, while the session log stays on disk and
+   * remains restorable from the desktop. The local cleanup runs either way;
+   * an RPC failure keeps the previously-local-only removal (the chat would
+   * reappear on reload) and surfaces why.
+   */
+  const handleDeleteSession = useCallback((): void => {
+    setDeleting(false)
+    setMessages([])
+    void removeOutboxForSession(session.sessionId).then(() => { refreshOutbox() })
+    void archiveSession(session.sessionId).catch((reason: unknown) => {
+      toast(`删除未生效：${errorText(reason)}`)
+    })
+    onBack()
+  }, [session.sessionId, onBack, refreshOutbox])
+
+  /**
+   * Back with blank-session revocation: a session that was created but never
+   * received a message (blank, zero rendered rows) is revoked on exit — the
+   * desktop keeps no blank sessions either, and a "new chat" the user leaves
+   * without writing must not linger in the roster. The host is re-checked
+   * (tail 1 message) before archiving so an in-flight send whose echo has
+   * not landed yet is never destroyed; a send in progress is skipped
+   * outright. The local caches drop the row synchronously so the returning
+   * list never flashes it.
+   */
+  const handleBack = useCallback((): void => {
+    if (session.blank && messagesRef.current.length === 0 && !sendingRef.current) {
+      dropSessionFromCaches(session.sessionId)
+      void history(session.sessionId, undefined, 1).then(
+        (page) => {
+          const hasContent = page.events.some(entry =>
+            entry.event.type === 'user/message' || entry.event.type === 'assistant/message')
+          if (!hasContent) void archiveSession(session.sessionId).catch(() => { /* 撤销失败：保留会话 */ })
+        },
+        () => { /* 确认查询失败：保守不删 */ },
+      )
+    }
+    onBack()
+  }, [session, onBack])
+
+  /** Long-press / right-click on a bubble opens the context menu. The copied
+   * text comes from the render state (full text, or the full reasoning for
+   * thinking-only turns) — not from the DOM, where folded bodies are absent.
+   * Returns whether a message bubble was hit (suppresses the native menu). */
+  const openCtxFromTarget = (target: EventTarget | null, x: number, y: number): boolean => {
+    // 已有文字选区时让位给系统（局部复制优先），不弹自定义菜单。
+    if (window.getSelection()?.toString() !== '') return false
+    const element = target instanceof Element ? target : null
+    // markdown 图片：让位系统菜单（Android/iOS 长按保存图片、桌面右键另存），
+    // 自定义菜单只管消息文字（复制/引用）。
+    if (element !== null && element.closest('img') !== null) return false
+    const bubble = element?.closest('.chat-msg') ?? null
+    if (bubble === null) return false
+    const mid = bubble.getAttribute('data-mid')
+    const message = mid === null ? undefined : messagesRef.current.find(candidate => candidate.id === mid)
+    if (message === undefined) return true
+    // Flow turns put their markdown in the text runs; join them so a long
+    // report can be copied verbatim ("复制原文") even though `text` is empty.
+    const flowText = message.flow !== undefined && message.flow.length > 0
+      ? message.flow.filter(part => part.kind === 'text').map(part => part.text).join('\n').trim()
+      : ''
+    const text = message.text !== undefined && message.text !== '' ? message.text : message.reasoning ?? ''
+    const raw = flowText !== '' ? flowText : undefined
+    if (text.trim() !== '' || raw !== undefined) openCtxAt(x, y, text, raw, message.kind, message.id)
+    return true
+  }
+  const longPressRef = useRef<{ timer: number; x: number; y: number } | undefined>(undefined)
+  const cancelLongPress = useCallback(() => {
+    if (longPressRef.current !== undefined) {
+      clearTimeout(longPressRef.current.timer)
+      longPressRef.current = undefined
+    }
+  }, [])
+  useEffect(() => () => { cancelLongPress() }, [cancelLongPress])
+
+  const openCtxAt = useCallback((x: number, y: number, text: string, raw?: string, kind?: RenderMessage['kind'], messageId?: string): void => {
+    const menuWidth = 164
+    const menuHeight = 140
+    setCtxMenu({
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuHeight)),
+      text,
+      raw,
+      ...(kind !== undefined ? { kind } : {}),
+      ...(messageId !== undefined ? { messageId } : {}),
+    })
+  }, [])
+
+  /** File-path links render inside markdown HTML; delegate the click to the
+   * host file opener (postMessage + window.dshOpenFile). */
+  /** File-path links render inside markdown HTML. Where the host injects a
+   *  native file opener (desktop embedding), the tap delegates to it; a
+   *  standalone phone has no such hook, so the tap opens the in-chat preview
+   *  sheet (mobile.readFile behind the scenes). */
+  const handleScrollClick = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
+    const element = event.target instanceof Element ? event.target : null
+    // An in-chat markdown <img> (remote URL or attached data URL) opens the
+    // full-screen lightbox on a tap; long-press save still works (the native
+    // context menu handles it — we only intercept a plain click).
+    if (element !== null) {
+      const image = element.closest('img')
+      if (image !== null && !(element instanceof HTMLAnchorElement)) {
+        const src = image.getAttribute('src')
+        if (src !== null && src !== '' && !src.startsWith('data:image/svg')) {
+          event.preventDefault()
+          setLightboxSrc(src)
+          return
+        }
+      }
+    }
+    const target = element?.closest('.file-link') ?? null
+    if (target === null) return
+    const path = target.getAttribute('data-path')
+    if (path === null || path === '') return
+    event.preventDefault()
+    if (typeof window.dshOpenFile === 'function') {
+      openFilePath(path)
+      return
+    }
+    setPreviewPath(path)
+  }, [])
+
+  /* ── code-block pinch zoom (two fingers, transform scale) ──────────── */
+
+  const pinchDistance = (touches: { [index: number]: { clientX: number; clientY: number } }): number => {
+    const a = touches[0]
+    const b = touches[1]
+    if (a === undefined || b === undefined) return 0
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+  }
+  const applyPinch = useCallback((scale: number): void => {
+    const pinch = pinchRef.current
+    if (pinch === undefined) return
+    const clamped = Math.min(3, Math.max(1, scale))
+    const pre = pinch.block.querySelector('pre')
+    if (pre !== null) {
+      pre.style.transformOrigin = '0 0'
+      pre.style.transform = clamped <= 1.02 ? '' : `scale(${clamped})`
+    }
+  }, [])
+
+  /** Load one older page and prepend it. The fold is directional (incremental
+   *  tails only), so the older page folds standalone and concatenates ahead —
+   *  host page boundaries never cut a message, so the seam is exact. */
+  const loadOlder = useCallback((silent = false, beforeSeqOverride?: number) => {
+    if (pendingRef.current) return
+    pendingRef.current = true
+    // The auto-extend on open must not flash the button's "加载中…" state.
+    if (!silent) setLoading(true)
+    // The folder snapshot is authoritative (the auto-extend on open runs
+    // before React re-renders, so the closure's `messages` is still stale).
+    const first = folderRef.current?.snapshot()[0] ?? messages[0]
+    if (first === undefined) {
+      pendingRef.current = false
+      if (!silent) setLoading(false)
+      return
+    }
+    // A stalled older-page load must not leave "加载中…" forever: abort it
+    // and surface a retryable error (weak links time out instead of hanging).
+    const controller = new AbortController()
+    const timeout = setTimeout(() => {
+      controller.abort(new DOMException('load older timed out', 'TimeoutError'))
+    }, LOAD_OLDER_TIMEOUT_MS)
+    // A coalesced turn message spans many step rows; page by its FIRST row's
+    // seq, otherwise the request re-fetches already-shown steps of the same
+    // turn and prepending duplicates their text. A search-locate may override
+    // the cursor to jump straight to the target's page (one RPC instead of
+    // paging back one page at a time through deep history).
+    const beforeSeq = beforeSeqOverride ?? (first.startSeq ?? first.seq)
+    // Record the anchor BEFORE the fetch: React's commit-time focus scroll
+    // restoration can zero the container's scrollTop while the old page is
+    // swapped, which would make the anchor shift below the wrong content.
+    const anchorTop = silent ? undefined : (scrollRef.current?.scrollTop ?? scrollTopRef.current)
+    void loadChatPage(session.sessionId, beforeSeq, controller.signal).then(
+      (page) => {
+        clearTimeout(timeout)
+        pendingRef.current = false
+        if (!silent) setLoading(false)
+        const older = coalesceTurnMessages(page.rows)
+        const folder = folderRef.current
+        if (folder === undefined) {
+          setMessages(previous => coalesceTurnMessages([...older, ...previous]))
+        } else {
+          folder.prepend(older)
+          setMessages(coalesceTurnMessages(folder.snapshot()))
+        }
+        setHasOlder(page.hasMore)
+        // Keep the visual anchor: the prepend pushes content down by the
+        // inserted rows' estimated height, so advance the scroll position by
+        // the same amount (rendered height lands close to the estimate).
+        // The height correction measured on the previous full frame no longer
+        // applies (the real prefix changed and cannot be measured windowed),
+        // so drop back to pure estimation for the spacer.
+        heightCorrectionRef.current = 0
+        const el = scrollRef.current
+        if (el !== undefined && older.length > 0) {
+          if (silent && bottomGapAtUserScrollRef.current <= BOTTOM_FOLLOW_THRESHOLD_PX) {
+            // The silent auto-extend on open prepends ABOVE the tail: the
+            // tail page already followed to the bottom, and a plain anchor
+            // shift would strand the view mid-history (the last message's
+            // key never changes, so the stream follower never re-fires).
+            // Defer the re-follow to the commit-time effect (see
+            // followAfterPrependRef): a rAF here can run before React has
+            // committed the prepend, and a scrollToBottom that reads the
+            // pre-commit scrollHeight pins to the OLD tail — leaving the
+            // view stranded in history once the prepend lands.
+            followAfterPrependRef.current = true
+          } else {
+            const inserted = older.reduce((acc, row) => acc + estimateMessageHeight(row), 0)
+            // Set from the recorded anchor, not the live scrollTop: React's
+            // commit-time scroll restoration may have zeroed it while the
+            // page loaded. Defer to the next frame so any commit-triggered
+            // restore has already run and cannot overwrite the anchor.
+            const target = (anchorTop ?? el.scrollTop) + inserted
+            requestAnimationFrame(() => {
+              // Programmatic: the anchor shift is not the reader leaving the
+              // bottom, so its scroll event must not record a bookmark for the
+              // mid-history turn the shift happens to land on.
+              setScrollTopProgrammatically(el, target)
+            })
+          }
+        }
+      },
+      (reason: unknown) => {
+        clearTimeout(timeout)
+        pendingRef.current = false
+        setLoading(false)
+        // The auto-extend on open is best-effort: a failure keeps the loaded
+        // tail and the manual button — it must not surface an error.
+        if (!silent) setError(errorText(reason))
+      },
+    )
+  }, [session.sessionId, messages, scrollToBottom, setScrollTopProgrammatically])
+  loadOlderRef.current = loadOlder
+
+  // Focus-locate (search-hit open): scroll the chat to the row covering the
+  // target message seq once it loads, paging back a bounded number of times
+  // when the row sits in older history. One highlight per open; a target
+  // that never surfaces gives up silently (the chat stays at the tail).
+  const focusPendingRef = useRef<number | undefined>(initialFocusSeq)
+  const focusMessageIdRef = useRef<string | undefined>(initialFocusMessageId)
+  const focusPartIdRef = useRef<string | undefined>(initialFocusPartId)
+  const focusAttemptsRef = useRef(0)
+  /** Whether the deep-history locate already jumped straight to the target's
+   *  page (one RPC) instead of paging back one page at a time. */
+  const focusJumpedRef = useRef(false)
+  const [focusMsgId, setFocusMsgId] = useState<string | undefined>(undefined)
+  /** The located step seq, paired with focusMsgId for the post-render scroll. */
+  const focusTargetRef = useRef<number | undefined>(undefined)
+  /** One-shot guard: scroll to the located step exactly once per open. */
+  const focusScrolledRef = useRef(false)
+  /** While a search-locate is active, the auto-follower must NOT re-pin the
+   *  viewport to the tail. The locate scrolls to a history row; if a message
+   *  update (prepend page, live event, initial-load follow-up) re-runs the
+   *  follower while the reader is still near the bottom, it calls
+   *  scrollToBottom() and yanks the view back to the newest message — the
+   *  "keyword highlighted but the viewport sits at the tail" failure. The
+   *  lock is released on the first genuine USER scroll. */
+  const locateLockRef = useRef(false)
+  /** True while a search-locate has resolved its target row but has not yet
+   *  scrolled the anchor into view. During this window the opening tail-pin /
+   *  windowed re-locate must stand down — otherwise they repurpose the render
+   *  window to the tail and window the located row OUT of the DOM, so the
+   *  anchor never surfaces and the locate silently fails (intermittent
+   *  "search shows it but I can't see it" on long, windowed sessions). */
+  const locatingRef = useRef(false)
+  // App keeps the chat route keyed by session, so locating another hit in the
+  // same session reuses this component. Re-arm the locate state for each new
+  // target instead of treating the first open as the only one.
+  useEffect(() => {
+    focusPendingRef.current = initialFocusSeq
+    focusMessageIdRef.current = initialFocusMessageId
+    focusPartIdRef.current = initialFocusPartId
+    focusAttemptsRef.current = 0
+    focusJumpedRef.current = false
+    focusTargetRef.current = undefined
+    focusScrolledRef.current = false
+    locateLockRef.current = false
+    programmaticScrollRef.current = false
+    locatingRef.current = initialFocusSeq !== undefined || initialFocusMessageId !== undefined || initialFocusPartId !== undefined
+    setFocusMsgId(undefined)
+  }, [initialFocusSeq, initialFocusMessageId, initialFocusPartId, initialFocusQuery])
+  useEffect(() => {
+    const target = focusPendingRef.current
+    const targetMessageId = focusMessageIdRef.current
+    if ((target === undefined && targetMessageId === undefined) || loading) return
+    const messagesNow = messages
+    const query = initialFocusQuery?.trim().toLowerCase() ?? ''
+    const queryMatches = (message: RenderMessage): boolean => {
+      if (query === '') return true
+      const text = message.text.toLowerCase()
+      if (text.includes(query)) return true
+      const needles = query.match(/[\p{L}\p{N}_]+/gu) ?? []
+      return needles.length > 0 && needles.every(needle => text.includes(needle))
+    }
+    // A seq range is necessary but not sufficient after turn coalescing: a
+    // stale/shifted seq can fall inside a merged row that does not contain the
+    // searched text. Accept the range only when the row also matches query.
+    const idRowIndex = targetMessageId === undefined ? -1 : messagesNow.findIndex(message => message.id === targetMessageId)
+    const partMatches = (message: RenderMessage): boolean => {
+      if (targetMessageId !== undefined && message.id !== targetMessageId) return false
+      if (focusPartIdRef.current === undefined) return true
+      return message.flow?.some(part => part.kind === 'text' && part.partId === focusPartIdRef.current) === true
+    }
+    // The messageId is the AUTHORITATIVE identity: once it matched a rendered
+    // row, do NOT let the text-query veto it. The search index matched the
+    // flow's per-part text, while queryMatches checks the row's merged
+    // `message.text` — on a multi-step turn these can differ, so a legitimate
+    // hit would be vetoed and the locate would fall back to an OLDER row
+    // containing the keyword ("searched the newest message, landed
+    // mid-history"). queryMatches is only a guard against a stale/shifted SEQ
+    // landing in a row that lacks the text; a resolved messageId needs no such
+    // guard.
+    const stableRowIndex = idRowIndex >= 0 && partMatches(messagesNow[idRowIndex]) ? idRowIndex : -1
+    const firstLoadedSeq = messagesNow[0]?.startSeq ?? messagesNow[0]?.seq
+    const targetIsAtOrAfterLoadedStart = target === undefined || firstLoadedSeq === undefined || target >= firstLoadedSeq
+    const seqRowIndex = target === undefined || !targetIsAtOrAfterLoadedStart ? -1 : messagesNow.findIndex(message =>
+      // Search indexes the exact text-part/chunk seq, while a finalized row's
+      // public seq is the final event seq. For a single-step row startSeq is
+      // absent, so requiring target >= message.seq rejects a valid hit after
+      // pending→finalization and falls back to the first older query match.
+      target <= message.seq && queryMatches(message))
+    // An authoritative target that is not in the opening tail is not a
+    // legitimate query fallback. The tail may contain the same keyword in an
+    // older row; choosing it here both shows a misleading fallback toast and
+    // prevents the history pager from ever loading the real target. Keep the
+    // query fallback only for legacy query-only opens, or after all history is
+    // exhausted below.
+    const hasAuthoritativeTarget = targetMessageId !== undefined || target !== undefined
+    const queryFallbackIndex = hasAuthoritativeTarget && hasOlder ? -1 : messagesNow.findIndex(queryMatches)
+    const rowIndex = stableRowIndex >= 0 ? stableRowIndex : seqRowIndex >= 0 ? seqRowIndex : queryFallbackIndex
+    console.debug(`[locate] initial: msgId=${targetMessageId ?? '-'} seq=${target ?? '-'} partId=${focusPartIdRef.current ?? '-'} query=${initialFocusQuery ?? '-'}; rows=${messagesNow.length}; resolved index=${rowIndex} (stable=${stableRowIndex} seqRow=${seqRowIndex})`)
+    if (rowIndex < 0) {
+      if (hasOlder && focusAttemptsRef.current < FOCUS_MAX_PAGES) {
+        // Don't burn an attempt on a load that is already in flight (the
+        // opening auto-extend): that page still lands and re-triggers this
+        // effect, so counting it would exhaust the page budget early and a
+        // deeper target would give up before it surfaces.
+        if (!pendingRef.current) {
+          focusAttemptsRef.current += 1
+          // First miss with a known target seq: jump straight to the target's
+          // page instead of paging back one page at a time through deep
+          // history (a hit 100 pages back would otherwise take ~100 serial
+          // RPCs and read as a failed locate). Fall back to normal paging
+          // after the jump if the target still has not surfaced.
+          if (!focusJumpedRef.current && target !== undefined) {
+            focusJumpedRef.current = true
+            loadOlderRef.current(true, target + 1)
+          } else {
+            loadOlderRef.current(true)
+          }
+        }
+      } else {
+        // Give up on this locate: release the window guard so the normal
+        // follower (locateWindow / pinToRealBottom) is not left permanently
+        // blocked — otherwise every later scroll in this session stops
+        // relocating the window and the chat appears frozen mid-history.
+        focusPendingRef.current = undefined
+        locatingRef.current = false
+        locateLockRef.current = false
+      }
+      return
+    }
+    focusPendingRef.current = undefined
+    const row = messagesNow[rowIndex]
+    setFocusMsgId(row.id)
+    // Diagnostic: if a messageId came from search but the row was resolved by
+    // seq/query fallback, the target id did not match any rendered row — most
+    // likely the searched message was still streaming (pending, synthetic id)
+    // when indexed and has now finalized with a different id, so the locate
+    // lands on an older row instead of the newest one.
+    if (targetMessageId !== undefined && stableRowIndex < 0) {
+      toast(`定位回退: 目标 ${targetMessageId} 未命中，定位到 ${row.id}（消息可能在更新中）`)
+    }
+    // The target row is resolved: own the window until its anchor scrolls in
+    // (see locatingRef), so the opening tail-pin cannot repurpose the render
+    // window to the tail and window this row out before it renders.
+    locatingRef.current = true
+    // Hold the auto-follower off until the user scrolls: a message update
+    // after the locate would otherwise re-pin the viewport to the tail.
+    locateLockRef.current = true
+    bottomGapAtUserScrollRef.current = Number.MAX_SAFE_INTEGER
+    // If the seq was stale but the paired query found a loaded row, use that
+    // row's own anchor; otherwise the old target would still miss the DOM.
+    focusTargetRef.current = stableRowIndex >= 0 ? target : seqRowIndex >= 0 ? target : (row.startSeq ?? row.seq)
+    focusScrolledRef.current = false
+    // Same threshold the renderer uses (this effect runs before the
+    // render-time `windowed` binding is declared).
+    const isWindowed = messagesNow.length >= WINDOW_THRESHOLD
+    if (isWindowed) {
+      const start = Math.max(0, rowIndex - WINDOW_OVERSCAN)
+      const end = Math.min(messagesNow.length, rowIndex + WINDOW_VISIBLE + WINDOW_OVERSCAN)
+      setWin(previous => previous.start === start && previous.end === end ? previous : { start, end })
+    }
+  }, [messages, hasOlder, loading, initialFocusSeq, initialFocusMessageId, initialFocusPartId, initialFocusQuery])
+
+  // Scroll to the located step AFTER the window renders it. setWin is async,
+  // so a same-frame querySelector would miss the freshly-windowed rows; this
+  // effect runs once the focused row is in the DOM. The one-shot guard keeps
+  // a later user scroll (which also changes `win`) from re-yanking the view.
+  // useLayoutEffect instead of useEffect: it runs synchronously AFTER the DOM
+  // commit but BEFORE the browser paints, so the windowed rows are laid out and
+  // getBoundingClientRect reports their current positions — no rAF deferral is
+  // needed to escape a stale (pre-windowed or pre-reflow) layout. That stale
+  // layout is exactly why the previous rAF-based scroll left the viewport at
+  // the tail ("keyword highlighted but never jumped").
+  useLayoutEffect(() => {
+    if (focusMsgId === undefined) return
+    if (focusScrolledRef.current) return
+    const target = focusTargetRef.current
+    if (target === undefined && initialFocusMessageId === undefined && initialFocusPartId === undefined) return
+    const el = scrollRef.current
+    if (el === undefined) return
+    const scrollTo = (): void => {
+      // The locate scrolls AWAY from the bottom, but the gap ref is still
+      // stale (~0 from the opening pin-to-bottom) until the browser fires the
+      // scroll event. The windowed height-correction / pin-to-real-bottom
+      // effects run in the SAME commit, after this effect, and would read that
+      // stale gap and yank the view back to the tail. Mark the reader as away
+      // from the bottom so those effects stand down; the next real scroll
+      // event overwrites the sentinel via handleScroll.
+      bottomGapAtUserScrollRef.current = Number.MAX_SAFE_INTEGER
+      // Resolve the anchor FRESH on every frame (the windowed setWin commit
+      // replaces the row's DOM node, so a captured reference goes stale), and
+      // KEEP trying until the anchor is actually within the container's
+      // viewport — a single scroll can be clamped (windowed scrollHeight is an
+      // estimate) or overwritten by a competing effect, so verify and retry.
+      // scrollIntoView() (no options: the widest WebView compatibility) is a
+      // native backstop on top of the manual scrollTop.
+      let tries = 0
+      const run = (): void => {
+        const el2 = scrollRef.current
+        if (el2 === undefined) { console.debug('[locate] scroll container missing'); locatingRef.current = false; return }
+        const messageEl = el2.querySelector(`[data-message-id="${escapeAttr(focusMsgId)}"]`)
+        // The exact search keyword: the focused row renders it inside a
+        // <mark class="chat-search-mark"> wherever it sits in the text. Scrolling
+        // to the row/step TOP is not enough — on a long markdown (or a long
+        // coalesced turn) the matched word can be mid-bubble, off-viewport below
+        // the row root even though the root itself is in view. Scroll to the
+        // mark so the keyword is actually reached.
+        const markEl = messageEl?.querySelector<HTMLElement>('.chat-search-mark')
+        const partEl = initialFocusPartId === undefined ? null : messageEl?.querySelector(`[data-part-id="${escapeAttr(initialFocusPartId)}"]`) ?? null
+        const stepEl = target === undefined ? null : el2.querySelector(`[data-step-seq="${escapeAttr(String(target))}"]`)
+        const anchor = stepEl ?? markEl ?? partEl ?? messageEl ?? (target === undefined ? null : el2.querySelector(`[data-row-seq="${escapeAttr(String(target))}"]`))
+        if (anchor === null) {
+          if (tries >= 10) { console.debug(`[locate] anchor never surfaced (focusMsgId=${focusMsgId} seq=${target ?? '-'})`); locatingRef.current = false; return }
+          tries += 1
+          requestAnimationFrame(run)
+          return
+        }
+        // Force a synchronous reflow BEFORE reading geometry: the windowed
+        // setWin commit just landed and the spacer heights are still pending —
+        // without this, getBoundingClientRect() returns the STALE full-list (or
+        // pre-window) layout and the computed scrollTop is wrong, so the
+        // viewport lands at the tail instead of on the located row.
+        void el2.scrollHeight
+        const top = anchor.getBoundingClientRect().top - el2.getBoundingClientRect().top + el2.scrollTop - 8
+        const before = el2.scrollTop
+        // Mark this as a programmatic scroll so handleScroll does not treat it
+        // as a user gesture and release the locate lock (nor record a reading
+        // bookmark for the located turn).
+        setScrollTopProgrammatically(el2, Math.max(0, top))
+        try { anchor.scrollIntoView() } catch { /* older webviews */ }
+        // Verify one frame later; if the anchor is still off-viewport, retry
+        // the scroll rather than giving up (a later commit/effect may have
+        // reset it). Only surface a hint after we have genuinely exhausted it.
+        requestAnimationFrame(() => {
+          const el2b = scrollRef.current
+          if (el2b === undefined) { locatingRef.current = false; return }
+          const aTop = anchor.getBoundingClientRect().top
+          const cTop = el2b.getBoundingClientRect().top
+          const cH = el2b.clientHeight
+          // If the container reports no viewport height the layout is still
+          // unstable (or jsdom gives 0) — trust the scroll rather than report a
+          // false miss and hammer the retry loop.
+          if (cH <= 0) {
+            focusScrolledRef.current = true
+            locatingRef.current = false
+            return
+          }
+          const inView = aTop >= cTop - 1 && aTop <= cTop + cH + 1
+          if (!inView) {
+            console.debug(`[locate] verify: off-viewport anchorTop=${Math.round(aTop)} viewport=[${Math.round(cTop)},${Math.round(cTop + cH)}] scrollTop ${before}->${el2b.scrollTop} clientH=${cH} scrollH=${Math.round(el2b.scrollHeight)} tries=${tries}`)
+            if (tries < 12) {
+              tries += 1
+              requestAnimationFrame(run)
+            } else {
+              // Diagnose: report the numbers on-screen so the user can send the
+              // screenshot and we can see WHY the scroll never lands.
+              toast(`定位未成功(共${messages.length}条, 窗口${windowed ? '开' : '关'}, 目标滚动≈${Math.round(top)}, 当前${Math.round(el2b.scrollTop)}/${Math.round(el2b.scrollHeight)})`)
+              focusScrolledRef.current = true
+              locatingRef.current = false
+            }
+            return
+          }
+          console.debug(`[locate] OK focusMsgId=${focusMsgId} seq=${target ?? '-'} scrollTop ->${Math.round(el2b.scrollTop)} after ${tries} try/tries`)
+          focusScrolledRef.current = true
+          locatingRef.current = false
+        })
+      }
+      // Run synchronously inside the layout effect (before paint) so the layout
+      // is the committed windowed one; the verify step still re-runs on later
+      // frames if a competing effect pushed the row back off-screen.
+      run()
+    }
+    // Prefer the exact step anchor; fall back to the row itself (non-flow
+    // rows render no per-step anchor, and their seq equals the row seq).
+    const findAnchor = (): Element | null => {
+      // Prefer the RENDERED row (focusMsgId) over the raw target: the locate
+      // effect already resolved focusMsgId to a row that IS in the DOM (its
+      // highlight is showing). When the search hit carried only a seq (no
+      // messageId), the target seq may be a flow-part seq that matches no
+      // data-step-seq/data-row-seq — but the row root always carries
+      // data-message-id=focusMsgId, so scrolling to it is always possible.
+      const messageEl = el.querySelector(`[data-message-id="${escapeAttr(focusMsgId)}"]`)
+      const markEl = messageEl?.querySelector<HTMLElement>('.chat-search-mark')
+      const partEl = initialFocusPartId === undefined ? null : messageEl?.querySelector(`[data-part-id="${escapeAttr(initialFocusPartId)}"]`) ?? null
+      // Prefer the EXACT step anchor over the message root. A search hit
+      // carries a seq that maps to one text part's `data-step-seq`; scrolling
+      // to the root instead lands at the TOP of a long coalesced turn where
+      // the matched keyword (buried mid-bubble) is off-screen — the user then
+      // reports "the keyword isn't in the history". Fall back to the root only
+      // when no precise anchor exists (non-flow rows have only data-row-seq).
+      const stepEl = target === undefined ? null : el.querySelector(`[data-step-seq="${escapeAttr(String(target))}"]`)
+      return stepEl ?? markEl ?? partEl ?? messageEl ?? (target === undefined ? null : el.querySelector(`[data-row-seq="${escapeAttr(String(target))}"]`))
+    }
+    const anchor = findAnchor()
+    if (anchor !== null) {
+      scrollTo()
+      return
+    }
+    // The window may not have rendered the target row yet (setWin is async
+    // and React commits after this effect). Mobile history paging and Markdown
+    // parsing can exceed a few hundred milliseconds, so keep waiting for the
+    // actual anchor instead of silently abandoning a valid search hit.
+    let attempts = 0
+    let timer: ReturnType<typeof setTimeout>
+    const retry = (): void => {
+      attempts += 1
+      if (attempts > 120) {
+        // Last resort: scroll to the focused row by its id even if the exact
+        // step anchor never surfaced (a coalescing edge case) — better than
+        // leaving the chat at the tail.
+        const rowEl = el.querySelector(`[data-mid="${focusMsgId}"]`)
+        if (rowEl !== null) scrollTo()
+        // Give up: release the window guard so later scrolls/locates still work.
+        locatingRef.current = false
+        return
+      }
+      const el2 = scrollRef.current
+      if (el2 === undefined) return
+      // Wait only for the RENDERED row by its stable id; scrollTo internally
+      // resolves the finest anchor (step → part → row root) on the next frame.
+      const messageEl2 = el2.querySelector(`[data-message-id="${escapeAttr(focusMsgId)}"]`)
+      if (messageEl2 === null) {
+        timer = setTimeout(retry, 50)
+        return
+      }
+      scrollTo()
+    }
+    timer = setTimeout(retry, 50)
+    return () => clearTimeout(timer)
+  }, [focusMsgId, win, initialFocusMessageId, initialFocusPartId, setScrollTopProgrammatically])
+
+  /** Add a picked/pasted image: compress it, then append to the attach list. */
+  const addImage = useCallback((file: File) => {
+    void compressImageFile(file).then(({ image, failed }) => {
+      // A decode failure (HEIC etc.) can't be sent: drop it and tell the user
+      // instead of silently keeping an unusable attachment.
+      if (failed) {
+        toast('该图片无法解码，已忽略')
+        return
+      }
+      // Over the cap: refuse loudly rather than silently dropping the image.
+      if (attachImagesRef.current.length >= MAX_ATTACHED_IMAGES) {
+        toast(`最多附加 ${MAX_ATTACHED_IMAGES} 张图片`)
+        return
+      }
+      setAttachImages(previous => [...previous, image])
+    })
+  }, [])
+
+  /** Send the drafted prompt (the echoed user/message arrives over mux).
+   * Offline: queue in IndexedDB instead — the reconnect effect drains it. */
+  const send = useCallback(() => {
+    const text = input.trim()
+    if ((text === '' && attachImages.length === 0) || sending) return
+    // Offline: images can't queue (too big for the outbox), text can.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      if (text === '') {
+        toast('离线状态暂不支持发送图片')
+        return
+      }
+      if (text.startsWith('/')) {
+        toast('离线状态暂不支持执行命令')
+        return
+      }
+      if (attachImages.length > 0) {
+        toast('图片需联网发送，本次仅保存文本')
+      }
+      const body = quoted !== undefined ? `引用消息：\n> ${quoted.replace(/\n+/g, ' ')}\n\n${text}` : text
+      void enqueuePrompt({ id: `outbox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, sessionId: session.sessionId, text: body, queuedAt: Date.now() })
+        .then(() => {
+          setInput('')
+          removeDraft(session.sessionId)
+          setQuoted(undefined)
+          setAttachImages([])
+          toast('已离线保存，恢复网络后自动发送')
+          refreshOutbox()
+        })
+      return
+    }
+    // A bare slash-line is a command, not a prompt: run it through the host
+    // registry (session.prompt would deliver it to the model verbatim).
+    // Quotes and image attachments compose a prompt, so they keep prompt
+    // semantics even when the text starts with '/'.
+    if (text.startsWith('/') && quoted === undefined && attachImages.length === 0) {
+      setSending(true)
+      void runCommand(text).then(
+        () => {
+          setSending(false)
+          setInput('')
+          removeDraft(session.sessionId)
+        },
+        () => { setSending(false) },
+      )
+      return
+    }
+    setSending(true)
+    // A quoted draft composes the citation banner INTO the text part and
+    // still carries the attached images (buildPromptParts appends them).
+    const body: PromptPart[] = quoted !== undefined && text !== ''
+      ? buildPromptParts(`引用消息：\n> ${quoted.replace(/\n+/g, ' ')}\n\n${text}`, attachImages)
+      : buildPromptParts(input, attachImages)
+    void prompt(session.sessionId, body).then(
+      () => {
+        setSending(false)
+        setInput('')
+        removeDraft(session.sessionId)
+        setAttachImages([])
+        setQuoted(undefined)
+        // Fresh activity just started: drop the poll backoff so the mux
+        // fallback picks the reply up immediately, not after the stall window.
+        mux?.poke()
+      },
+      (reason: unknown) => {
+        // The draft is deliberately NOT cleared on failure (only the success
+        // path wipes it), so the user's text/images survive to be retried —
+        // retry is just pressing send again. Surface the real reason (and the
+        // stale-host hint when the host may still run an old allowlist) so a
+        // failed send never looks silent.
+        setSending(false)
+        const message = errorText(reason)
+        const hint = staleHostHint(message)
+        setError(hint !== undefined ? `${message} ${hint}` : message)
+        toast(hint !== undefined ? '发送失败，请重启 dsh web 后再试' : `发送失败：${message}`)
+      },
+    )
+  }, [input, attachImages, sending, session.sessionId, mux, quoted, runCommand])
+
+  /* ── voice input ───────────────────────────────────────────────────── */
+
+  const voicePartialRef = useRef('')
+
+  // Release the mic when the chat unmounts (session switch / back): a pending
+  // getUserMedia authorization or a live recorder must never leak the
+  // MediaStream (the browser's recording indicator would stay on). The
+  // mountedRef guard also stops the async openVoice callback from setting
+  // state on an unmounted component.
+  useEffect(() => () => {
+    mountedRef.current = false
+    voiceRef.current?.cancel()
+    voiceRef.current = undefined
+  }, [])
+
+  /** Discard the current recording and close the sheet. */
+  const closeVoice = useCallback((): void => {
+    voiceRef.current?.cancel()
+    voiceRef.current = undefined
+    voicePartialRef.current = ''
+    setVoicePartial('')
+    setVoiceOpen(false)
+    setVoicePhase('recording')
+  }, [])
+
+  /** Finish recording → upload the WAV → transcribe → fill the composer. */
+  const finishVoice = useCallback((): void => {
+    const recorder = voiceRef.current
+    if (recorder === undefined) {
+      setVoiceOpen(false)
+      return
+    }
+    voiceRef.current = undefined
+    setVoicePhase('transcribing')
+    void recorder.stop().then(
+      (wavBase64) => {
+        voicePartialRef.current = '转写中...'
+        setVoicePartial('转写中...')
+        void transcribeVoice(wavBase64, getVoiceServices()).then(
+          (text) => {
+            voicePartialRef.current = ''
+            setVoicePartial('')
+            setVoiceOpen(false)
+            setVoicePhase('recording')
+            if (text.trim() !== '') {
+              setInput(previous => (previous.trim() === '' ? text.trim() : `${previous.replace(/\s+$/, '')} ${text.trim()}`))
+            }
+          },
+          (reason: unknown) => {
+            setVoiceOpen(false)
+            setVoicePhase('recording')
+            toast(reason instanceof Error ? reason.message : String(reason))
+          },
+        )
+      },
+      (message: unknown) => {
+        setVoiceOpen(false)
+        setVoicePhase('recording')
+        toast(message instanceof Error ? message.message : String(message))
+      },
+    )
+  }, [])
+
+  /** Open the recording sheet and start capturing audio. */
+  const openVoice = useCallback((): void => {
+    voicePartialRef.current = ''
+    setVoicePhase('recording')
+    void startVoiceRecording({
+      // The 60 s hard cap is reached: auto-finish so the sheet transcribes
+      // what was captured instead of sitting on "正在听..." forever.
+      onTimeout: () => { finishVoice() },
+    }).then(
+      (recorder) => {
+        // The chat unmounted while the mic was still authorizing: release
+        // the stream instead of opening a sheet on a dead component.
+        if (!mountedRef.current) {
+          recorder.cancel()
+          return
+        }
+        voiceRef.current = recorder
+        setVoiceOpen(true)
+      },
+      (message: unknown) => {
+        if (mountedRef.current) toast(message instanceof Error ? message.message : String(message))
+      },
+    )
+  }, [finishVoice])
+
+  /**
+   * Stop the active turn (desktop parity: the composer's primary button
+   * becomes a stop button while running). The turn/end frame arriving over
+   * mux flips the button back; a failed request surfaces through the chat
+   * error line.
+   */
+  const stopTurn = useCallback(() => {
+    if (stopping) return
+    setStopping(true)
+    void cancelSession(session.sessionId).then(
+      () => { setStopping(false) },
+      (reason: unknown) => {
+        setStopping(false)
+        setError(errorText(reason))
+      },
+    )
+  }, [stopping, session.sessionId])
+
+  const modelLabel = currentModel?.model ?? '模型'
+  const permissionLabel = permissions === undefined
+    ? undefined
+    : permissions.options.find(option => option.value === permissions.currentValue)?.name
+      ?? displayName(permissions.currentValue)
+
+  // Context usage chip: the host's context-pressure projection (token-meter)
+  // is the authoritative per-session occupancy source — it is computed for
+  // every session and pushed live, so the chip stays resident. `undefined`
+  // (no projection yet, or a provider that never reports either side) renders
+  // as "上下文 --".
+  const contextUsage = useMemo(() => {
+    const window = contextPressure?.contextWindow
+    const pressure = contextPressure?.pressureTokens
+    if (window === undefined || window <= 0 || pressure === undefined || pressure < 0) return undefined
+    const pct = Math.min(100, Math.max(0, Math.round(pressure / window * 100)))
+    return { pct, window, pressure }
+  }, [contextPressure])
+
+  /* ── in-place quick picker (model / permission) ──────────────────────
+     Opens the horizontal option strip below the toolbar; the full bottom
+     sheet stays reachable through the trailing "全部…" card. */
+  const loadModelCatalog = useCallback(() => {
+    setModelCatalog(previous => previous.status === 'ready' ? previous : { status: 'loading' })
+    void models(session.sessionId).then(
+      (data) => { setModelCatalog({ status: 'ready', data }) },
+      (reason: unknown) => { setModelCatalog({ status: 'error', message: errorText(reason) }) },
+    )
+  }, [session.sessionId])
+
+  const openModelPicker = (): void => {
+    setSheet(null)
+    setContextOpen(false)
+    setPicker('model')
+    if (modelCatalog.status === 'idle') loadModelCatalog()
+  }
+
+  const openPermissionPicker = (): void => {
+    setSheet(null)
+    setContextOpen(false)
+    setPicker('permission')
+  }
+
+  /** Toggle the context-usage popover on the ring. */
+  const toggleContextPop = (): void => {
+    if (contextUsage === undefined) return
+    setSheet(null)
+    setPicker(null)
+    setContextOpen(previous => !previous)
+  }
+
+  /** One-shot model switch from the strip; the chip label follows the result. */
+  const applyModel = useCallback((selection: { provider: string; model: string; reasoningEffort?: string }): void => {
+    if (pickerBusy) return
+    setPickerBusy(true)
+    void selectModel(session.sessionId, selection).then(
+      (result) => {
+        setPickerBusy(false)
+        setCurrentModel(result.selected)
+        setPicker(null)
+      },
+      (reason: unknown) => {
+        setPickerBusy(false)
+        setError(errorText(reason))
+      },
+    )
+  }, [pickerBusy, session.sessionId])
+
+  /** One-shot permission switch; full access keeps its explicit confirm by
+   *  routing through the sheet (the strip never applies it directly). */
+  const applyPermission = useCallback((next: string): void => {
+    if (next === permissions?.currentValue) {
+      setPicker(null)
+      return
+    }
+    if (next === 'danger-full-access') {
+      setPicker(null)
+      setSheet('permission')
+      return
+    }
+    if (pickerBusy) return
+    setPickerBusy(true)
+    void sendCommand(session.sessionId, `/permission ${next}`).then(
+      (outcome) => {
+        setPickerBusy(false)
+        if (!outcome.matched) {
+          setError('权限命令未在宿主注册，无法切换')
+          return
+        }
+        setPermissions(previous => previous === undefined ? previous : { ...previous, currentValue: next })
+        setPicker(null)
+      },
+      (reason: unknown) => {
+        setPickerBusy(false)
+        setError(errorText(reason))
+      },
+    )
+  }, [pickerBusy, permissions, session.sessionId])
+
+  // Timestamp de-dup: each minute bucket shows only its LAST row's clock
+  // (computed over the full list so windowed slices stay consistent).
+  const timeFlags = useMemo(
+    () => timeVisibility(messages.map(message => message.time)),
+    [messages],
+  )
+  // Quick-command context: the newest SETTLED assistant reply carries a code
+  // fence — that's when the code follow-ups make sense to offer. Scanning
+  // settled rows only also keeps this memo stable across stream frames (a
+  // pending row's text changes every chunk, which would re-run the
+  // includes() scan on the whole accumulated text per frame). 压缩上下文
+  // is context-free and always offered.
+  // Windowed rendering decisions (recomputed per render). Before the first
+  // locate (or while a stale window follows a prepend) the tail renders in
+  // full so new content never appears blank.
+  const windowed = messages.length >= WINDOW_THRESHOLD
+  const located = windowed && win.end > win.start
+  const winStart = located ? win.start : 0
+  const winEnd = located ? win.end : messages.length
+  const prefix = prefixRef.current
+
+  // Re-pin to the tail while the reader is at the bottom and the content
+  // height settles. The opening scrollToBottom lands on an ESTIMATED height
+  // in windowed mode (rows are measured after the first paint), and the
+  // last-message key never changes when the measurement converges, so the
+  // stream follower above would never re-fire. A reader who never scrolled
+  // away follows the settled tail; one who scrolled up through history is
+  // left alone (same gap guard). Non-windowed sessions render in full, so
+  // their opening scrollHeight is exact and this re-pin is unnecessary.
+  // The re-pin defers to the next frame: the measurement just landed in
+  // state, and the DOM height only reflects it after React commits —
+  // reading it synchronously would pin to the PREVIOUS (estimated) height
+  // and yank the view away from the real tail.
+  useEffect(() => {
+    if (!windowed) return
+    if (locatingRef.current) return
+    if (!followedBottomRef.current) return
+    if (!autoScroll) return
+    if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+    const frame = requestAnimationFrame(() => {
+      if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+      pinToRealBottom()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [messages, measuredTick, pinToRealBottom, autoScroll, windowed])
+  // The top spacer carries the height correction measured on the last full
+  // render frame, so the windowed total height equals the real content
+  // height (see heightCorrectionRef).
+  const topSpacerHeight = prefix !== undefined && located ? (prefix[winStart] ?? 0) + heightCorrectionRef.current : 0
+  const bottomSpacerHeight = prefix !== undefined && located
+    ? (prefix[messages.length] ?? 0) - (prefix[winEnd] ?? prefix[messages.length] ?? 0)
+    : 0
+
+  // Keep the window around the scroll position whenever the list changes
+  // (tail load, live events, prepends) or a row measurement lands — not only
+  // on user scrolls.
+  useEffect(() => { scheduleLocate() }, [messages, measuredTick, scheduleLocate])
+
+  // Measure rendered rows in windowed mode and fold the real heights into
+  // the prefix sum (measuredTick re-runs the prefix rebuild + locate). The
+  // measurement is idempotent: unchanged heights leave measuredTick alone,
+  // so the loop settles after one pass. jsdom reports no layout (0), where
+  // the estimate path stays authoritative. `located` is a dependency so the
+  // windowed rows are measured the moment the window locates — the windowed
+  // DOM height only equals the real total once they are (the correction is
+  // frozen at the full-frame value).
+  useEffect(() => {
+    if (!windowed) return
+    const el = scrollRef.current
+    if (el === undefined) return
+    let changed = false
+    for (const row of el.querySelectorAll<HTMLElement>('[data-mid]')) {
+      // Skip streaming rows: their height grows every chunk, so measuring
+      // them would re-trigger this loop every frame and drift the prefix.
+      if (row.classList.contains('chat-msg-pending')) continue
+      const id = row.dataset['mid']
+      if (id === undefined) continue
+      const height = row.offsetHeight
+      if (height > 0 && measuredRef.current.get(id) !== height) {
+        measuredRef.current.set(id, height)
+        changed = true
+      }
+    }
+    if (changed) setMeasuredTick(tick => tick + 1)
+  }, [windowed, located, messages, measuredTick, correctionTick])
+
+  // Measure the real content height and refresh the windowed height
+  // correction. The opening tail page renders in full before the window
+  // locates, so the correction is exact from the start. Once the window
+  // locates, el.scrollHeight is the windowed DOM height (top spacer carries
+  // the previous correction), so correction_new = correction_old + the
+  // windowed rows' estimate↔real delta. That delta is zero once the
+  // windowed rows are measured — the measurement effect above runs on
+  // `located` and folds their real heights into the prefix BEFORE this
+  // effect re-derives the correction — so the correction settles at the
+  // fixed point where the windowed total equals the real total, and the
+  // pin target (prefix[count] + correction) equals el.scrollHeight. The
+  // correction lives in a ref (the pin target reads it), but the top
+  // spacer's DOM height is rendered from it — a ref write alone would
+  // leave the rendered height stale, so correctionTick forces the
+  // re-render. jsdom reports no layout (scrollHeight 0), correction 0.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el === undefined) return
+    const estimated = prefixRef.current?.[messages.length] ?? 0
+    const correction = el.scrollHeight === 0 ? 0 : el.scrollHeight - estimated
+    if (correction === heightCorrectionRef.current) return
+    heightCorrectionRef.current = correction
+    setCorrectionTick(tick => tick + 1)
+    // The opening scrollToBottom ran BEFORE this measurement (the follower
+    // effect is declared earlier), so it pinned to the ESTIMATED height.
+    // Re-pin to the real tail now that the correction is known — unless the
+    // reader already scrolled away. Deferred to the next frame so the DOM
+    // reflects the committed render. Non-windowed sessions pin to the exact
+    // DOM height already, so the re-pin is unnecessary there.
+    if (prefixRef.current === undefined) return
+    if (!followedBottomRef.current) return
+    if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+    const frame = requestAnimationFrame(() => {
+      if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
+      pinToRealBottom()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [windowed, located, messages, measuredTick, correctionTick, pinToRealBottom])
+
+  // Regenerate affordance: only the LAST settled assistant reply gets a
+  // ↻ button (re-running an older reply would detach from current context).
+  // `!running` gates it to the whole turn completing — a tool-interleaved
+  // turn's intermediate segments settle (pending → false) before turn/end,
+  // so without the gate the button would flash after every segment.
+  const lastMessageId = messages[messages.length - 1]?.id
+  const regenerateFor = (message: RenderMessage): (() => void) | undefined =>
+    message.id === lastMessageId && message.kind === 'assistant' && message.pending !== true && !running
+      ? () => handleRegenerate(message)
+      : undefined
+
+  return (
+    <div className="chat">
+      <header className="mobile-header">
+        <div className="mobile-headerSlot">
+          <button type="button" className="mobile-back" aria-label="返回" onClick={handleBack}>‹</button>
+        </div>
+        <div className="mobile-titleWrap">
+          <h1 className="mobile-title mobile-titleInline">{title}</h1>
+        </div>
+        <div className="mobile-headerSlot mobile-headerSlot-right">
+          <button type="button" className="mobile-iconbtn" aria-label="更多" onClick={() => { setMoreOpen(true) }}>
+            <MoreIcon />
+          </button>
+          <ThemeToggle />
+        </div>
+      </header>
+      {error !== undefined && <p className="mobile-error mobile-pad">{error}</p>}
+      {(offline || queuedCount > 0) && (
+        <div
+          className="chat-offline-banner"
+          role="status"
+          style={{ flexDirection: 'column', alignItems: 'stretch', padding: '8px 16px' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span>
+              {offline
+                ? '网络已断开，消息将在恢复后发送'
+                : queuedCount > 0
+                  ? `${queuedCount} 条离线消息待发送`
+                  : ''}
+            </span>
+            {!offline && queuedCount > 0 && (
+              <button type="button" className="chat-offline-retry" onClick={flushQueue}>重试</button>
+            )}
+          </div>
+          {queuedEntries.length > 0 && (
+            <ul style={{ listStyle: 'none', margin: '4px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {queuedEntries.map(entry => (
+                <li key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)' }}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.text}</span>
+                  <button
+                    type="button"
+                    className="chat-offline-retry"
+                    aria-label="移除待发送消息"
+                    onClick={() => { removeQueuedEntry(entry.id) }}
+                  >
+                    移除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      <div
+        className="chat-scroll"
+        ref={ref => { scrollRef.current = ref ?? undefined }}
+        onScroll={handleScroll}
+        onClick={handleScrollClick}
+        onDoubleClick={(event) => {
+          // Double-tap a code block to reset its pinch scale.
+          const block = event.target instanceof Element ? event.target.closest('.code-block') : null
+          if (block === null) return
+          const pre = block.querySelector('pre')
+          if (pre !== null) pre.style.transform = ''
+        }}
+        onContextMenu={(event) => {
+          if (openCtxFromTarget(event.target, event.clientX, event.clientY)) {
+            event.preventDefault()
+            cancelLongPress()
+          }
+        }}
+        onTouchStart={(event) => {
+          // Two fingers on a code block = pinch zoom; single finger keeps the
+          // long-press menu gesture.
+          if (event.touches.length >= 2) {
+            cancelLongPress()
+            const target = event.target instanceof Element ? event.target : null
+            const block = target?.closest<HTMLElement>('.code-block') ?? null
+            if (block !== null) {
+              const dist0 = pinchDistance(event.touches)
+              if (dist0 > 0) {
+                const current = block.querySelector('pre')?.style.transform ?? ''
+                const scale0 = current === '' ? 1 : Number(/scale\(([\d.]+)\)/.exec(current)?.[1] ?? 1)
+                pinchRef.current = { block, dist0, scale0 }
+                return
+              }
+            }
+            pinchRef.current = undefined
+            return
+          }
+          pinchRef.current = undefined
+          const touch = event.touches[0]
+          if (touch === undefined) return
+          const target = event.target instanceof Element ? event.target : null
+          if (target === null || target.closest('.chat-msg') === null) return
+          // 代码块/图片可选中或可长按：交给系统（文字选择 / 图片菜单），
+          // 自定义菜单（编辑/复制/引用）接管消息正文长按。
+          if (target.closest('.code-block pre, img') !== null) return
+          const { clientX, clientY } = touch
+          const timer = window.setTimeout(() => {
+            longPressRef.current = undefined
+            openCtxFromTarget(target, clientX, clientY)
+          }, 500)
+          longPressRef.current = { timer, x: clientX, y: clientY }
+        }}
+        onTouchMove={(event) => {
+          if (pinchRef.current !== undefined && event.touches.length >= 2) {
+            const dist = pinchDistance(event.touches)
+            if (dist > 0) applyPinch(pinchRef.current.scale0 * dist / pinchRef.current.dist0)
+            return
+          }
+          cancelLongPress()
+        }}
+        onTouchEnd={(event) => {
+          if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
+          cancelLongPress()
+        }}
+        onTouchCancel={(event) => {
+          if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
+          cancelLongPress()
+        }}
+      >
+        {hasOlder && (
+          <button type="button" className="chat-load-older" disabled={loading} onClick={() => { void loadOlder() }}>
+            {loading ? '加载中…' : '加载更早的消息'}
+          </button>
+        )}
+        {windowed ? (
+          <>
+            <div style={{ height: topSpacerHeight }} aria-hidden="true" />
+            {messages.slice(winStart, winEnd).map((message, offset) => {
+              const index = winStart + offset
+              return (
+                <MessageRow
+                  key={messageKey(message)}
+                  message={message}
+                  sessionId={session.sessionId}
+                  showToolCalls={showToolCalls}
+                  showSystemMessages={showSystemMessages}
+                  clockOffsetMs={hostClockOffsetRef.current}
+                  liveTurnStartAt={clockAnchor ?? undefined}
+                  liveTurn={liveTurn}
+                  showTime={timeFlags[index] === true}
+                  focused={message.id === focusMsgId}
+                  focusedQuery={initialFocusQuery}
+                  onOpenFile={(path) => { setPreviewPath(path) }}
+                  onRegenerate={regenerateFor(message)}
+                />
+              )
+            })}
+            <div style={{ height: bottomSpacerHeight }} aria-hidden="true" />
+          </>
+        ) : (
+          messages.map((message, index) => {
+            // Non-windowed path: let the browser skip layout/paint of rows far
+            // above the viewport via content-visibility, with the existing
+            // height estimate as the contain-intrinsic-size fallback. The tail
+            // (CONTENT_VISIBILITY_KEEP_BOTTOM rows) stays real so the
+            // auto-follow's scrollHeight read stays exact. `auto` remembers a
+            // row's real size once it has been laid out, so the estimate only
+            // stands in for rows never scrolled into view.
+            const cv = index < messages.length - CONTENT_VISIBILITY_KEEP_BOTTOM
+              ? { contentVisibility: 'auto' as const, containIntrinsicSize: `auto ${estimateMessageHeight(message)}px` }
+              : undefined
+            return (
+              <MessageRow
+                key={messageKey(message)}
+                message={message}
+                sessionId={session.sessionId}
+                showToolCalls={showToolCalls}
+                showSystemMessages={showSystemMessages}
+                clockOffsetMs={hostClockOffsetRef.current}
+                liveTurnStartAt={clockAnchor ?? undefined}
+                liveTurn={liveTurn}
+                showTime={timeFlags[index] === true}
+                focused={message.id === focusMsgId}
+                focusedQuery={initialFocusQuery}
+                style={cv}
+                onOpenFile={(path) => { setPreviewPath(path) }}
+                onRegenerate={regenerateFor(message)}
+              />
+            )
+          })
+        )}
+        {loading && messages.length === 0 && <p className="chat-typing">加载中…</p>}
+        {!loading && messages.length === 0 && <p className="chat-typing">还没有消息，发一句话开始吧</p>}
+        {running && (
+          <div className="chat-turn-status" role="status" aria-label={hostLost ? '连接中断' : turnQuiet ? '后台处理中' : '输出中'}>
+            {hostLost ? '连接中断' : turnQuiet ? '后台处理中' : '输出中'}<span className="chat-turn-dots" aria-hidden><span /><span /><span /></span>
+          </div>
+        )}
+        {pendingApprovals.map(approval => (
+          <ApprovalPanel
+            key={approval.approvalId}
+            approval={approval}
+            sessionId={session.sessionId}
+            onResolved={(id) => {
+              noteAnsweredApproval(session.sessionId, id)
+              setPendingApprovals(prev => prev.filter(a => a.approvalId !== id))
+            }}
+          />
+        ))}
+        {pendingQuestions.length > 0 && (
+          <QuestionPanel
+            questions={pendingQuestions}
+            sessionId={session.sessionId}
+            onResolved={(rpcId) => {
+              noteAnsweredQuestion(session.sessionId, rpcId)
+              setPendingQuestions(prev => prev.filter(q => q.rpcId !== rpcId))
+            }}
+          />
+        )}
+        {showJumpToLatest && turnEntries.length >= 2 && (
+          <button
+            type="button"
+            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')}
+            aria-label="轮次导航：轻点开清单，按住拖动刮擦"
+            onPointerDown={startScrub}
+            onPointerMove={moveScrub}
+            onPointerUp={endScrub}
+            onPointerCancel={cancelScrub}
+            onLostPointerCapture={cancelScrub}
+            onClick={(event) => { if (event.detail === 0) setTurnListOpen(true) }}
+          >
+            <span className="chat-jump-turns-label">{shownTurn}/{maxTurn}</span>
+          </button>
+        )}
+        {/* 「回到上次」 is ENTRY-TIME intent: it must be offered as soon as an
+            open finds a bookmark, so it is deliberately NOT gated on
+            showJumpToLatest. A bookmark that no longer differs from the newest
+            turn is not a "last read" spot at all — checked against the stable
+            host-outline newest turn AND the locally-merged one, so neither a
+            late-landing projection nor a locally-newer turn can render it. */}
+        {lastReadTurn !== undefined && lastReadTurn !== newestTurn && lastReadTurn !== maxTurn && maxTurn >= 2 && (
+          <button
+            type="button"
+            className="chat-jump-lastread"
+            aria-label="回到上次读到的轮次"
+            onClick={jumpToLastRead}
+          >
+            回到上次 · 第 {lastReadTurn} 轮
+          </button>
+        )}
+        {showJumpToLatest && (
+          <button
+            type="button"
+            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')}
+            aria-label="回到最新消息"
+            onClick={jumpToLatest}
+          >
+            <ChevronDownIcon width={20} height={20} />
+            {unreadCount > 0 && <span className="chat-jump-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+          </button>
+        )}
+      </div>
+      <RunStatusBar
+        todo={todo}
+        jobs={jobs}
+        subagents={subagents}
+        onOpen={() => { setRunStatusOpen(true) }}
+      />
+      {scrubIndex !== undefined && turnEntries.length >= 2 && (
+        <TurnScrubber entries={turnEntries} index={scrubIndex} />
+      )}
+      <div className="chat-tools">
+        <div className="chat-tools-actions">
+          <button
+            type="button"
+            className="chat-pill"
+            onClick={openModelPicker}
+            aria-haspopup="listbox"
+            aria-label={currentModel === undefined ? '切换模型' : `切换模型：${compactModelName(currentModel.model)}`}
+            title={currentModel === undefined ? undefined : `${currentModel.provider}/${currentModel.model}`}
+          >
+            <ModelIcon width={16} height={16} />
+            <span className="chat-pill-name">{currentModel === undefined ? '模型' : compactModelName(currentModel.model)}</span>
+            <span className="chat-pill-chevron" aria-hidden>▾</span>
+          </button>
+          {permissionLabel !== undefined && permissions !== undefined && (
+            <button
+              type="button"
+              className={'chat-pill chat-pill-perm chat-pill-perm-' + (permissionTone(permissions.currentValue) ?? 'read')}
+              onClick={openPermissionPicker}
+              aria-haspopup="listbox"
+              aria-label={`切换权限：${permissionLabel}`}
+              title={permissionLabel}
+            >
+              <ShieldIcon width={16} height={16} />
+              <span className="chat-pill-name">{permissionLabel}</span>
+            </button>
+          )}
+        </div>
+        <div
+          className={"chat-context" + (contextUsage !== undefined && contextUsage.pct >= 80 ? " chat-context-warn" : "")}
+          role="status"
+          onClick={toggleContextPop}
+          aria-expanded={contextOpen}
+        >
+          {contextUsage === undefined ? (
+            <>上下文 --</>
+          ) : (
+            <>
+              <svg className="chat-context-ring" width="26" height="26" viewBox="0 0 26 26" aria-hidden>
+                <circle className="chat-context-ring-track" cx="13" cy="13" r="10.5" fill="none" strokeWidth="3.5" />
+                <circle
+                  className="chat-context-ring-fill"
+                  cx="13" cy="13" r="10.5" fill="none" strokeWidth="3.5"
+                  strokeDasharray={`${contextUsage.pct / 100 * 65.97} 65.97`}
+                  transform="rotate(-90 13 13)"
+                />
+              </svg>
+              <span
+                className="chat-context-text"
+                title={`${fmtTokens(contextUsage.pressure)}/${fmtTokens(contextUsage.window)}`}
+              >{contextUsage.pct}%</span>
+            </>
+          )}
+        </div>
+        {contextOpen && contextUsage !== undefined && (
+          <div className="chat-context-pop" role="tooltip">
+            <div className="chat-context-pop-title">上下文用量</div>
+            <div className="chat-context-pop-figures">
+              {fmtTokens(contextUsage.pressure)}<span>/</span>{fmtTokens(contextUsage.window)}
+            </div>
+            <div className="chat-context-pop-sub">已使用 {contextUsage.pct}%</div>
+          </div>
+        )}
+      </div>
+      {contextOpen && <div className="chat-context-pop-scrim" onClick={() => { setContextOpen(false) }} />}
+      {picker !== null && <div className="chat-picker-scrim" onClick={() => { setPicker(null) }} />}
+      {picker === 'model' && (
+        <div className="chat-picker-panel" role="menu" aria-label="选择模型">
+          {modelCatalog.status === 'loading' && <span className="chat-picker-status">正在加载模型目录…</span>}
+          {modelCatalog.status === 'error' && (
+            <>
+              <span className="chat-picker-status chat-picker-error">{modelCatalog.message}</span>
+              {staleHostHint(modelCatalog.message) !== undefined && (
+                <span className="chat-picker-status chat-picker-hint">{staleHostHint(modelCatalog.message)}</span>
+              )}
+              <button type="button" className="chat-picker-more" onClick={loadModelCatalog}>重试</button>
+            </>
+          )}
+          {modelCatalog.status === 'ready' && (
+            <>
+              {(() => {
+                const current = currentModel ?? modelCatalog.data.current
+                const modelRow = (group: { id: string; name: string }, model: SessionModels['groups'][number]['models'][number]): ReactNode => {
+                  const isSelected = current !== undefined && current.provider === group.id && current.model === model.id
+                  return (
+                    <button
+                      type="button"
+                      key={`${group.id}:${model.id}`}
+                      className={'chat-picker-row' + (isSelected ? ' chat-picker-row-selected' : '')}
+                      disabled={pickerBusy}
+                      onClick={() => {
+                        applyModel({
+                          provider: group.id,
+                          model: model.id,
+                          ...(model.reasoning?.defaultEffort === undefined ? {} : { reasoningEffort: model.reasoning.defaultEffort }),
+                        })
+                      }}
+                    >
+                      <span className="chat-picker-row-check" aria-hidden>
+                        {isSelected ? <CheckIcon width={14} height={14} /> : null}
+                      </span>
+                      <span className="chat-picker-row-copy">
+                        <span className="chat-picker-row-title">{model.name}</span>
+                      </span>
+                    </button>
+                  )
+                }
+                return modelCatalog.data.groups.map(group => (
+                  <div className="chat-picker-group" key={group.id}>
+                    <div className="chat-picker-group-title">{group.name}</div>
+                    {group.models.map(model => modelRow(group, model))}
+                  </div>
+                ))
+              })()}
+              {(() => {
+                // Thinking-effort choices for the currently selected model,
+                // right in the panel (no need to open the full sheet).
+                const selected = currentModel ?? modelCatalog.data.current
+                const choices = modelCatalog.data.groups.flatMap(group => group.models.map(model => ({ group, model })))
+                const currentChoice = choices.find(choice => choice.group.id === selected.provider && choice.model.id === selected.model)
+                const reasoning = currentChoice?.model.reasoning
+                const effectiveEffort = selected.reasoningEffort ?? reasoning?.defaultEffort
+                const effortChoices = reasoning === undefined
+                  ? []
+                  : [
+                    ...(reasoning.defaultEffort === undefined
+                      ? [{ key: 'provider-default', effort: undefined as string | undefined, label: '跟随模型默认' }]
+                      : []),
+                    ...reasoning.efforts.map(effort => ({
+                      key: `effort:${effort.id}`,
+                      effort: effort.id as string | undefined,
+                      label: effort.name,
+                    })),
+                  ]
+                if (effortChoices.length === 0) return null
+                return (
+                  <div className="chat-picker-group">
+                    <div className="chat-picker-group-title">思考强度</div>
+                    {effortChoices.map(choice => {
+                      const isSelected = effectiveEffort === choice.effort
+                      return (
+                        <button
+                          type="button"
+                          key={choice.key}
+                          className={'chat-picker-row' + (isSelected ? ' chat-picker-row-selected' : '')}
+                          disabled={pickerBusy}
+                          onClick={() => {
+                            applyModel({
+                              provider: selected.provider,
+                              model: selected.model,
+                              ...(choice.effort !== undefined ? { reasoningEffort: choice.effort } : {}),
+                            })
+                          }}
+                        >
+                          <span className="chat-picker-row-check" aria-hidden>
+                            {isSelected ? <CheckIcon width={14} height={14} /> : null}
+                          </span>
+                          <span className="chat-picker-row-copy">
+                            <span className="chat-picker-row-title">{choice.label}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+              <button type="button" className="chat-picker-more" onClick={() => { setPicker(null); setSheet('model') }}>全部…</button>
+            </>
+          )}
+        </div>
+      )}
+      {picker === 'permission' && permissions !== undefined && (
+        <div className="chat-picker-panel" role="menu" aria-label="选择权限">
+          {permissions.options.map(option => {
+            const isSelected = option.value === permissions.currentValue
+            return (
+              <button
+                type="button"
+                key={option.value}
+                className={'chat-picker-row'
+                  + (isSelected ? ' chat-picker-row-selected' : '')
+                  + (option.value === 'danger-full-access' ? ' chat-picker-row-danger' : '')}
+                disabled={pickerBusy}
+                onClick={() => { applyPermission(option.value) }}
+              >
+                <span className="chat-picker-row-check" aria-hidden>
+                  {isSelected ? <CheckIcon width={14} height={14} /> : null}
+                </span>
+                <span className="chat-picker-row-copy">
+                  <span className="chat-picker-row-title">{option.name}</span>
+                  {option.description !== undefined && <span className="chat-picker-row-sub">{option.description}</span>}
+                </span>
+              </button>
+            )
+          })}
+          <button type="button" className="chat-picker-more" onClick={() => { setPicker(null); setSheet('permission') }}>全部…</button>
+        </div>
+      )}
+      {runStatusOpen && (
+        <RunStatusSheet
+          todo={todo}
+          jobs={jobs}
+          subagents={subagents}
+          onClose={() => { setRunStatusOpen(false) }}
+        />
+      )}
+      <div className="chat-composer">
+        <QueueDock
+          items={queueItems}
+          running={running}
+          onEdit={handleQueueEdit}
+          onRemove={handleQueueRemove}
+          onSteer={handleQueueSteer}
+        />
+        {quoted !== undefined && (
+          <div className="chat-quote-bar" role="note" aria-label="引用消息">
+            <span className="chat-quote-text">{quoted.slice(0, 20)}{quoted.length > 20 ? '…' : ''}</span>
+            <button type="button" className="chat-quote-close" aria-label="取消引用" onClick={() => { setQuoted(undefined) }}>
+              <CloseIcon width={14} height={14} />
+            </button>
+          </div>
+        )}
+        {attachImages.length > 0 && (
+          <div className="chat-attach-bar" role="list" aria-label="待发送图片">
+            {attachImages.map((image, index) => (
+              <div key={index} className="chat-attach-item" role="listitem">
+                <img className="chat-attach-img" src={image.dataUrl} alt="待发送图片" />
+                <button
+                  type="button"
+                  className="chat-attach-remove"
+                  aria-label="移除图片"
+                  onClick={() => { setAttachImages(previous => previous.filter((_, i) => i !== index)) }}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="chat-inputbar">
+          <button
+            type="button"
+            className="chat-attach-btn"
+            aria-label="添加内容"
+            aria-haspopup="dialog"
+            onClick={() => { setPlusOpen(true) }}
+          >
+            <PlusIcon width={20} height={20} />
+          </button>
+          {voiceSupported() && (
+            <button
+              type="button"
+              className="chat-attach-btn"
+              aria-label="语音输入"
+              onClick={openVoice}
+            >
+              <MicIcon width={20} height={20} />
+            </button>
+          )}
+          <textarea
+            className="chat-input"
+            rows={1}
+            value={input}
+            placeholder="说点什么..."
+            enterKeyHint={mobileEnterToSend ? 'send' : 'enter'}
+            onChange={(event) => { setInput(event.target.value) }}
+            onFocus={() => { setComposerFocused(true) }}
+            onBlur={() => { setComposerFocused(false) }}
+            onPaste={(event) => {
+              const files = imageFromClipboard(event.clipboardData)
+              if (files.length > 0) {
+                event.preventDefault()
+                for (const file of files) addImage(file)
+              }
+            }}
+            onKeyDown={(event) => {
+              // isComposing: skip Enter while a Chinese IME is composing, so
+              // confirming a candidate never fires a send mid-composition.
+              if (mobileEnterToSend && event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                void send()
+              }
+            }}
+          />
+          <button
+            type="button"
+            className={running ? 'chat-send chat-send-stop' : 'chat-send'}
+            {...(running ? { 'aria-label': stopping ? '停止中' : '停止' } : { 'aria-label': '发送' })}
+            disabled={running ? stopping : sending || (input.trim() === '' && attachImages.length === 0)}
+            onClick={() => { if (running) void stopTurn(); else void send() }}
+          >
+            {running ? (
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+              </svg>
+            ) : (
+              <SendIcon />
+            )}
+          </button>
+        </div>
+      </div>
+      {plusOpen && (
+        <PlusSheet
+          commands={commands}
+          onPickImage={() => { setPlusOpen(false); fileInputRef.current?.click() }}
+          onPickCamera={() => { setPlusOpen(false); cameraInputRef.current?.click() }}
+          onPickCommand={(line) => {
+            setPlusOpen(false)
+            void runCommand(line).catch(() => { /* runCommand already surfaced the error */ })
+          }}
+          onClose={() => { setPlusOpen(false) }}
+        />
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])]
+          for (const file of files) addImage(file)
+          event.target.value = ''
+        }}
+      />
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])]
+          for (const file of files) addImage(file)
+          event.target.value = ''
+        }}
+      />
+      {sheet === 'model' && (
+        <ModelSheet
+          sessionId={session.sessionId}
+          current={currentModel}
+          onCurrent={(selection) => { setCurrentModel(selection) }}
+          onClose={() => { setSheet(null) }}
+        />
+      )}
+      {sheet === 'permission' && permissions !== undefined && (
+        <PermissionSheet
+          sessionId={session.sessionId}
+          value={permissions}
+          onChanged={(value) => {
+            setPermissions(previous => previous === undefined ? previous : { ...previous, currentValue: value })
+          }}
+          onClose={() => { setSheet(null) }}
+        />
+      )}
+      {turnListOpen && (
+        <TurnListSheet
+          entries={turnEntries}
+          currentTurn={shownTurn}
+          onPick={jumpToTurn}
+          onClose={() => { setTurnListOpen(false) }}
+        />
+      )}
+      {previewPath !== null && (
+        <FilePreviewSheet path={previewPath} sessionId={session.sessionId} onClose={() => { setPreviewPath(null) }} />
+      )}
+      {lightboxSrc !== null && (
+        <ImageLightbox src={lightboxSrc} alt="聊天图片" onClose={() => { setLightboxSrc(null) }} />
+      )}
+      {moreOpen && (
+        <Sheet title={title} onClose={() => { setMoreOpen(false) }}>
+          <div role="menu" aria-label="会话操作">
+            <button
+              type="button"
+              role="menuitem"
+              className="sheet-option"
+              onClick={() => { setMoreOpen(false); setRenaming(true) }}
+            >
+              <span className="sheet-option-copy">
+                <span className="sheet-option-title">重命名会话</span>
+              </span>
+              <PencilIcon width={16} height={16} />
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sheet-option"
+              onClick={() => { setMoreOpen(false); void copyText(session.sessionId) }}
+            >
+              <span className="sheet-option-copy">
+                <span className="sheet-option-title">复制会话 ID</span>
+              </span>
+            </button>
+            <div className="sheet-option-divider" aria-hidden />
+            <button
+              type="button"
+              role="menuitem"
+              className="sheet-option"
+              onClick={() => { setMoreOpen(false); setDeleting(true) }}
+            >
+              <span className="sheet-option-copy">
+                <span className="sheet-option-title" style={{ color: 'var(--danger)' }}>删除会话</span>
+              </span>
+            </button>
+          </div>
+        </Sheet>
+      )}
+      {renaming && (
+        <PromptDialog
+          title="重命名会话"
+          initial={title}
+          confirmLabel="保存"
+          onCancel={() => { setRenaming(false) }}
+          onConfirm={(value) => { void handleRename(value) }}
+        />
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title="删除会话"
+          body={<>确定删除「{title}」吗？该会话将从所有设备消失（电脑上的会话记录保留，可从桌面找回）。</>}
+          confirmLabel="删除"
+          tone="danger"
+          onCancel={() => { setDeleting(false) }}
+          onConfirm={handleDeleteSession}
+        />
+      )}
+      {voiceOpen && (
+        <div className="voice-backdrop" onClick={() => { closeVoice() }}>
+          <div
+            className="voice-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="语音输入"
+            onClick={(event) => { event.stopPropagation() }}
+          >
+            <div className={'voice-wave' + (voicePhase === 'transcribing' ? ' voice-wave-idle' : '')} aria-hidden>
+              <span /><span /><span /><span /><span />
+            </div>
+            <div className="voice-text" role="status">
+              {voicePhase === 'transcribing'
+                ? '转写中...'
+                : voicePartial !== '' ? voicePartial : '正在听...'}
+            </div>
+            <button
+              type="button"
+              className="voice-done"
+              disabled={voicePhase === 'transcribing'}
+              onClick={finishVoice}
+            >
+              {voicePhase === 'transcribing' ? '请稍候' : '完成'}
+            </button>
+          </div>
+        </div>
+      )}
+      {ctxMenu !== undefined && (
+        <>
+          <div
+            className="ctx-backdrop"
+            onClick={() => { setCtxMenu(undefined) }}
+            onContextMenu={(event) => { event.preventDefault(); setCtxMenu(undefined) }}
+          />
+          <div
+            className="ctx-menu"
+            role="menu"
+            aria-label="消息操作"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          >
+            {ctxMenu.kind === 'user' && ctxMenu.messageId !== undefined && (
+              <button
+                type="button"
+                role="menuitem"
+                className="ctx-item"
+                onClick={() => {
+                  const { text, messageId } = ctxMenu
+                  setCtxMenu(undefined)
+                  if (messageId !== undefined) setEditMessage({ messageId, text })
+                }}
+              >
+                编辑并重新发送
+              </button>
+            )}
+            {ctxMenu.raw !== undefined && (
+              <button
+                type="button"
+                role="menuitem"
+                className="ctx-item"
+                onClick={() => { const { raw } = ctxMenu; setCtxMenu(undefined); void copyText(raw ?? '', '已复制原文') }}
+              >
+                复制原文
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className="ctx-item"
+              onClick={() => { const { text } = ctxMenu; setCtxMenu(undefined); void copyText(text) }}
+            >
+              复制
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ctx-item"
+              onClick={() => { const { text } = ctxMenu; setCtxMenu(undefined); quoteIntoComposer(text) }}
+            >
+              引用
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ctx-item"
+              onClick={() => { const { raw, text } = ctxMenu; setCtxMenu(undefined); void shareText(raw ?? text) }}
+            >
+              分享
+            </button>
+          </div>
+        </>
+      )}
+      {editMessage !== undefined && (
+        <PromptDialog
+          title="编辑并重新发送"
+          initial={editMessage.text}
+          confirmLabel="发送"
+          onCancel={() => { setEditMessage(undefined) }}
+          onConfirm={(value) => { sendEditedMessage(editMessage.messageId, value) }}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Wrap a plain-text prompt (quote preamble / offline entry / regenerate) into parts. */
+function textParts(text: string): PromptPart[] {
+  return [{ type: 'text', text }]
+}
+
+/** Wire shape of the host token-meter context-pressure projection. */
+type ContextPressureData = {
+  contextWindow?: number
+  pressureTokens?: number
+  projectedTokens?: number
+}
+
+/** Loose parse of the contextPressure projection (host augmentation). */
+function parseContextPressure(value: unknown): ContextPressureData | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const v = value as Record<string, unknown>
+  return {
+    ...(typeof v['contextWindow'] === 'number' ? { contextWindow: v['contextWindow'] } : {}),
+    ...(typeof v['pressureTokens'] === 'number' ? { pressureTokens: v['pressureTokens'] } : {}),
+    ...(typeof v['projectedTokens'] === 'number' ? { projectedTokens: v['projectedTokens'] } : {}),
+  }
+}
+
+/* ── bottom sheets ───────────────────────────────────────────────────── */
+
+/* Shared sheet chrome lives in ../sheet.tsx; the pickers below compose it. */
+

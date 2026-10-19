@@ -1,0 +1,239 @@
+import { describe, expect, it } from 'vitest'
+import { PendingTracker } from './mobile-pending.ts'
+
+/**
+ * The phone's PendingQuestionItem (src/mobile/api.ts) is FLAT:
+ *   { rpcId, id, question, detail?, header?, options?, multiSelect? }
+ * and the live mux question/requested frame carries the same flat shape
+ * (ChatView.tsx maps `{ rpcId: frameRpcId, ...item }`).
+ *
+ * The polling fallback (mobile.pending → PendingTracker.pending) must return
+ * the SAME flat shape: ChatView adopts a non-empty poll result verbatim
+ * (setPendingQuestions(state.questions)), so a nested shape would render a
+ * panel whose q.question / q.options are undefined — options vanish and only
+ * the "自定义回答" textarea remains. Regression test for that bug.
+ */
+
+const requestedFrame = {
+  rpcId: 'rpc-ask-1',
+  payload: {
+    type: 'question/requested',
+    sessionId: 's1',
+    questions: [
+      {
+        id: 'q1',
+        question: '选哪个方案？',
+        header: '方案选择',
+        detail: '请选择你偏好的方案',
+        options: [
+          { label: '方案 A', description: '快' },
+          { label: '方案 B', description: '稳' },
+        ],
+        multiSelect: false,
+      },
+      {
+        id: 'q2',
+        question: '补充说明？',
+      },
+    ],
+  },
+}
+
+describe('PendingTracker question shape (mobile.pending polling fallback)', () => {
+  it('returns the same flat question shape as the live mux frame', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never)
+    const state = tracker.pending('s1')
+
+    expect(state.questions).toHaveLength(2)
+    // Flat: rpcId sits next to the question fields, not wrapping them.
+    expect(state.questions[0]).toMatchObject({
+      rpcId: 'rpc-ask-1',
+      id: 'q1',
+      question: '选哪个方案？',
+      header: '方案选择',
+      detail: '请选择你偏好的方案',
+      options: [
+        { label: '方案 A', description: '快' },
+        { label: '方案 B', description: '稳' },
+      ],
+      multiSelect: false,
+    })
+    expect(state.questions[1]).toMatchObject({
+      rpcId: 'rpc-ask-1',
+      id: 'q2',
+      question: '补充说明？',
+    })
+    // The phone renders options from q.options; a nested wrapper would hide them.
+    expect(state.questions[0].options).toBeDefined()
+    expect(state.questions[0].options?.length).toBe(2)
+  })
+
+  it('dedupes a replayed frame by rpcId and resolves by questionRpcId', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never)
+    tracker.onFrame(requestedFrame as never) // SSE reconnect replay
+    // Two flat entries (q1 + q2); the replay must not duplicate them.
+    expect(tracker.pending('s1').questions).toHaveLength(2)
+
+    tracker.onFrame({
+      rpcId: 'rpc-resolve-1',
+      payload: { type: 'question/resolved', sessionId: 's1', questionRpcId: 'rpc-ask-1' },
+    } as never)
+    expect(tracker.pending('s1').questions).toHaveLength(0)
+  })
+
+  it('replaces the previous batch when a new ask arrives for the same session', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // rpc-ask-1 → q1 + q2
+    tracker.onFrame({
+      rpcId: 'rpc-ask-2',
+      payload: {
+        type: 'question/requested',
+        sessionId: 's1',
+        questions: [{ id: 'q9', question: '再确认一次？' }],
+      },
+    } as never)
+
+    // ask() blocks on the host, so a session never holds two unanswered
+    // batches. Keeping the older one would render it next to the new one and
+    // leave it unanswered forever — the panel echoes a single rpcId.
+    expect(tracker.pending('s1').questions).toEqual([
+      { rpcId: 'rpc-ask-2', id: 'q9', question: '再确认一次？' },
+    ])
+    expect(tracker.ownerOfRpcId('rpc-ask-1')).toBeUndefined()
+    expect(tracker.ownerOfRpcId('rpc-ask-2')).toBe('s1')
+  })
+
+  it('leaves another session\'s batch alone when a new ask arrives', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // s1: q1 + q2
+    tracker.onFrame({
+      rpcId: 'rpc-ask-9',
+      payload: { type: 'question/requested', sessionId: 's2', questions: [{ id: 'q1', question: '别的会话' }] },
+    } as never)
+
+    expect(tracker.pending('s1').questions).toHaveLength(2)
+    expect(tracker.pending('s2').questions).toHaveLength(1)
+  })
+})
+
+describe('PendingTracker.ownerOfRpcId (mobile.respond ownership binding)', () => {
+  it('returns the session that owns a pending question rpcId', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // rpc-ask-1 under s1
+    expect(tracker.ownerOfRpcId('rpc-ask-1')).toBe('s1')
+  })
+
+  it('returns the session that owns a pending approval rpcId', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame({
+      rpcId: 'rpc-approve-1',
+      payload: { type: 'approval/requested', sessionId: 's2', approvalId: 'a1', toolName: 'bash' },
+    } as never)
+    expect(tracker.ownerOfRpcId('rpc-approve-1')).toBe('s2')
+  })
+
+  it('distinguishes sessions: the same rpcId never spans two sessions', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // rpc-ask-1 under s1
+    tracker.onFrame({
+      rpcId: 'rpc-ask-2',
+      payload: { type: 'question/requested', sessionId: 's2', questions: [{ id: 'q1', question: 'x' }] },
+    } as never)
+    expect(tracker.ownerOfRpcId('rpc-ask-1')).toBe('s1')
+    expect(tracker.ownerOfRpcId('rpc-ask-2')).toBe('s2')
+  })
+
+  it('returns undefined for an rpcId that is not pending (resolved or never tracked)', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never)
+    tracker.onFrame({
+      rpcId: 'rpc-resolve-1',
+      payload: { type: 'question/resolved', sessionId: 's1', questionRpcId: 'rpc-ask-1' },
+    } as never)
+    expect(tracker.ownerOfRpcId('rpc-ask-1')).toBeUndefined()
+    expect(tracker.ownerOfRpcId('rpc-never')).toBeUndefined()
+  })
+})
+
+describe('PendingTracker.resolveApprovalByRpcId (the answer retires the approval)', () => {
+  const approvalFrame = (rpcId: string, sessionId: string, approvalId: string) => ({
+    rpcId,
+    payload: { type: 'approval/requested', sessionId, approvalId, toolName: 'bash' },
+  })
+
+  it('drops the approval the phone just answered, so the poll stops serving it', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(approvalFrame('rpc-approve-1', 's2', 'a1') as never)
+    expect(tracker.pending('s2').approvals).toHaveLength(1)
+
+    expect(tracker.resolveApprovalByRpcId('rpc-approve-1')).toBe('s2')
+    // Without this the answered approval sat in the tracker for the plugin's
+    // lifetime and mobile.pending handed it back on the next visit — the ghost
+    // approval panel.
+    expect(tracker.pending('s2').approvals).toEqual([])
+    expect(tracker.ownerOfRpcId('rpc-approve-1')).toBeUndefined()
+  })
+
+  it("keeps a sibling approval and another session's items untouched", () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(approvalFrame('rpc-approve-1', 's2', 'a1') as never)
+    tracker.onFrame(approvalFrame('rpc-approve-2', 's2', 'a2') as never)
+    tracker.onFrame(approvalFrame('rpc-approve-3', 's3', 'a3') as never)
+
+    expect(tracker.resolveApprovalByRpcId('rpc-approve-2')).toBe('s2')
+    expect(tracker.pending('s2').approvals.map(item => item.approvalId)).toEqual(['a1'])
+    expect(tracker.pending('s3').approvals.map(item => item.approvalId)).toEqual(['a3'])
+  })
+
+  it('is a no-op for an unknown rpcId, and never touches a question batch', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // rpc-ask-1 under s1
+    expect(tracker.resolveApprovalByRpcId('rpc-never')).toBeUndefined()
+    expect(tracker.resolveApprovalByRpcId('rpc-ask-1')).toBeUndefined()
+    expect(tracker.pending('s1').questions).toHaveLength(2)
+  })
+})
+
+describe('PendingTracker.resolveQuestionByRpcId (the answer retires the batch)', () => {
+  it('drops the whole batch under the answered rpcId, so the poll stops serving it', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // rpc-ask-1: two questions under s1
+    expect(tracker.pending('s1').questions).toHaveLength(2)
+
+    expect(tracker.resolveQuestionByRpcId('rpc-ask-1')).toBe('s1')
+    // Same ghost shape as the approval panel: a batch the phone answered stayed
+    // in the tracker and came back when the session was re-entered.
+    expect(tracker.pending('s1').questions).toEqual([])
+    expect(tracker.ownerOfRpcId('rpc-ask-1')).toBeUndefined()
+  })
+
+  it("leaves another session's batch and a pending approval alone", () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame(requestedFrame as never) // rpc-ask-1 under s1
+    tracker.onFrame({
+      rpcId: 'rpc-ask-2',
+      payload: { type: 'question/requested', sessionId: 's2', questions: [{ id: 'q1', question: 'x' }] },
+    } as never)
+    tracker.onFrame({
+      rpcId: 'rpc-approve-1',
+      payload: { type: 'approval/requested', sessionId: 's2', approvalId: 'a1', toolName: 'bash' },
+    } as never)
+
+    expect(tracker.resolveQuestionByRpcId('rpc-ask-1')).toBe('s1')
+    expect(tracker.pending('s2').questions.map(item => item.rpcId)).toEqual(['rpc-ask-2'])
+    expect(tracker.pending('s2').approvals.map(item => item.approvalId)).toEqual(['a1'])
+  })
+
+  it('is a no-op for an unknown rpcId, and never touches an approval', () => {
+    const tracker = new PendingTracker()
+    tracker.onFrame({
+      rpcId: 'rpc-approve-1',
+      payload: { type: 'approval/requested', sessionId: 's2', approvalId: 'a1', toolName: 'bash' },
+    } as never)
+    expect(tracker.resolveQuestionByRpcId('rpc-never')).toBeUndefined()
+    expect(tracker.resolveQuestionByRpcId('rpc-approve-1')).toBeUndefined()
+    expect(tracker.pending('s2').approvals).toHaveLength(1)
+  })
+})

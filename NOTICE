@@ -13,3 +13,14 @@ browsing, PWA, and the desktop pairing panel.
 
 This product also depends on the dsh platform packages
 (@deepseek-ai/dsh-*, Apache-2.0, https://github.com/deepseek-ai/deepseek-harness).
+
+The phone UI bundle shipped in assets/mobile.bundle.js is built from source
+vendored under mobile-src/ (see mobile-src/UPSTREAM.md), forked from
+dsh-palm v1.6.0 (Apache-2.0, https://github.com/Eternalloveone/dsh-palm).
+This repository does not track upstream feature work; the vendored source is
+maintained here. Local changes carried in that fork:
+  · Settings → 外观 gains a native 「发送模式」 row that reads/writes the host
+    plugin's window.__dmSendMode (send mode is stored on the host, not locally);
+  · the usage card label reads 「充值余额」 (was 「账户余额」).
+Everything else in mobile-src/src is upstream v1.6.0 as published.
+

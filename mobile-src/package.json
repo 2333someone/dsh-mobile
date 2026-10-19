@@ -1,0 +1,16 @@
+{
+  "name": "dsh-mobile-bundle-src",
+  "version": "1.6.0",
+  "private": true,
+  "description": "Vendored dsh-palm v1.6.0 mobile UI source. Builds ../assets/mobile.bundle.js. This fork is maintained here; upstream is reference only.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.9.2"
+  }
+}

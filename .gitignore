@@ -1,3 +1,7 @@
 node_modules/
 *.tgz
 .DS_Store
+
+# 手机端 bundle 的源码目录（mobile-src）自带构建依赖，不随插件发布。
+# 根 package.json 的 files 白名单也不含 mobile-src/。
+mobile-src/node_modules/
