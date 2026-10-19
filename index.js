@@ -10379,8 +10379,8 @@ function pushCheckPageHtml() {
     '<p class="pc-kv">当前地址：<code id="pc-origin"></code></p>',
     '<p class="pc-hint">若上面是 <code>http://</code> 开头，请改用 https 的公网地址重新打开本页：</p>',
     '<ul class="pc-urls">',
-    '<li><span class="pc-tag pc-tag-no">http</span> <code>http://192.168.3.45:19387/m/push-check</code> — 局域网，必定不可用（仅用于对照）</li>',
-    '<li><span class="pc-tag pc-tag-ok">https</span> <code>https://dshm.elysia.xin:45632/m/push-check</code> — 公网反代，<b>用这个测</b></li>',
+    '<li><span class="pc-tag pc-tag-no">http</span> <code>http://192.168.1.10:19387/m/push-check</code> — 局域网，必定不可用（仅用于对照）</li>',
+    '<li><span class="pc-tag pc-tag-ok">https</span> <code>https://your-host.example.com:45632/m/push-check</code> — 公网反代，<b>用这个测</b></li>',
     '</ul>',
     '</section>',
 
