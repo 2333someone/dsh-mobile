@@ -26,11 +26,11 @@ import type { WorkspaceView as WorkspaceRow } from '../../api-proxy-types'
 import { deleteWorkspace, listWorkspaces, listDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
 import { errorText } from './App.tsx'
 import { compactPath, dominantPathPrefix } from '../ui-text.ts'
-import { ThemeToggle } from '../theme-toggle.tsx'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
 import { toast } from '../toast.tsx'
 import { CheckIcon, ClockIcon, CloseIcon, FolderIcon, FolderPlusIcon, InboxIcon, PinIcon, PlusIcon, SearchIcon } from '../icons.tsx'
+import { HeaderActions } from '../dm-header/index.tsx'
 
 /* ── local preferences (pin / recent) ────────────────────────────────── */
 
@@ -358,6 +358,9 @@ export interface WorkspaceViewProps {
   initialWorkspaceId?: string
   /** Open one workspace's session list. */
   onPick(workspace: WorkspaceRow): void
+  /** Open the bundle's native settings page — the same React route the project
+   *  page gear opens (SettingsView), reached from the top-left 设置 button. */
+  onOpenSettings?(): void
   /** Locate a search hit's session (in-app navigation across workspaces). */
   onLocateSession?(sessionId: string, workspaceId: string, seq?: number, query?: string, messageId?: string, partId?: string): void
   /** Open a search hit that belongs to NO workspace (standalone session):
@@ -385,7 +388,7 @@ export interface WorkspaceViewProps {
  * @param props - the pick action.
  * @returns the roster.
  */
-export function WorkspaceView({ initialWorkspaceId, onPick, onLocateSession, onOpenDirect, initialSearch, onSearchSnapshot, onSearchApplied, onOpenRunOverview, runOverviewLive }: WorkspaceViewProps) {
+export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLocateSession, onOpenDirect, initialSearch, onSearchSnapshot, onSearchApplied, onOpenRunOverview, runOverviewLive }: WorkspaceViewProps) {
   const [items, setItems] = useState<WorkspaceRow[] | undefined>(() => workspaceRowsCache)
   const [error, setError] = useState<string | undefined>(undefined)
   // Bumped by the retry button to re-run the roster fetch effect.
@@ -897,14 +900,15 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onLocateSession, onO
 
   return (
     <div className="mobile">
-      <header className="mobile-header">
+      <header className={`mobile-header${searchOpen ? '' : ' dm-header-actions'}`}>
         <div className="mobile-headerSlot">
           {searchOpen
             ? (
               <button type="button" className="mobile-back" aria-label="返回" onClick={() => { setSearchOpen(false); setSearch('') }}>‹</button>
             )
             : (
-              <div className="mobile-headerSlot" />
+              // 左上角三枚入口：设置 / 插件 / 自动化（只在这页出现）。
+              <HeaderActions onOpenSettings={onOpenSettings} />
             )}
         </div>
         {searchOpen ? (
@@ -928,12 +932,11 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onLocateSession, onO
               <CloseIcon />
             </button>
           ) : (
-            <>
-              <button type="button" className="mobile-iconbtn" aria-label="搜索工作区和会话" onClick={() => { setSearchOpen(true) }}>
-                <SearchIcon />
-              </button>
-              <ThemeToggle />
-            </>
+            // 主题切换按钮已按用户要求删除（改主题走「设置 → 主题」），
+            // 右槽只留搜索，保持右对齐、不留空档。
+            <button type="button" className="mobile-iconbtn" aria-label="搜索工作区和会话" onClick={() => { setSearchOpen(true) }}>
+              <SearchIcon />
+            </button>
           )}
         </div>
       </header>
@@ -972,7 +975,7 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onLocateSession, onO
             <p className="mobile-welcomeTitle">配对成功 🎉 三步上手</p>
             <p className="mobile-welcomeDesc">
               ① 点一个工作区开始对话<br />
-              ② 右上角 设置 → 通知：配好任务完成提醒<br />
+              ② 左上角 设置 → 通知：配好任务完成提醒<br />
               ③ 设置 → 用量：随时查看余额与配额
             </p>
           </div>

@@ -27,7 +27,6 @@ import { previewSummary } from '../ui-text.ts'
 import { foldEvents, type WireEvent } from '../messages.ts'
 import { removeOutboxForSession } from '../offline.ts'
 import { toast } from '../toast.tsx'
-import { ThemeToggle } from '../theme-toggle.tsx'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog } from '../dialog.tsx'
 import {
@@ -43,7 +42,7 @@ import {
   sessionListCache,
 } from '../list-persist.ts'
 export { sessionListCache } from '../list-persist.ts'
-import { ChatBubbleIcon, CheckIcon, ChevronUpIcon, CloseIcon, HelpIcon, SearchIcon } from '../icons.tsx'
+import { ChatBubbleIcon, CheckIcon, ChevronUpIcon, CloseIcon, SearchIcon } from '../icons.tsx'
 
 /** Props for the session list. */
 export interface SessionListViewProps {
@@ -57,8 +56,6 @@ export interface SessionListViewProps {
   initialSearch?: { open: boolean; term: string }
   onBack(): void
   onPick(session: SessionView): void
-  /** Open the mobile settings page (gear in the header). */
-  onOpenSettings(): void
   /** Locate a search hit living in another workspace (in-app navigation). */
   onLocateSession?(sessionId: string, workspaceId: string, seq?: number, query?: string): void
   /** Open a search-hit session scrolled to one of its matched messages. */
@@ -314,7 +311,7 @@ async function mapLimited<T>(items: readonly T[], limit: number, run: (item: T) 
  * @param props - the workspace, back action, and pick action.
  * @returns the session list.
  */
-export function SessionListView({ workspace, mux, initialSessionId, initialSearch, onBack, onPick, onOpenSettings, onLocateSession, onPickSeq, onSearchSnapshot, onSearchApplied }: SessionListViewProps) {
+export function SessionListView({ workspace, mux, initialSessionId, initialSearch, onBack, onPick, onLocateSession, onPickSeq, onSearchSnapshot, onSearchApplied }: SessionListViewProps) {
   const [rows, setRows] = useState<SessionView[]>([])
   /** Live list deltas (see {@link applyListFrame}), patched onto every page. */
   const liveRef = useRef<LiveListState>(emptyLiveState())
@@ -766,14 +763,15 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
     void loadMore()
   }, [hasMore, loading, rows, loadMore])
 
-  /** Create a blank session in this workspace and open it immediately. */
-  const handleCreate = useCallback(() => {
+  /** Create a blank session in this workspace and open it immediately.
+   *  `preset` 是用户在「选择会话模式」里点的那一项；缺省表示默认模式。 */
+  const handleCreate = useCallback((preset?: string) => {
     if (creating) return
     setCreating(true)
     setCreateError(undefined)
     void createSession({
       workspaceId: workspace.workspaceId,
-      ...(selectedPreset !== undefined ? { agentPreset: selectedPreset } : {}),
+      ...(preset !== undefined ? { agentPreset: preset } : {}),
     }).then(
       (created) => {
         setCreating(false)
@@ -799,7 +797,7 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
         setCreateError(errorText(reason))
       },
     )
-  }, [creating, workspace, onPick, selectedPreset])
+  }, [creating, workspace, onPick])
 
   /** Clear the long-press timer (touch move/end cancels a pending press). */
   const clearPressTimer = useCallback(() => {
@@ -897,10 +895,7 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
   }, [workspace])
 
   const createHint = createError !== undefined ? staleHostHint(createError) : undefined
-  const selectedPresetEntry = presets.find(preset => preset.id === selectedPreset)
-  const [presetHelpOpen, setPresetHelpOpen] = useState(false)
   const [presetPickerOpen, setPresetPickerOpen] = useState(false)
-  const presetDescription = selectedPresetEntry?.description
 
   // Date-grouped roster: 置顶 → 今天 → 昨天 → 更早, newest first inside each bucket.
   const groups = useMemo(() => {
@@ -1001,6 +996,8 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
 
   return (
     <div className="mobile">
+      {/* 这页顶栏只留返回键：设置 / 插件 / 自动化三个入口按用户要求**只**出现在
+          工作区列表页（dm-header），项目页不再渲染，也不保留任何不可见占位。 */}
       <header className="mobile-header">
         <div className="mobile-headerSlot">
           {searchActive
@@ -1036,69 +1033,15 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
               <CloseIcon />
             </button>
           ) : (
-            <>
-              <button type="button" className="mobile-iconbtn" aria-label="搜索会话" onClick={() => { setSearchActive(true) }}>
-                <SearchIcon />
-              </button>
-              <button type="button" className="mobile-iconbtn" aria-label="设置" onClick={onOpenSettings}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-                </svg>
-              </button>
-              <ThemeToggle />
-            </>
+            // 顶栏只留搜索：设置 / 插件 / 自动化按用户要求全部移到工作区列表页；
+            // 主题切换按钮也已删除（改主题走「设置 → 主题」）。
+            <button type="button" className="mobile-iconbtn" aria-label="搜索会话" onClick={() => { setSearchActive(true) }}>
+              <SearchIcon />
+            </button>
           )}
         </div>
       </header>
       {error !== undefined && <p className="mobile-error mobile-pad">{error}</p>}
-      <div className="mobile-create">
-        {presets.length > 0 && (
-          <div className="mobile-presetCard">
-            <button
-              type="button"
-              className="mobile-presetTrigger"
-              aria-label="Agent 模式"
-              disabled={selectedPreset === undefined}
-              onClick={() => { setPresetPickerOpen(true) }}
-            >
-              <span className="mobile-presetTriggerCopy">
-                <span className="mobile-presetTriggerTitle">
-                  {selectedPresetEntry?.name ?? selectedPreset ?? '无可用 Agent 模式'}
-                  {selectedPresetEntry?.isDefault === true ? '（默认）' : ''}
-                </span>
-                {selectedPresetEntry?.description !== undefined && (
-                  <span className="mobile-presetTriggerDesc">{selectedPresetEntry.description}</span>
-                )}
-              </span>
-            </button>
-            <span className="mobile-presetCaret" aria-hidden>▾</span>
-            <button
-              type="button"
-              className="mobile-presetHelp"
-              aria-label="模式说明"
-              disabled={presetDescription === undefined}
-              onClick={() => { setPresetHelpOpen(true) }}
-            >
-              <HelpIcon />
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          className="mobile-new"
-          disabled={creating || presetsLoading}
-          onClick={() => { void handleCreate() }}
-        >
-          {creating ? '创建中…' : '+ 新建会话'}
-        </button>
-      </div>
-      {createError !== undefined && (
-        <p className="mobile-error mobile-pad">
-          {createError}
-          {createHint !== undefined && <span className="mobile-hint">{createHint}</span>}
-        </p>
-      )}
       <ul className="mobile-list">
         {loading && rows.length === 0 && (
           <div aria-hidden="true" role="presentation">
@@ -1250,13 +1193,46 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
           <div className="mobile-empty">
             <div className="empty-icon"><ChatBubbleIcon /></div>
             <p className="empty-title">还没有会话</p>
-            <p className="empty-desc">点上方按钮新建一个，开始这个项目的第一段对话</p>
+            <p className="empty-desc">点下方按钮新建一个，开始这个项目的第一段对话</p>
           </div>
         )}
       </ul>
+      {/* 「+ 新建会话」放在列表下方（用户要求：顶部不再常驻模式卡片）。
+          点它先弹出「会话模式」底部选择，选中后用对应 preset 创建并进入会话。 */}
+      <div className="mobile-create mobile-create-footer">
+        <button
+          type="button"
+          className="mobile-new"
+          disabled={creating || presetsLoading}
+          onClick={() => { setPresetPickerOpen(true) }}
+        >
+          {creating ? '创建中…' : '+ 新建会话'}
+        </button>
+      </div>
+      {createError !== undefined && (
+        <p className="mobile-error mobile-pad">
+          {createError}
+          {createHint !== undefined && <span className="mobile-hint">{createHint}</span>}
+        </p>
+      )}
       {presetPickerOpen && (
-        <Sheet title="选择 Agent 模式" onClose={() => { setPresetPickerOpen(false) }}>
-          {presets.map((preset, index) => (
+        <Sheet title="选择会话模式" onClose={() => { setPresetPickerOpen(false) }}>
+          {presets.length === 0 ? (
+            // 宿主没返回预设列表时的诚实兜底：只有默认模式，说明原因。
+            <button
+              type="button"
+              className="sheet-option"
+              onClick={() => {
+                setPresetPickerOpen(false)
+                handleCreate()
+              }}
+            >
+              <span className="sheet-option-copy">
+                <span className="sheet-option-title">默认模式</span>
+                <span className="sheet-option-desc">宿主没有返回可选模式，将使用默认模式创建会话</span>
+              </span>
+            </button>
+          ) : presets.map((preset, index) => (
             <div key={preset.id}>
               {index > 0 && <div className="sheet-option-divider" aria-hidden />}
               <button
@@ -1266,6 +1242,8 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
                 onClick={() => {
                   setSelectedPreset(preset.id)
                   setPresetPickerOpen(false)
+                  // 选中模式 = 立即按该模式创建会话（不再需要顶部的常驻下拉框）。
+                  handleCreate(preset.id)
                 }}
               >
                 <span className="sheet-option-copy">
@@ -1285,14 +1263,6 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
               </button>
             </div>
           ))}
-        </Sheet>
-      )}
-      {presetHelpOpen && (
-        <Sheet title="Agent 模式说明" onClose={() => { setPresetHelpOpen(false) }}>
-          <p className="sheet-confirm-desc">
-            {selectedPresetEntry?.name ?? selectedPreset}
-            {presetDescription !== undefined ? '：' + presetDescription : ''}
-          </p>
         </Sheet>
       )}
       {menuSession !== undefined && (

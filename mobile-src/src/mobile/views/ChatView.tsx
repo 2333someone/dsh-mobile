@@ -68,7 +68,6 @@ function turnNumberOf(event: WireEvent): number | undefined {
 import { RunStatusBar, RunStatusSheet } from '../run-status.tsx'
 import { copyText, openFilePath, shareText } from '../code-actions.ts'
 import { MuxClient } from '../mux.ts'
-import { ThemeToggle } from '../theme-toggle.tsx'
 import { getAutoScroll } from '../display-prefs.ts'
 import { timeVisibility } from '../ui-text.ts'
 import { enqueuePrompt, flushOutbox, listOutbox, removeFromOutbox, removeOutboxForSession, type OutboxEntry } from '../offline.ts'
@@ -3147,7 +3146,6 @@ export function ChatView({
           <button type="button" className="mobile-iconbtn" aria-label="更多" onClick={() => { setMoreOpen(true) }}>
             <MoreIcon />
           </button>
-          <ThemeToggle />
         </div>
       </header>
       {error !== undefined && <p className="mobile-error mobile-pad">{error}</p>}

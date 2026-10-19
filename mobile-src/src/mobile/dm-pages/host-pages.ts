@@ -19,19 +19,20 @@ import { iconMarkup } from '../design/icons.tsx'
 // 的环境会被禁用，硬 inject 会让整个手机插件加载失败；取不到时 RPC 返回
 // service_unavailable，页面显示错误态，绝不补假数据。
 //
-// 按钮只在「工作区列表页」出现：bundle 里只有该页的顶栏有 aria-label="设置" 齿轮。
-// 两个按钮是 header 的直接子节点 + 绝对定位（同 48px / 同 top:50% / 同 .mobile-iconbtn
-// 规格），并给 header 加 .dm-header-extras 把首列从 48px 扩到 148px —— 标题会自动在
-// 剩余空间重新居中，320/360/390 宽都不会被按钮压住（见 theme.css 同名段落）。
+// 入口按钮已不在本文件的注入 HTML 里：顶栏那三枚按钮（设置 / 插件 / 自动化）改由
+// bundle 的 React 组件渲染（mobile-src/src/mobile/dm-header/index.tsx），本文件只
+// 暴露 openHostPage() 这一个编程入口。原因：旧实现靠「先找 aria-label="设置" 的齿轮，
+// 再把两个按钮 append 到它旁边」——dsh-palm v1.6.0 的工作区列表页不再渲染齿轮
+// （只有项目页有），锚点一消失，两个按钮就永远 display:none；而且往 React 管的
+// header 里 append/搬动节点是历史 removeChild 崩溃的同类隐患。现在入口按钮由
+// bundle 的 React 组件渲染（只出现在工作区列表页），存在性与位置都不再依赖 bundle 的 DOM。
 //
 // 两个入口图标取自宿主自己的图标定义（web shell 的 IconPluginPinwheelOutlineRegular /
-// IconClockOutlineRegular，16×16、stroke 1px 描边风格），path d 原样照搬。
+// IconClockOutlineRegular，16×16、stroke 1px 描边风格），path d 原样照搬；React 侧
+// 用 design/icons.tsx 的同一份 svg。
 /**
- * 页面入口与内置配置四行的图标：全部来自 design/icons.tsx（桌面端同一份 svg）。
- * 组 2（页面入口）跟桌面端规格；组 1（聊天工具栏）不在这里，保持原样。
+ * 内置配置四行的图标：全部来自 design/icons.tsx（桌面端同一份 svg）。
  */
-const ENTRY_PLUGINS_ICON = iconMarkup('pagePlugins', { size: 20 })
-const ENTRY_AUTOMATIONS_ICON = iconMarkup('pageAutomations', { size: 20 })
 const CONFIG_ART_SVG: Readonly<Record<string, string>> = {
   subagent: iconMarkup('pageBuiltinSubagent', { size: 36 }),
   'web-search': iconMarkup('pageBuiltinWebSearch', { size: 36 }),
@@ -39,8 +40,7 @@ const CONFIG_ART_SVG: Readonly<Record<string, string>> = {
   shell: iconMarkup('pageBuiltinTerminal', { size: 36 }),
 }
 
-export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="插件" title="插件">${ENTRY_PLUGINS_ICON}</button><button id="dm-automation-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="自动化" title="自动化">${ENTRY_AUTOMATIONS_ICON}</button>
-<div id="dm-host-pages">
+export const HOST_PAGES_HTML = `<div id="dm-host-pages">
 <section id="dm-page-plugins" class="dm-page" hidden aria-label="插件">
 <header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="plugins"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新插件" data-dm-refresh="plugins"><svg class="dm-page-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.49 8.66A8.2 8.2 0 1 1 11.71 3.80"/><path d="M16.31 3.64L11.64 1.56L11.79 6.05Z" fill="currentColor" stroke="currentColor" stroke-width="0.55" stroke-linejoin="round"/></svg></button></header>
 <div class="dm-page-body" data-dm-body="plugins"><p class="dm-page-state">加载中…</p></div>
@@ -72,6 +72,19 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
 <script>
 (function () {
   'use strict';
+
+  // 页面进出场统一走 bundle 的 page-motion（window.__dmPageMotion，见
+  // dm-pages/page-motion.ts）：进入滑入淡入、返回滑出淡出。入口没装好时退回瞬时开关。
+  function showPage(el) {
+    var m = window.__dmPageMotion;
+    if (m) { m.show(el); return; }
+    el.hidden = false;
+  }
+  function hidePage(el) {
+    var m = window.__dmPageMotion;
+    if (m) { m.hide(el); return; }
+    el.hidden = true;
+  }
 
   // 页面注册表：kind → 宿主 RPC。标题/方法都只在这里出现一次。
   var PAGES = {
@@ -164,54 +177,12 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
     return document.querySelector('[data-dm-body="' + kind + '"]');
   }
 
-  // ── 顶栏两个入口：只在工作区列表页（存在设置齿轮）出现 ───────────────────
-  function workspaceHeader() {
-    var gear = document.querySelector('.mobile-header .mobile-headerSlot-right > button[aria-label="设置"]');
-    return gear ? gear.closest('.mobile-header') : null;
-  }
-  // 按钮模板：两个入口按钮被 append 进 React 管的 .mobile-header 里，
-  // 一旦离开工作区页，React 卸载 header 会把它们一起带走。旧实现只判断
-  // "parentNode 不是 header 就 append"，按钮已被销毁时 getElementById 返回 null，
-  // 于是返回工作区后按钮永久消失（用户反馈：进过别的页面再回来就没了）。
-  // 这里在启动时保留 outerHTML 作为模板，缺失时按原样重建（点击是 document 委托，
-  // 重建不会丢事件）。
-  var btnTemplate = (function () {
-    var p = document.getElementById('dm-plugins-btn');
-    var a = document.getElementById('dm-automation-btn');
-    return p && a ? { html: p.outerHTML + a.outerHTML } : null;
-  })();
-  function rebuildButtons(header) {
-    if (!btnTemplate) return false;
-    var wrap = document.createElement("div");
-    wrap.innerHTML = btnTemplate.html;
-    var p = wrap.querySelector('#dm-plugins-btn');
-    var a = wrap.querySelector('#dm-automation-btn');
-    if (!p || !a) return false;
-    header.appendChild(p);
-    header.appendChild(a);
-    return true;
-  }
-  function syncHeader() {
-    var header = workspaceHeader();
-    var headers = document.querySelectorAll('.mobile-header');
-    for (var i = 0; i < headers.length; i++) headers[i].classList.toggle('dm-header-extras', headers[i] === header);
-    if (!header) return;
-    var plugins = document.getElementById('dm-plugins-btn');
-    var automation = document.getElementById('dm-automation-btn');
-    if (!plugins || !automation) { rebuildButtons(header); return; }
-    if (plugins.parentNode !== header) header.appendChild(plugins);
-    if (automation.parentNode !== header) header.appendChild(automation);
-  }
-  var syncQueued = false;
-  function queueSync() {
-    if (syncQueued) return;
-    syncQueued = true;
-    var run = function () { syncQueued = false; try { syncHeader(); } catch (e) {} };
-    if (window.requestAnimationFrame) window.requestAnimationFrame(run);
-    else window.setTimeout(run, 0);
-  }
-
   // ── 打开 / 关闭信息页（pushState 让安卓返回键也能退）────────────────────
+  // 顶栏入口改由 bundle 的 React 组件（dm-header）渲染，这里给它一个编程入口：
+  // window.__dmOpenHostPage(kind)。模块侧的 openHostPage() 会先判存在性再调用，
+  // 所以按钮在页面尚未安装完成时点下去也不会抛错（静默 no-op）。
+  window.__dmOpenHostPage = function (kind) { openPage(kind); };
+
   function openPage(kind) {
     var cfg = PAGES[kind];
     if (!cfg) return;
@@ -221,7 +192,7 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
     if (current) closePage(true);
     closeDetail(true);
     current = { kind: kind, el: el };
-    el.hidden = false;
+    showPage(el);
     document.documentElement.classList.add('dm-host-page-open');
     try { history.pushState({ dmHostPage: kind }, '', '#/dm-' + kind); } catch (e) {}
     loadPage(kind);
@@ -230,7 +201,7 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
     if (!current) return;
     var el = current.el;
     current = null;
-    el.hidden = true;
+    hidePage(el);
     document.documentElement.classList.remove('dm-host-page-open');
     if (!fromPop) { try { history.back(); } catch (e) {} }
   }
@@ -240,7 +211,7 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
     detailName = key;
     var el = document.getElementById('dm-page-plugin-detail');
     if (!el) return;
-    el.hidden = false;
+    showPage(el);
     document.documentElement.classList.add('dm-host-page-open');
     renderDetail(found);
     try { history.pushState({ dmHostDetail: key }, '', '#/dm-plugin/' + encodeURIComponent(key)); } catch (e) {}
@@ -249,13 +220,11 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
     if (detailName === null) return;
     detailName = null;
     var el = document.getElementById('dm-page-plugin-detail');
-    if (el) el.hidden = true;
+    if (el) hidePage(el);
     if (!fromPop) { try { history.back(); } catch (e) {} }
   }
 
   window.addEventListener('popstate', function (event) {
-    // 从其它页面返回时立刻重建顶栏入口（否则要等 1s 的兜底定时器）。
-    queueSync();
     var state = event && event.state;
     if (detailName !== null) {
       if (!state || !state.dmHostDetail) { closeDetail(true); return; }
@@ -595,16 +564,12 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
     list.innerHTML = html;
   }
 
-  // ── 事件：入口 / 返回 / 刷新 / 重试 / Tab / 搜索 / 开关 ──────────────────
+  // ── 事件：返回 / 刷新 / 重试 / Tab / 搜索 / 开关 ─────────────────────────
+  // 入口按钮在 React 侧（dm-header），旧实现里那条 #dm-plugins-btn/#dm-automation-btn
+  // 的 document 委托已随注入按钮一起删除。
   document.addEventListener('click', function (event) {
     var target = event.target;
     if (!target || !target.closest) return;
-    var opener = target.closest('#dm-plugins-btn, #dm-automation-btn');
-    if (opener) {
-      event.preventDefault();
-      openPage(opener.id === 'dm-plugins-btn' ? 'plugins' : 'automations');
-      return;
-    }
     var back = target.closest('[data-dm-back]');
     if (back) {
       event.preventDefault();
@@ -794,13 +759,21 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
   if (location.hash.indexOf('#/dm-') === 0) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
   }
-
-  // 工作区 ⇄ 会话切换时 header 会重渲染：MutationObserver + 1s 兜底轮询双保险。
-  try {
-    var mo = new MutationObserver(queueSync);
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-  } catch (e) {}
-  setInterval(function () { try { syncHeader(); } catch (e) {} }, 1000);
-  queueSync();
 })();
 </script>`
+
+/** 宿主信息页（插件 / 自动化）的编程入口。 */
+export type HostPageKind = 'plugins' | 'automations'
+
+/**
+ * 打开「插件」/「自动化」页。
+ *
+ * 页面 DOM 和交互都属于上面安装的内联脚本，它启动时把一个入口挂到
+ * `window.__dmOpenHostPage`；这里只做透传 + 存在性判断：
+ * 脚本还没跑（或页面没安装）时静默 no-op，调用方（顶栏按钮）不必再包 try/catch。
+ */
+export function openHostPage(kind: HostPageKind): void {
+  if (typeof window === 'undefined') return
+  const open = (window as unknown as { __dmOpenHostPage?: (kind: HostPageKind) => void }).__dmOpenHostPage
+  if (typeof open === 'function') open(kind)
+}

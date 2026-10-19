@@ -43,7 +43,10 @@ type Route =
   | { kind: 'workspaces' }
   | { kind: 'run-overview' }
   | { kind: 'sessions'; workspace: WorkspaceRow }
-  | { kind: 'settings'; workspace: WorkspaceRow }
+  /** The bundle's native settings page (SettingsView). Opened from the roster's
+   *  top-left 设置 button; back returns to the roster. The project page no longer
+   *  renders a settings entry, so this route no longer carries a workspace. */
+  | { kind: 'settings' }
   | {
     kind: 'chat'
     session: SessionView
@@ -576,8 +579,6 @@ function PairedApp({ onUnpaired }: { onUnpaired: () => void }) {
       // Returning to a plain list restores that list's search surface
       // (a chat opened out of an active search comes back to it).
       armListSearchRestore(route.workspace.workspaceId)
-    } else if (route.kind === 'settings') {
-      armListSearchRestore(route.workspace.workspaceId)
     }
     setTransition(previous => {
       const route = previous.current.route
@@ -619,8 +620,9 @@ function PairedApp({ onUnpaired }: { onUnpaired: () => void }) {
         }
       }
       if (route.kind === 'settings') {
+        // Settings is reached from the roster (the only entry): back goes there.
         return {
-          current: { route: { kind: 'sessions', workspace: route.workspace }, forward: false },
+          current: { route: { kind: 'workspaces' }, forward: false },
           leaving: previous.current,
         }
       }
@@ -766,6 +768,7 @@ function PairedApp({ onUnpaired }: { onUnpaired: () => void }) {
         initialWorkspaceId={initialWorkspaceId}
         initialSearch={restoreSearch}
         onPick={openWorkspace}
+        onOpenSettings={() => { navigate({ kind: 'settings' }) }}
         onLocateSession={locateSession}
         onOpenDirect={openChatDirect}
         onOpenRunOverview={() => { navigate({ kind: 'run-overview' }) }}
@@ -789,7 +792,6 @@ function PairedApp({ onUnpaired }: { onUnpaired: () => void }) {
           initialSearch={restoreListSearch}
           onBack={back}
           onPick={(session) => { openChat(session, route.workspace, focusSeqRef.current, focusQueryRef.current, focusMessageIdRef.current, focusPartIdRef.current) }}
-          onOpenSettings={() => { navigate({ kind: 'settings', workspace: route.workspace }) }}
           onLocateSession={locateSession}
           onPickSeq={(session, seq, query, messageId, partId) => { openChat(session, route.workspace, seq, query, messageId, partId) }}
           onSearchSnapshot={(open, term) => { listSearchSnapRef.current = { workspaceId: route.workspace.workspaceId, open, term } }}

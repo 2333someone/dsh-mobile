@@ -13,6 +13,19 @@ export const MODELS_CENTER_HTML = `<script>
 (function () {
   'use strict';
 
+  // 页面进出场统一走 bundle 的 page-motion（window.__dmPageMotion）：进入滑入淡入、
+  // 返回滑出淡出；入口没装好时退回瞬时开关。
+  function showPage(el) {
+    var m = window.__dmPageMotion;
+    if (m) { m.show(el); return; }
+    el.hidden = false;
+  }
+  function hidePage(el) {
+    var m = window.__dmPageMotion;
+    if (m) { m.hide(el); return; }
+    el.hidden = true;
+  }
+
   // ── 设置页「主机配置」：只保留「模型」一行 ────────────────────────────────
   //
   // 不改 settings.read：bundle 的 ui-theme（主题偏好）与分组详情页共用那份
@@ -980,7 +993,7 @@ export const MODELS_CENTER_HTML = `<script>
   function openModelsPage() {
     if (opened) { load(); return; }
     opened = true;
-    PAGE.hidden = false;
+    showPage(PAGE);
     if (TITLE) TITLE.textContent = '模型';
     try { history.pushState({ dmModels: 1 }, '', '#/dm-models'); } catch (e) {}
     renderState('加载中…', 'dm-page-loading');
@@ -992,7 +1005,7 @@ export const MODELS_CENTER_HTML = `<script>
     opened = false;
     sheet = null;
     renderSheet();
-    PAGE.hidden = true;
+    hidePage(PAGE);
     if (!fromPop) { try { history.back(); } catch (e) {} }
   }
 

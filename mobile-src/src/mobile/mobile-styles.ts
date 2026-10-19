@@ -193,6 +193,45 @@ body,
   }
 }
 
+/* ── 自绘固定层页面（插件 / 自动化 / 插件详情 / 模型中心 / 内置配置）进出场 ──
+   这些页面是 .dm-page（fixed inset 0）的注入层，由 dm-pages/page-motion.ts
+   加/删类来开关。进入：右侧 20px 滑入 + 淡入；返回：反向滑出 + 淡出。
+   只动 transform / opacity（合成层）；时长/曲线直接用 motion token
+   （base 200ms / cubic-bezier(.2,0,0,1)）。reduced-motion 由 design/motion.ts
+   的全局兜底降级成瞬变。z-index：正在进入的页面压住正在离开的页面，避免
+   「上一页淡出时盖住新页」的瞬时叠影。 */
+@keyframes dm-overlay-page-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes dm-overlay-page-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+.dm-page.dm-page-enter {
+  z-index: 71;
+  animation: dm-overlay-page-in var(--duration-base) var(--ease-standard) both;
+}
+
+.dm-page.dm-page-leave {
+  z-index: 69;
+  animation: dm-overlay-page-out var(--duration-base) var(--ease-standard) both;
+}
+
 @keyframes page-out-fwd {
   from {
     transform: none;
@@ -251,6 +290,27 @@ body,
      same while scrolling stays cheap. */
   border-bottom: 1px solid var(--border-subtle);
 }
+
+/* ── 顶栏左上角三枚入口：设置 / 插件 / 自动化（dm-header/index.tsx）──────────
+   只出现在工作区列表页（项目页顶栏按用户要求只留返回键），落在 header 左侧
+   slot 的普通流里：48×48、间距 4（.mobile-iconbtn 规格，未改视觉），合计 152px。
+   首列用 max-content 自适应按钮组的实际宽度，标题继续留在 minmax(0, 1fr) 列
+   里居中——不用绝对定位，所以按钮既不压标题，也不参与 bundle 的 grid 首列。 */
+.dm-header-action-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.mobile-header.dm-header-actions {
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+}
+
+.mobile-header.dm-header-actions > .mobile-headerSlot:first-child {
+  gap: 4px;
+}
+
 
 .mobile-headerSlot {
   display: flex;
@@ -1855,6 +1915,15 @@ button.settings-row:focus-visible {
 .mobile-create {
   display: grid;
   gap: var(--space-2);
+}
+
+/* 「+ 新建会话」移到列表下方后固定在底部（列表仍在自己那块区域独立滚动）。
+   顶部细分割线 + 页面底色，滚动内容不会从按钮后面透出来。 */
+.mobile-create-footer {
+  flex: none;
+  padding: 8px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-page);
 }
 
 .mobile-preset {

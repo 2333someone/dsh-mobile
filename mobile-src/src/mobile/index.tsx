@@ -16,6 +16,7 @@ import { applyDisplayPrefs } from './display-prefs.ts'
 import { registerMobilePwa } from '../mobile-pwa.ts'
 import { consumeMobilePairUrl } from './pairing.ts'
 import { installDmPages } from './dm-pages/index.ts'
+import { installPageMotion } from './dm-pages/page-motion.ts'
 import { installDmToolbar } from './dm-toolbar/index.ts'
 import { installDmPatches } from './dm-patches/index.ts'
 import { installInputCenter } from './dm-patches/input-center.ts'
@@ -33,6 +34,8 @@ document.head.appendChild(style)
 
 // 迁移 A：这四个页面型注入已从宿主 index.js 搬到这里（见 dm-pages/）。
 // 在 React 挂载前安装，保持「页面 DOM 先于应用」的原有时序。
+// 注入页面的进出场动画入口要先装（内联脚本通过 window.__dmPageMotion 调用）。
+installPageMotion()
 installDmPages()
 // 迁移 B：工具栏/行内控件（原 index.js 的 *_HTML 注入）。
 installDmToolbar()

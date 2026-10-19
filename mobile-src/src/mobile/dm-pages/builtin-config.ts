@@ -17,6 +17,19 @@ export const BUILTIN_CONFIG_HTML = `<script>
 (function () {
   'use strict';
 
+  // 页面进出场统一走 bundle 的 page-motion（window.__dmPageMotion）：进入滑入淡入、
+  // 返回滑出淡出；入口没装好时退回瞬时开关。
+  function showPage(el) {
+    var m = window.__dmPageMotion;
+    if (m) { m.show(el); return; }
+    el.hidden = false;
+  }
+  function hidePage(el) {
+    var m = window.__dmPageMotion;
+    if (m) { m.hide(el); return; }
+    el.hidden = true;
+  }
+
   // ── 内置插件配置页（子智能体 / 网页搜索 / 终端）────────────────────────────
   // 数据全部来自宿主：/m/api/mobile.builtinConfig.* 三个方法内部读
   // @deepseek-ai/dsh-settings 的 describe()（已脱敏）+ credentials.describe()。
@@ -531,7 +544,7 @@ export const BUILTIN_CONFIG_HTML = `<script>
     openKey = key;
     payload = null;
     resetStaging();
-    PAGE_EL.hidden = false;
+    showPage(PAGE_EL);
     try { history.pushState({ dmBuiltinConfig: key }, '', '#/dm-config/' + key); } catch (e) {}
     if (TITLE_EL) TITLE_EL.textContent = '加载中…';
     renderState('加载中…', 'dm-page-loading');
@@ -543,7 +556,7 @@ export const BUILTIN_CONFIG_HTML = `<script>
     openKey = null;
     payload = null;
     resetStaging();
-    PAGE_EL.hidden = true;
+    hidePage(PAGE_EL);
     if (!fromPop) { try { history.back(); } catch (e) {} }
   }
 

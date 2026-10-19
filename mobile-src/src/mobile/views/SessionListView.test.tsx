@@ -58,7 +58,6 @@ function renderList(props: Partial<SessionListViewProps> = {}): void {
       workspace={workspace}
       onBack={() => {}}
       onPick={(session) => { picked = session }}
-      onOpenSettings={() => {}}
       {...props}
     />,
   )
