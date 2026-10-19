@@ -3344,3 +3344,26 @@ img.chat-msg-image {
 .chat-trigger-head .chat-trigger-icon {
   transform: translateY(-0.6px);
 }
+
+/* ── 设置页范围图例：压成一行（本机 · 同步桌面 · 桌面端）─────────────────
+   用户要求一行显示，解释文字不占位（已挪到容器的 title 上，长按/悬浮可见）。
+   bundle 的 .settings-legend 是 grid 两列（徽标 + 说明），这里改成 flex 单行、
+   nowrap、overflow 藏起，390/320 都不换行不溢出；徽标样式沿用 bundle 的
+   .settings-badge-*（与每行自己的徽标同色同规格）。 */
+.settings-legend.settings-legend-inline {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 16px 12px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  font-size: 10.5px;
+  color: var(--text-tertiary, #6a6a7a);
+}
+.settings-legend.settings-legend-inline .dm-legend-sep {
+  flex: none;
+  line-height: 1;
+  color: var(--text-quaternary, #9a9aaa);
+}

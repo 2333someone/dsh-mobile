@@ -12,7 +12,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { SettingsNamespaceView } from '../../api-proxy-types'
 import pkg from '../../../package.json'
-import { fetchHostVoiceServices, fetchUsage, latestVersion, listDevices, mutateSettings, notifyEvents, readDiagnostics, readNotifyConfig, readSettings, renameDevice, revokeDevice, setPrimaryDevice, testNotifyChannels, writeNotifyConfig, type DependencyCheckView, type NotifyEventView, type PairedDeviceView, type UsageProviderView, type UsageView } from '../api.ts'
+import { fetchUsage, latestVersion, listDevices, mutateSettings, notifyEvents, readDiagnostics, readNotifyConfig, readSettings, renameDevice, revokeDevice, setPrimaryDevice, testNotifyChannels, writeNotifyConfig, type DependencyCheckView, type NotifyEventView, type PairedDeviceView, type UsageProviderView, type UsageView } from '../api.ts'
 import { errorText } from './App.tsx'
 import { notificationPermission, notificationSupported, requestNotificationPermission, startNotify, webPushState, enableWebPush, disableWebPush, webPushSupported } from '../notify.ts'
 import { getMobileThemeMode, setMobileThemeMode, subscribeMobileTheme, type MobileThemeMode } from '../mobile-theme.ts'
@@ -29,14 +29,10 @@ import { toast } from '../toast.tsx'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
 import {
-  ChevronUpIcon, ContrastIcon, GaugeIcon, HashIcon, InfoIcon, MicIcon,
+  ChevronUpIcon, ContrastIcon, GaugeIcon, HashIcon, InfoIcon,
   PencilIcon, PlusIcon, RowsIcon, ScrollDownIcon, ShieldIcon, SlidersIcon,
   TrashIcon, TypeIcon, UpperRightIcon, VibrateIcon, BellIcon,
 } from '../icons.tsx'
-import {
-  getVoiceServices, moveVoiceServiceDown, moveVoiceServiceUp, removeVoiceService,
-  subscribeVoiceServices, syncHostVoiceServices, upsertVoiceService, type VoiceService,
-} from '../voice-services.ts'
 import { MarketView } from './MarketView.tsx'
 import { SettingsForm, isWritableField, namespaceTitle } from './SettingsForm.tsx'
 
@@ -106,7 +102,7 @@ interface SettingsIndexEntry {
   label: string
   group: string
   keywords: string[]
-  open: 'notify' | 'voice'
+  open: 'notify'
 }
 
 const SETTINGS_INDEX: SettingsIndexEntry[] = [
@@ -120,8 +116,6 @@ const SETTINGS_INDEX: SettingsIndexEntry[] = [
   { id: 'notify-webpush', label: 'Web Push（系统推送）', group: '通知', keywords: ['web push', '系统推送', 'fcm', '代理'], open: 'notify' },
   { id: 'notify-triggers', label: '触发条件（阈值与间隔）', group: '通知', keywords: ['触发条件', '阈值', '间隔', 'cooldown'], open: 'notify' },
   { id: 'notify-privacy', label: '隐私（锁屏隐藏详情）', group: '通知', keywords: ['隐私', '锁屏隐藏', '隐藏详情'], open: 'notify' },
-  { id: 'voice-add', label: '语音 · 添加/编辑转写服务', group: '语音', keywords: ['添加服务', '语音服务', 'transcribe', '转写', 'baseurl'], open: 'voice' },
-  { id: 'voice-list', label: '语音 · 服务列表管理', group: '语音', keywords: ['语音列表', '排序', '上移', '下移', '删除服务'], open: 'voice' },
 ]
 
 /** One row of the unified settings card: icon · title/value · control. */
@@ -196,22 +190,6 @@ function OptionSheet<T extends string>({ title, options, value, onPick, onClose 
   )
 }
 
-/** Drop CacheStorage + service workers (the offline shell). */
-async function clearAppCaches(): Promise<void> {
-  try {
-    if (typeof caches !== 'undefined') {
-      const keys = await caches.keys()
-      await Promise.all(keys.map(key => caches.delete(key)))
-    }
-    if (typeof navigator !== 'undefined' && navigator.serviceWorker !== undefined) {
-      const registrations = await navigator.serviceWorker.getRegistrations()
-      await Promise.all(registrations.map(registration => registration.unregister()))
-    }
-    toast('缓存已清除')
-  } catch {
-    toast('清除缓存失败')
-  }
-}
 
 /** One toggle row bound to a boolean display pref. */
 function ToggleRow({ icon, title, desc, value, onChange }: {
@@ -510,21 +488,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [autoScroll, setAutoScrollState] = useState(() => getAutoScroll())
   const [haptics, setHapticsState] = useState(() => getHaptics())
   const [sheet, setSheet] = useState<'theme' | 'font' | 'density' | 'about' | null>(null)
-  const [confirmClear, setConfirmClear] = useState(false)
-  // Voice transcription services (phone-local, sent with every transcribe).
-  const [voiceServices, setVoiceServicesState] = useState<VoiceService[]>(() => getVoiceServices())
-  const [voiceSheet, setVoiceSheet] = useState<'list' | 'form' | null>(null)
-  const [editingService, setEditingService] = useState<VoiceService | undefined>(undefined)
-  const [formName, setFormName] = useState('')
-  const [formBaseURL, setFormBaseURL] = useState('')
-  const [formApiKey, setFormApiKey] = useState('')
-  const [formModel, setFormModel] = useState('')
-  // Host-side transcription services (dsh-palm.yaml) — display facts only,
-  // rendered as read-only rows; never merged into the phone list.
-  const [hostVoiceServices, setHostVoiceServices] = useState<Array<{ name: string; baseURL: string; model: string }>>([])
-  // Full-page sub-views: the unified notification page and the voice page.
+  // Full-page sub-view: the unified notification page.
   const [notifyOpen, setNotifyOpen] = useState(false)
-  const [voiceOpen, setVoiceOpen] = useState(false)
   // Paired-device management sub-page (P2): list devices, revoke, rename,
   // promote primary.
   const [deviceOpen, setDeviceOpen] = useState(false)
@@ -574,7 +539,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [diagnostics, setDiagnostics] = useState<{ checks: DependencyCheckView[]; now: number } | undefined>(undefined)
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
 
-  useEffect(() => subscribeVoiceServices(() => setVoiceServicesState(getVoiceServices())), [])
 
   // 打开「关于」即跑一次自检：帧计数是运行期数据，每次看都得重新取。
   useEffect(() => {
@@ -673,7 +637,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   /** Settings-search locate target: a sub-page entry's data-locate-id anchor. */
   const [focusId, setFocusId] = useState<string | undefined>(undefined)
   // Sub-page entries matching the term (the main-page rows already filter by
-  // keyword; this index surfaces what lives inside the notify/voice pages).
+  // keyword; this index surfaces what lives inside the notify page).
   const indexHits = term === ''
     ? []
     : SETTINGS_INDEX.filter(item =>
@@ -694,7 +658,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       document.querySelector(`[data-locate-id="${focusId}"]`)?.scrollIntoView({ block: 'center' })
     })
     return () => cancelAnimationFrame(raf)
-  }, [focusId, notifyOpen, voiceOpen])
+  }, [focusId, notifyOpen])
 
   const notifyDesc = !notificationSupported()
     ? '当前浏览器不支持通知'
@@ -918,186 +882,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     return <MarketView onBack={() => { setMarketOpen(false) }} />
   }
 
-  // The voice page: host-side services as read-only rows, phone-local
-  // services as the editable list, and the add/edit form as a sheet.
-  if (voiceOpen) {
-    return (
-      <div className="mobile">
-        <header className="mobile-header">
-          <div className="mobile-headerSlot">
-            <button type="button" className="mobile-back" aria-label="返回" onClick={() => { setVoiceOpen(false) }}>‹</button>
-          </div>
-          <h1 className="mobile-title">语音服务</h1>
-          <div className="mobile-headerSlot mobile-headerSlot-right" />
-        </header>
-        <div className="mobile-scroll">
-          <p className="settings-note">语音转写按列表顺序尝试，失败自动回退到下一个服务。</p>
-          {hostVoiceServices.length > 0 && (
-            <p className="settings-hostNote">
-              ✓ 桌面端已配置 {hostVoiceServices.length} 个转写服务，手机语音输入将自动使用，无需重复配置。
-            </p>
-          )}
-          {hostVoiceServices.length > 0 && (
-            <>
-              <div className="settings-subhead">桌面端配置（只读）</div>
-              <div className="settings-card">
-                {hostVoiceServices.map(service => (
-                  <div key={service.name} className="voice-service-row">
-                    <span className="voice-service-copy">
-                      <span className="voice-service-name">
-                        {service.name} <span className="settings-roTag">桌面端</span>
-                      </span>
-                      <span className="voice-service-desc">{service.model} · {service.baseURL}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-          <div className="settings-subhead">手机端服务</div>
-          <div className="settings-card" {...locateProps('voice-list')}>
-            {voiceServices.length === 0 && (
-              <p className="settings-note">尚未配置服务 — 点击下方「添加服务」。</p>
-            )}
-            {voiceServices.map((service, index) => (
-              <div key={service.id} className="voice-service-row">
-                <span className="voice-service-copy">
-                  <span className="voice-service-name">{service.name !== '' ? service.name : service.model}</span>
-                  <span className="voice-service-desc">{service.model} · {service.baseURL}</span>
-                </span>
-                <span className="voice-service-actions">
-                  <button
-                    type="button"
-                    className="voice-service-btn"
-                    aria-label="上移"
-                    disabled={index === 0}
-                    onClick={() => { moveVoiceServiceUp(service.id) }}
-                  ><ChevronUpIcon /></button>
-                  <button
-                    type="button"
-                    className="voice-service-btn voice-service-btn-down"
-                    aria-label="下移"
-                    disabled={index === voiceServices.length - 1}
-                    onClick={() => { moveVoiceServiceDown(service.id) }}
-                  ><ChevronUpIcon /></button>
-                  <button
-                    type="button"
-                    className="voice-service-btn"
-                    aria-label="编辑"
-                    onClick={() => {
-                      setEditingService(service)
-                      setFormName(service.name)
-                      setFormBaseURL(service.baseURL)
-                      setFormApiKey(service.apiKey)
-                      setFormModel(service.model)
-                      setVoiceSheet('form')
-                    }}
-                  ><PencilIcon /></button>
-                  <button
-                    type="button"
-                    className="voice-service-btn voice-service-btn-danger"
-                    aria-label="删除"
-                    onClick={() => { removeVoiceService(service.id) }}
-                  ><TrashIcon /></button>
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="sheet-confirm-actions" {...locateProps('voice-add')}>
-            <button
-              type="button"
-              className="mobile-button"
-              onClick={() => {
-                setEditingService(undefined)
-                setFormName('')
-                setFormBaseURL('')
-                setFormApiKey('')
-                setFormModel('')
-                setVoiceSheet('form')
-              }}
-            ><PlusIcon /> 添加服务</button>
-          </div>
-        </div>
-        {voiceSheet === 'form' && (
-          <Sheet title={editingService === undefined ? '添加服务' : '编辑服务'} onClose={() => { setVoiceSheet(null) }}>
-            <div className="voice-form">
-              <label className="voice-form-field">
-                <span className="voice-form-label">名称</span>
-                <input
-                  className="voice-form-input"
-                  value={formName}
-                  placeholder="如：硅基流动"
-                  onChange={(event) => { setFormName(event.target.value) }}
-                />
-              </label>
-              <label className="voice-form-field">
-                <span className="voice-form-label">API 地址（baseURL）</span>
-                <input
-                  className="voice-form-input"
-                  value={formBaseURL}
-                  placeholder="https://api.siliconflow.cn/v1"
-                  inputMode="url"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(event) => { setFormBaseURL(event.target.value) }}
-                />
-              </label>
-              <label className="voice-form-field">
-                <span className="voice-form-label">API Key</span>
-                <input
-                  className="voice-form-input"
-                  value={formApiKey}
-                  placeholder="sk-…"
-                  type="password"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(event) => { setFormApiKey(event.target.value) }}
-                />
-              </label>
-              <label className="voice-form-field">
-                <span className="voice-form-label">模型</span>
-                <input
-                  className="voice-form-input"
-                  value={formModel}
-                  placeholder="FunAudioLLM/SenseVoiceSmall"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(event) => { setFormModel(event.target.value) }}
-                />
-              </label>
-              <p className="sheet-note">支持任意 OpenAI 兼容的 /audio/transcriptions 服务。</p>
-              <div className="sheet-confirm-actions">
-                <button type="button" className="mobile-button" onClick={() => { setVoiceSheet(null) }}>取消</button>
-                <button
-                  type="button"
-                  className="mobile-button mobile-button-primary"
-                  disabled={formBaseURL.trim() === '' || formApiKey.trim() === '' || formModel.trim() === ''}
-                  onClick={() => {
-                    upsertVoiceService({
-                      id: editingService?.id
-                        ?? (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-                          ? crypto.randomUUID()
-                          : `svc-${Date.now()}`),
-                      name: formName.trim(),
-                      baseURL: formBaseURL.trim(),
-                      apiKey: formApiKey.trim(),
-                      model: formModel.trim(),
-                    })
-                    setVoiceSheet(null)
-                  }}
-                >保存</button>
-              </div>
-            </div>
-          </Sheet>
-        )}
-      </div>
-    )
-  }
 
-  // The unified notification page: browser notify (L1), trigger thresholds,
   // Web Push (L2) and third-party channels (L3) in one place.
   if (notifyOpen) {
     return (
@@ -1504,26 +1289,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     )
   }
 
-  /** Open the voice page and refresh the host-side service display facts. */
-  const openVoicePage = (): void => {
-    setVoiceOpen(true)
-    // Host-side services (dsh-palm.yaml) are configured on the desktop and
-    // used by the host as a fallback; their keys never reach the phone, so
-    // they are rendered as read-only rows and never merged into the local
-    // list. The sync call only drops the legacy 'host 配置' import.
-    void fetchHostVoiceServices().then(
-      (services) => {
-        setHostVoiceServices(services)
-        if (services.length > 0) syncHostVoiceServices(services)
-      },
-      () => { /* 拉取失败保持现状，用户可手动添加 */ },
-    )
-  }
-
   /** Activate a sub-page search hit: open its page and pulse the entry. */
   const activateSetting = (entry: SettingsIndexEntry): void => {
-    if (entry.open === 'notify') setNotifyOpen(true)
-    else openVoicePage()
+    setNotifyOpen(true)
     setFocusId(entry.id)
   }
 
@@ -1584,10 +1352,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           </ul>
         )}
 
-        <div className="settings-legend">
-          <ScopeBadge scope="phone" /><span>仅影响本机</span>
-          <ScopeBadge scope="sync" /><span>改动同步到桌面端</span>
-          <ScopeBadge scope="desktop" /><span>请在桌面端修改</span>
+        <div className="settings-legend settings-legend-inline" title="本机：仅影响本机；同步桌面：改动同步到桌面端；桌面端：请在桌面端修改">
+          <ScopeBadge scope="phone" /><span className="dm-legend-sep" aria-hidden="true">·</span>
+          <ScopeBadge scope="sync" /><span className="dm-legend-sep" aria-hidden="true">·</span>
+          <ScopeBadge scope="desktop" />
         </div>
 
         <ul className="settings-group">
@@ -1735,21 +1503,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         </ul>
 
         <ul className="settings-group">
-          <li className="settings-groupTitle">语音 <span className="settings-groupDesc">语音输入与转写</span></li>
-          {hit('语音服务', '转写', 'voice', '语音') && (
-            <SettingsRow
-              icon={<MicIcon />}
-              title="语音服务"
-              desc={voiceServices.length === 0
-                ? (hostVoiceServices.length > 0 ? `桌面端已配置 ${hostVoiceServices.length} 个转写服务` : '语音转写服务，按序回退')
-                : `${voiceServices.length} 个服务 · 按序回退`}
-              action={<RowChevron />}
-              onClick={() => { openVoicePage() }}
-            />
-          )}
-        </ul>
-
-        <ul className="settings-group">
           <li className="settings-groupTitle">设备 <span className="settings-groupDesc">已配对设备管理</span></li>
           <IosInstallHint />
           {hit('设备管理', '配对', '设备', 'device', 'pair') && (
@@ -1798,15 +1551,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
         <ul className="settings-group">
           <li className="settings-groupTitle">通用</li>
-          {hit('清除缓存', 'cache') && (
-            <SettingsRow
-              icon={<TrashIcon />}
-              title="清除缓存"
-              desc="清除离线壳缓存（PWA）"
-              action={<RowChevron />}
-              onClick={() => { setConfirmClear(true) }}
-            />
-          )}
           {hit('反馈', '意见', '建议', 'feedback', 'issue', 'github') && (
             <SettingsRow
               icon={<UpperRightIcon />}
@@ -1930,16 +1674,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             </button>
           </div>
         </Sheet>
-      )}
-      {confirmClear && (
-        <ConfirmDialog
-          title="清除缓存"
-          body="将删除本机的离线壳缓存（PWA CacheStorage）并重新注册。偏好与配对状态不受影响。"
-          confirmLabel="清除"
-          tone="danger"
-          onCancel={() => { setConfirmClear(false) }}
-          onConfirm={() => { setConfirmClear(false); void clearAppCaches() }}
-        />
       )}
     </div>
   )
