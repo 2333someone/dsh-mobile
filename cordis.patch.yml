@@ -8,15 +8,20 @@
 # The dedicated listener is what makes LAN and the existing reverse proxy work
 # without touching the GUI's bind address or its dynamic port.
 #
-# `pairCode` is the fixed pairing code (no expiry, no random). Set it to ''
-# to fall back to a random 6-digit code that expires after 5 minutes.
+# `pairCode` chooses the pairing mode:
+#   - '' (recommended default) -> random 6-digit code, expires after 5 minutes;
+#   - any fixed value          -> that code, valid forever (no expiry, no rotation),
+#     which is a security footgun once the port is reachable from a network.
+# The code-level fallback is '123456' only for developer convenience; never ship
+# a deployment that keeps a fixed code reachable from the internet.
 # `publicBaseUrl` is informational: the settings panel displays it so the phone
-# knows the public address. Leave it empty if you only use LAN.
+# knows the public address. It may be left empty (LAN-only) or set to your own
+# reverse-proxy origin; it is never contacted at startup.
 - insert:
     - id: dsh-mobile
       name: 'dsh-mobile'
       config:
         enabled: true
         mobilePort: 19387
-        pairCode: '123456'
-        publicBaseUrl: 'https://dshm.elysia.xin:45632'
+        pairCode: ''
+        publicBaseUrl: 'https://your-host.example.com:45632'
