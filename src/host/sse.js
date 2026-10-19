@@ -3,7 +3,7 @@
  * 连接/观察者/follow 等有状态编排仍在 core（RPC 注册表轮再显式化 ctxBag）。
  */
 import { randomBytes } from 'node:crypto'
-import { MUX_ALWAYS_FORWARDED, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS } from './config.js'
+import { MUX_ALWAYS_FORWARDED, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, FOLLOW_ASSISTANT_STREAM, FOLLOW_RETRY_MS, MAX_FOLLOW_RESTARTS } from './config.js'
 
 export function textOfEventData(data) {
 if (!data || typeof data !== 'object') return ''
@@ -88,6 +88,13 @@ export function createSseRuntime({ state, host = {} }) {
   const muxStreams = state.muxStreams
   const streamStates = state.streamStates
   const lastStep = state.lastStep
+  const lastPersistedSeq = state.lastPersistedSeq
+  const follows = state.follows
+  const observers = state.observers
+  const lastObserved = state.lastObserved
+  // emitMux 与本运行时同属 sse.js：直接由同一个 state bag 再取一份，
+  // 不额外要求宿主注入（两份都只是 state 上的无状态包装）。
+  const { emitMux } = createMuxRuntime({ state })
     function forgetQueue(sessionId) {
       const sid = String(sessionId || '')
       if (sid === '') return
@@ -238,5 +245,246 @@ export function createSseRuntime({ state, host = {} }) {
       }
     }
 
-  return { forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent, emitQueue }
+    /**
+     * 用「流式状态 + slot」合成一条 `assistant/chunk` 事件（live chunk 与快照补放共用）。
+     *
+     * `slot` 是桶内序号（1..STREAM_SEQ_SLOTS-1），seq = base + slot/STREAM_SEQ_SLOTS，
+     * 因此同一 attempt 内严格递增，且恒小于 base+1（= 下一条已落盘事件）。
+     */
+    function buildAssistantChunkEvent(sessionId, st, slot, rawTime, chunk) {
+      let s = typeof slot === 'number' && Number.isFinite(slot) ? Math.floor(slot) : ++st.seq
+      if (!Number.isFinite(s) || s < 1) s = ++st.seq
+      if (s > STREAM_SEQ_SLOTS - 1) s = STREAM_SEQ_SLOTS - 1
+      const base = Math.max(st.seqBase, lastPersistedSeq.get(sessionId) ?? 0)
+      const seq = base + s / STREAM_SEQ_SLOTS
+      st.seq = s
+      const time = typeof rawTime === 'number' && Number.isFinite(rawTime) ? rawTime : Date.now()
+      const data = { chunk: { type: chunk.type, text: chunk.text } }
+      // turn/step 优先用 attempt 的 start 帧；没接上 start 时退回最近一条 step/start。
+      // 少了它 bundle 无法把逐字增量累加进同一个待定气泡（每个 chunk 会变成一条新消息）。
+      const fallback = lastStep.get(sessionId)
+      const turn = st.turn !== undefined ? st.turn : fallback?.turn
+      const step = st.step !== undefined ? st.step : fallback?.step
+      if (turn !== undefined) data.turn = turn
+      if (step !== undefined) data.step = step
+      return { type: 'assistant/chunk', seq, time, data }
+    }
+
+    /**
+     * 把 compact 快照流（`AssistantStreamAccumulator.snapshot()` 的 records）展开成
+     * 逐 token 的 `{ time, chunk }`。
+     *
+     * 快照是压缩格式（同一条消息的连续 delta 合并成 `{type:'text-chunks', dt, texts}`），
+     * 不能直接喂给 bundle —— `ze()` 只认 `{chunk:{type:'text-delta'|'reasoning-delta',text}}`。
+     * 这里按宿主 `expandAssistantStream()` 的同一语义展开；tool-call 片段 bundle 不渲染，跳过。
+     */
+    function expandSnapshotStream(stream) {
+      const out = []
+      if (!Array.isArray(stream)) return out
+      for (const record of stream) {
+        if (!record || typeof record !== 'object') continue
+        if (record.type === 'chunk') {
+          if (record.chunk && typeof record.chunk === 'object') out.push({ time: record.time, chunk: record.chunk })
+          continue
+        }
+        if (record.type !== 'text-chunks' && record.type !== 'reasoning-chunks') continue
+        const texts = Array.isArray(record.texts) ? record.texts : []
+        const dt = Array.isArray(record.dt) ? record.dt : []
+        let time = typeof record.time0 === 'number' && Number.isFinite(record.time0) ? record.time0 : Date.now()
+        for (let i = 0; i < texts.length; i += 1) {
+          if (i > 0) time += typeof dt[i - 1] === 'number' && Number.isFinite(dt[i - 1]) ? dt[i - 1] : 0
+          out.push({
+            time,
+            chunk: {
+              type: record.type === 'text-chunks' ? 'text-delta' : 'reasoning-delta',
+              ...(typeof record.index === 'number' ? { index: record.index } : {}),
+              text: texts[i],
+            },
+          })
+        }
+      }
+      return out
+    }
+
+    /**
+     * follow 的 snapshot 里带着 `assistantStream.activeAttempt`：**当前正在生成的那一步**
+     * 已经产出的全部片段（compact 格式）+ 它的 attemptId / turn / step / startedAfterSeq。
+     *
+     * 手机在生成中途打开会话时，follow 才刚建立，start 帧早就发过了 —— 不补放这段快照，
+     * 手机就永远缺前半段正文（用户看到的「只显示一半」），而且后续 chunk 没有 turn/step，
+     * 每个 token 都会新开一条消息。这里把它补成正常的 assistant/chunk 序列。
+     *
+     * 只在「这个 attempt 还没有 live 帧进来」时补放一次：follow 重连会重发同一个
+     * activeAttempt，重放会重复推字（seq 已被水位挡掉一部分，但不能依赖它）。
+     */
+    function replayAssistantSnapshot(sessionId, snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return
+      const attempt = snapshot.activeAttempt
+      if (!attempt || typeof attempt !== 'object') return
+      const attemptId = typeof attempt.attemptId === 'string' ? attempt.attemptId : undefined
+      if (attemptId === undefined) return
+      const revision = typeof snapshot.revision === 'number' ? snapshot.revision : undefined
+      const st = streamStateFor(sessionId, attemptId, revision)
+      if (typeof attempt.turn === 'number') st.turn = attempt.turn
+      if (typeof attempt.step === 'number') st.step = attempt.step
+      if (typeof attempt.startedAfterSeq === 'number' && Number.isFinite(attempt.startedAfterSeq)) {
+        st.seqBase = attempt.startedAfterSeq
+      }
+      // 已经有 live chunk 进状态了：说明启动顺序不是「snapshot → chunk」，别重放。
+      if (st.lastIndex >= 0) return
+      const expanded = expandSnapshotStream(attempt.stream)
+      let slot = 0
+      for (const { time, chunk } of expanded) {
+        if (!chunk || typeof chunk !== 'object') continue
+        if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') continue
+        if (typeof chunk.text !== 'string' || chunk.text === '') continue
+        slot += 1
+        emitMux({ type: 'session/event', sessionId, event: buildAssistantChunkEvent(sessionId, st, slot, time, chunk) })
+      }
+      if (typeof attempt.nextIndex === 'number' && Number.isFinite(attempt.nextIndex)) {
+        // 后续 live chunk 的 index 从 nextIndex 起（快照已包含 0..nextIndex-1 的**全部** chunk，
+        // 包括我们不渲染的 tool-call 片段），所以增量判重的水位直接对齐到 nextIndex-1。
+        st.lastIndex = Math.max(st.lastIndex, attempt.nextIndex - 1)
+      }
+    }
+
+    /** 还有设备在看这个会话吗。 */
+    function anyoneObserving(sessionId) {
+      for (const set of observers.values()) {
+        if (set.has(sessionId)) return true
+      }
+      return false
+    }
+
+    /**
+     * 某会话最后一次「有人在看」的时刻。
+     * 用它而不是「当前有没有人在看」做回收判据：手机每次 SSE 重连后要等下一次 observe
+     * 重申（最多 30s）才重新出现在 observers 里，这中间它其实还在前台看着。
+     */
+    function lastObservedAt(sessionId) {
+      return lastObserved.get(sessionId) ?? 0
+    }
+
+    /**
+     * 子代理会话必须走 durable 父地址，否则宿主 validateAddress 会抛 session/agent-busy
+     *（本插件已有此经验）。认过父的直接用，没认过父先按普通地址走，撞错再认父重试。
+     */
+    function addressForSession(sessionId) {
+      const parent = host.subagentParent.get(sessionId)
+      if (parent !== undefined && parent !== sessionId) {
+        return { kind: 'subagent', parentSessionId: parent, childSessionId: sessionId, mode: 'unknown' }
+      }
+      return { kind: 'session', sessionId }
+    }
+
+    /** 起（或复用）某会话的 follow 单例。幂等。 */
+    function ensureFollow(sessionId) {
+      const existing = follows.get(sessionId)
+      if (existing !== undefined) return existing
+      const ref = new AbortController()
+      const entry = { ref, task: undefined }
+      const task = (async () => {
+        let restarts = 0
+        let triedParentLookup = false
+        while (!ref.signal.aborted && restarts <= MAX_FOLLOW_RESTARTS) {
+          try {
+            const frames = host.follow(
+              { address: addressForSession(sessionId), assistantStream: FOLLOW_ASSISTANT_STREAM },
+              ref.signal,
+            )
+            for await (const f of frames) {
+              if (ref.signal.aborted) return
+              if (!f) continue
+              if (f.type === 'snapshot') {
+                // 快照里的 records 是已经存在的历史，不重推（聊天窗自己读过历史）。
+                // 只告诉手机「从 lastSeq 起之后的事件会实时到达」，bundle 据此刷新缓存。
+                if (typeof f.cursor === 'number') {
+                  // 合成 chunk 的 seq 基准：订阅那一刻会话的最后一个已落盘 seq。
+                  lastPersistedSeq.set(sessionId, f.cursor)
+                }
+                // 正在生成中的那一步：快照带着已产出的片段，补放给手机，
+                // 否则中途进场（手机在桌面生成到一半时打开会话）会永久缺前半段正文。
+                replayAssistantSnapshot(sessionId, f.assistantStream)
+                if (typeof f.cursor === 'number') {
+                  emitMux({ type: 'session/subscribed', sessionId, lastSeq: f.cursor })
+                  // bundle 收到 session/subscribed 会把队列缓存和 dock 一起清空
+                  //（rememberSubscribed → cachedQueueBySession.delete，chat 监听里 Mt([])）。
+                  // 跟随流重启（断线/重连/换会话）都会走这里，所以必须紧接着补一帧当前
+                  // 队列，否则「已经在排队的消息」会被这次清空从界面上抹掉，而每流指纹
+                  // 又认为早就推过了 —— 要等到队列下次变化才恢复。
+                  forgetQueue(sessionId)
+                  emitQueue(sessionId)
+                }
+                continue
+              }
+              if (f.type === 'event' && f.event) {
+                // 真事件把水位往前推：后续 chunk 的 seq 必须落在它之后、
+                // 下一条真事件之前（见 STREAM_SEQ_SLOTS）。
+                if (typeof f.event.seq === 'number') {
+                  const prev = lastPersistedSeq.get(sessionId)
+                  if (prev === undefined || f.event.seq > prev) lastPersistedSeq.set(sessionId, f.event.seq)
+                }
+                // 记下 turn/step 边界：中途接上（没见到 start 帧）时给 chunk 兜底。
+                noteStepEvent(sessionId, f.event)
+                emitMux({ type: 'session/event', sessionId, event: f.event })
+                continue
+              }
+              // ── 流式增量 → 手机能渲染的 session/event ────────────────────────
+              if (f.type === 'assistant-stream' && f.frame) {
+                const ev = assistantStreamEvent(sessionId, f.frame)
+                if (ev !== undefined) emitMux({ type: 'session/event', sessionId, event: ev })
+              }
+            }
+            if (ref.signal.aborted) return
+            // 流自然结束（宿主重载 / 会话消失）：只要还有人在看就退避重试。
+            if (!anyoneObserving(sessionId)) return
+            restarts += 1
+            await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
+          } catch (err) {
+            if (ref.signal.aborted) return
+            // 没认过父的子代理会在这里撞上 session/agent-busy：认父后重试一次。
+            if (!triedParentLookup && !host.subagentParent.has(sessionId)) {
+              triedParentLookup = true
+              try {
+                const parent = await host.parentOfSubagent(sessionId, undefined)
+                if (parent !== undefined && parent !== sessionId) {
+                  host.subagentParent.set(sessionId, parent)
+                  continue
+                }
+              } catch {}
+            }
+            if (!anyoneObserving(sessionId)) return
+            restarts += 1
+            await new Promise((r) => setTimeout(r, FOLLOW_RETRY_MS))
+          }
+        }
+      })()
+      task.catch(() => {})
+      task.then(() => {
+        if (follows.get(sessionId) === entry) follows.delete(sessionId)
+      })
+      entry.task = task
+      follows.set(sessionId, entry)
+      return entry
+    }
+
+    /** 停止某会话的 follow，释放宿主流。 */
+    function stopFollow(sessionId) {
+      const entry = follows.get(sessionId)
+      if (entry === undefined) return
+      follows.delete(sessionId)
+      if (!anyoneObserving(sessionId)) lastObserved.delete(sessionId)
+      // 拆流时把该会话的流式去重状态一并收走，避免重连后拿旧 index 判重误丢新一轮的字。
+      for (const [key, st] of [...streamStates]) {
+        if (key.startsWith(`${sessionId}\u0000`)) streamStates.delete(st.key)
+      }
+      try {
+        entry.ref.abort()
+      } catch {}
+    }
+
+  return {
+    forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent, emitQueue,
+    replayAssistantSnapshot, anyoneObserving, lastObservedAt, ensureFollow, stopFollow,
+  }
 }
