@@ -5496,6 +5496,8 @@ const INPUT_TEXT_CENTER_HTML = `<script>
 
     var inkCache = {};
     var lastKey = '';
+    // 单行文字整体上移的默认量（px）。用户反馈：几何居中后仍觉得略低，故上移 1px。
+    var DEFAULT_BIAS = 1;
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext ? canvas.getContext('2d') : null;
 
@@ -5579,7 +5581,13 @@ const INPUT_TEXT_CENTER_HTML = `<script>
       var height = el.getBoundingClientRect().height || el.offsetHeight;
       if (!(height > 0)) return;
 
-      var key = [font, sample, lineHeight, height, cs.borderTopWidth, cs.borderBottomWidth].join('|');
+      // 视觉偏置（px）：纯几何居中后肉眼仍觉得文字略低，整体上移一点。
+      // 运行时可改 window.__dmInputBias 微调（下次 apply 生效）；调好写回 DEFAULT_BIAS。
+      var BIAS = (typeof window.__dmInputBias === 'number' && isFinite(window.__dmInputBias))
+        ? window.__dmInputBias
+        : DEFAULT_BIAS;
+
+      var key = [font, sample, lineHeight, height, cs.borderTopWidth, cs.borderBottomWidth, BIAS].join('|');
       if (key === lastKey) return;
 
       var inkRel = inkCenterFromBaseline(font, sample, fontSize);
@@ -5590,7 +5598,7 @@ const INPUT_TEXT_CENTER_HTML = `<script>
       var btop = parseFloat(cs.borderTopWidth) || 0;
       var bbot = parseFloat(cs.borderBottomWidth) || 0;
       var inkCenter = baseline + inkRel;                 // 墨迹中心 → 相对内容盒顶部
-      var pt = height / 2 - btop - inkCenter;            // 让墨迹中心落在盒子中线
+      var pt = height / 2 - btop - inkCenter - BIAS;     // 几何居中，再整体上移 BIAS
       var pb = height - btop - bbot - lineHeight - pt;
       if (!isFinite(pt) || !isFinite(pb)) return;
       if (pt < 0 || pb < 0 || pt > 30 || pb > 30) return;
