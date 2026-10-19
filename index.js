@@ -10118,9 +10118,25 @@ const MUTATION_BUS_HTML = `<script>
       tasks.push({ fn: fn, period: typeof period === 'number' && period > 0 ? period : 120, ready: typeof ready === 'function' ? ready : null, next: 0 });
       startTick();
     },
-    wake: startTick
+    // 唤醒时立刻跑一次 tick：否则要等下一个 120ms 周期，进页面时控件会滞后。
+    wake: function () {
+      startTick();
+      try { tick(); } catch (e) {}
+    }
   };
   normalListeners.push(ensureTick.wake);
+
+  // 进聊天页时 composer 会重新挂载。那一刻立刻唤醒一次 ensure tick，否则要等 600ms 切片
+  // + 各任务 800ms 周期，用户会看到「工具栏图标后来才蹦出来」。
+  // 只在 composer 元素身份变化（挂载/卸载）时唤醒一次，不挂全帧通道 —— 我们的控件写入
+  // 会再次触发总线，全帧唤醒会形成「写入→通知→再写入」的循环。
+  var composerSeen = null;
+  frameListeners.push(function () {
+    var c = document.querySelector('.chat-composer');
+    if (c === composerSeen) return;
+    composerSeen = c;
+    if (c) ensureTick.wake();
+  });
 
   window.__dmMutationBus = {
     subscribe: function (listener, options) {
