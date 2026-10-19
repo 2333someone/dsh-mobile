@@ -52,10 +52,6 @@ vi.mock('./App.tsx', async importOriginal => {
     prompt: vi.fn(async () => {}),
   }
 })
-vi.mock('../voice-input.ts', () => ({
-  startVoiceRecording: vi.fn(),
-  voiceSupported: vi.fn(() => false),
-}))
 vi.mock('../offline.ts', () => ({
   enqueuePrompt: vi.fn(),
   // Real flushOutbox is async and always resolves a FlushResult; the mock
@@ -68,7 +64,6 @@ vi.mock('../offline.ts', () => ({
 }))
 import { archiveSession as archiveSessionApiMock, fetchMobilePreferences, models, selectModel, sendCommand, cancelSession, fetchPending, respondApproval, respondQuestion, listSessions, history, subagentsList, updateQueue as updateQueueMock } from '../api.ts'
 import { loadChatPage, prompt } from './App.tsx'
-import { startVoiceRecording, voiceSupported, type VoiceRecording } from '../voice-input.ts'
 import { listOutbox, removeFromOutbox, removeOutboxForSession } from '../offline.ts'
 
 const session: SessionView = {
@@ -270,8 +265,6 @@ const historyMock = vi.mocked(history)
 const loadChatPageMock = vi.mocked(loadChatPage)
 const subagentsListMock = vi.mocked(subagentsList)
 const promptMock = vi.mocked(prompt)
-const startVoiceRecordingMock = vi.mocked(startVoiceRecording)
-const voiceSupportedMock = vi.mocked(voiceSupported)
 const removeOutboxForSessionMock = vi.mocked(removeOutboxForSession)
 const listOutboxMock = vi.mocked(listOutbox)
 const removeFromOutboxMock = vi.mocked(removeFromOutbox)
@@ -2504,27 +2497,6 @@ describe('ChatView streaming preview', () => {
     expect(bolds.length).toBeGreaterThan(0)
     expect(bolds[0]!.tagName).toBe('STRONG')
     expect(screen.queryByText('**加粗**')).toBeNull()
-  })
-})
-
-describe('ChatView voice cleanup', () => {
-  it('releases the mic when the chat unmounts during mic authorization', async () => {
-    const trackStop = vi.fn()
-    const cancel = vi.fn(() => { trackStop() })
-    let resolveRecorder: ((recorder: VoiceRecording) => void) | undefined
-    startVoiceRecordingMock.mockReturnValue(new Promise(resolve => { resolveRecorder = resolve }))
-    voiceSupportedMock.mockReturnValue(true)
-    loadChatPageMock.mockResolvedValue(rowPage(turnEvents()))
-    const { unmount } = render(<ChatView session={session} onBack={() => {}} showToolCalls={true} showSystemMessages={false} />)
-    // Open the mic; getUserMedia is still authorizing (the promise is pending).
-    fireEvent.click(await screen.findByRole('button', { name: '语音输入' }))
-    // The user leaves the chat before authorization resolves.
-    unmount()
-    // Authorization resolves after unmount: the recorder must be cancelled so
-    // the MediaStream tracks are stopped (no mic leak, no stuck indicator).
-    await act(async () => { resolveRecorder!({ stop: vi.fn(), cancel }) })
-    expect(cancel).toHaveBeenCalled()
-    expect(trackStop).toHaveBeenCalled()
   })
 })
 

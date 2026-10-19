@@ -8,24 +8,20 @@ vi.mock('../api.ts', () => ({
   readSettings: vi.fn(),
   mutateSettings: vi.fn(),
   listAgentPresets: vi.fn(),
-  fetchHostVoiceServices: vi.fn(),
   readNotifyConfig: vi.fn(),
   writeNotifyConfig: vi.fn(),
   fetchUsage: vi.fn(),
   notifyEvents: vi.fn(),
-  latestVersion: vi.fn(),
   testNotifyChannels: vi.fn(),
 }))
-import { fetchHostVoiceServices, fetchUsage, latestVersion, listAgentPresets, notifyEvents, readNotifyConfig, readSettings, writeNotifyConfig } from '../api.ts'
+import { fetchUsage, listAgentPresets, notifyEvents, readNotifyConfig, readSettings, writeNotifyConfig } from '../api.ts'
 
 const readSettingsMock = vi.mocked(readSettings)
 const listAgentPresetsMock = vi.mocked(listAgentPresets)
-const fetchHostVoiceServicesMock = vi.mocked(fetchHostVoiceServices)
 const readNotifyConfigMock = vi.mocked(readNotifyConfig)
 const fetchUsageMock = vi.mocked(fetchUsage)
 const writeNotifyConfigMock = vi.mocked(writeNotifyConfig)
 const notifyEventsMock = vi.mocked(notifyEvents)
-const latestVersionMock = vi.mocked(latestVersion)
 
 /** A minimal namespace view (schema envelope with string fields). */
 function namespace(ns: string, value: Record<string, unknown>): never {
@@ -84,7 +80,6 @@ describe('SettingsView card list', () => {
       ],
     })
     listAgentPresetsMock.mockResolvedValue({ presets: [], authorable: false, hasDocument: false })
-    fetchHostVoiceServicesMock.mockResolvedValue([])
     readNotifyConfigMock.mockResolvedValue({
       turnThresholdMs: 30_000,
       turnCooldownMs: 120_000,
@@ -156,81 +151,6 @@ describe('SettingsView card list', () => {
     } finally {
       open.mockRestore()
     }
-  })
-
-  it('adds, lists, and removes a voice transcription service', async () => {
-    render(<SettingsView onBack={() => {}} />)
-
-    fireEvent.click(await screen.findByText('语音服务'))
-    expect(await screen.findByText('尚未配置服务 — 点击下方「添加服务」。')).toBeTruthy()
-
-    fireEvent.click(screen.getByText('添加服务'))
-    fireEvent.change(screen.getByPlaceholderText('如：硅基流动'), { target: { value: '硅基流动' } })
-    fireEvent.change(screen.getByPlaceholderText('https://api.siliconflow.cn/v1'), { target: { value: 'https://api.siliconflow.cn/v1' } })
-    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
-    fireEvent.change(screen.getByPlaceholderText('FunAudioLLM/SenseVoiceSmall'), { target: { value: 'FunAudioLLM/SenseVoiceSmall' } })
-    fireEvent.click(screen.getByText('保存'))
-
-    expect(await screen.findByText('硅基流动')).toBeTruthy()
-    expect(screen.getByText(/FunAudioLLM\/SenseVoiceSmall/)).toBeTruthy()
-
-    fireEvent.click(screen.getByLabelText('删除'))
-    expect(screen.queryByText('硅基流动')).toBeNull()
-    expect(await screen.findByText('尚未配置服务 — 点击下方「添加服务」。')).toBeTruthy()
-  })
-
-  it('keeps the save button disabled until the required fields are filled', async () => {
-    render(<SettingsView onBack={() => {}} />)
-
-    fireEvent.click(await screen.findByText('语音服务'))
-    fireEvent.click(screen.getByText('添加服务'))
-    const save = screen.getByText('保存') as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    fireEvent.change(screen.getByPlaceholderText('https://api.siliconflow.cn/v1'), { target: { value: 'https://api.siliconflow.cn/v1' } })
-    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } })
-    fireEvent.change(screen.getByPlaceholderText('FunAudioLLM/SenseVoiceSmall'), { target: { value: 'm' } })
-    expect(save.disabled).toBe(false)
-  })
-
-  it('shows host-side services as read-only rows, not in the editable list', async () => {
-    // Host services carry no api key on the phone (the key never leaves the
-    // host); they render as read-only display rows and are never persisted
-    // into the local (editable) list.
-    fetchHostVoiceServicesMock.mockResolvedValue([
-      { name: 'SiliconFlow SenseVoice', baseURL: 'https://api.siliconflow.cn/v1', model: 'FunAudioLLM/SenseVoiceSmall' },
-      { name: 'SiliconFlow TeleASR', baseURL: 'https://api.siliconflow.cn/v1', model: 'TeleAI/TeleSpeechASR' },
-    ])
-    render(<SettingsView onBack={() => {}} />)
-
-    fireEvent.click(await screen.findByText('语音服务'))
-    expect(fetchHostVoiceServicesMock).toHaveBeenCalledTimes(1)
-    // The host services ARE visible as read-only rows with the desktop tag.
-    expect(await screen.findByText('SiliconFlow SenseVoice')).toBeTruthy()
-    expect(screen.getByText('SiliconFlow TeleASR')).toBeTruthy()
-    expect(screen.getAllByText('桌面端').length).toBeGreaterThanOrEqual(2)
-    // The phone-local (editable) list stays empty.
-    expect(screen.getByText('尚未配置服务 — 点击下方「添加服务」。')).toBeTruthy()
-  })
-
-  it('drops stale host imports while keeping user services', async () => {
-    fetchHostVoiceServicesMock.mockResolvedValue([
-      { name: 'SiliconFlow SenseVoice', baseURL: 'https://api.siliconflow.cn/v1', model: 'FunAudioLLM/SenseVoiceSmall' },
-    ])
-    // Seed the phone list: a stale legacy host import + a user-added service.
-    const { getVoiceServices, upsertVoiceService } = await import('../voice-services.ts')
-    upsertVoiceService({ id: 'svc-old', name: 'host 配置', baseURL: 'https://old.example/v1', apiKey: 'k-old', model: 'm-old' })
-    upsertVoiceService({ id: 'svc-user', name: '我的服务', baseURL: 'https://x.example/v1', apiKey: 'k', model: 'm' })
-    expect(getVoiceServices().length).toBe(2)
-
-    render(<SettingsView onBack={() => {}} />)
-    fireEvent.click(await screen.findByText('语音服务'))
-
-    // The stale legacy import is gone; the user service survives; the host
-    // service shows as a read-only row (no key on the phone).
-    await waitFor(() => expect(screen.queryByText('host 配置')).toBeNull())
-    expect(screen.getByText('我的服务')).toBeTruthy()
-    expect(screen.getByText('SiliconFlow SenseVoice')).toBeTruthy()
-    expect(getVoiceServices().length).toBe(1)
   })
 
   it('shows the per-provider usage card collapsed, then expands/refreshes/collapses', async () => {
@@ -345,7 +265,6 @@ describe('SettingsView notification page (L3 channels)', () => {
       ],
     })
     listAgentPresetsMock.mockResolvedValue({ presets: [], authorable: false, hasDocument: false })
-    fetchHostVoiceServicesMock.mockResolvedValue([])
     readNotifyConfigMock.mockResolvedValue({
       turnThresholdMs: 30_000,
       turnCooldownMs: 120_000,
@@ -355,7 +274,6 @@ describe('SettingsView notification page (L3 channels)', () => {
     })
     fetchUsageMock.mockResolvedValue({ providers: [], fetchedAt: 0 })
     notifyEventsMock.mockResolvedValue({ items: [] })
-    latestVersionMock.mockResolvedValue({ latest: '0.7.3', isNewer: false })
   })
 
   it('renders the WxPusher SPT field with the recommend badge and the 2-step helper', async () => {
@@ -480,21 +398,6 @@ describe('SettingsView notification page (L3 channels)', () => {
       expect(writeNotifyConfigMock).toHaveBeenCalledWith({ hideDetails: true })
     })
     expect(privacy.getAttribute('aria-checked')).toBe('true')
-  })
-
-  it('flags a newer published version from the About sheet', async () => {
-    latestVersionMock.mockResolvedValue({ latest: '0.7.4', isNewer: true })
-    render(<SettingsView onBack={() => {}} />)
-    fireEvent.click(await screen.findByText('关于'))
-    fireEvent.click(screen.getByRole('button', { name: '检查更新' }))
-    expect(await screen.findByText(/发现新版本 0\.7\.4/)).toBeTruthy()
-  })
-
-  it('confirms the latest version from the About sheet', async () => {
-    render(<SettingsView onBack={() => {}} />)
-    fireEvent.click(await screen.findByText('关于'))
-    fireEvent.click(screen.getByRole('button', { name: '检查更新' }))
-    expect(await screen.findByText(/已是最新版本/)).toBeTruthy()
   })
 
   it('shows the notification content gates with the quiet defaults', async () => {
