@@ -3,7 +3,8 @@
  * 连接/观察者/follow 等有状态编排仍在 core（RPC 注册表轮再显式化 ctxBag）。
  */
 import { randomBytes } from 'node:crypto'
-import { MUX_ALWAYS_FORWARDED, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, FOLLOW_ASSISTANT_STREAM, FOLLOW_RETRY_MS, MAX_FOLLOW_RESTARTS } from './config.js'
+import { MUX_ALWAYS_FORWARDED, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, FOLLOW_ASSISTANT_STREAM, FOLLOW_RETRY_MS, MAX_FOLLOW_RESTARTS, MAX_SSE_SUBSCRIBERS, SSE_HEARTBEAT_MS, SSE_MAX_LIFETIME_MS } from './config.js'
+import { sendJson } from './http.js'
 
 export function textOfEventData(data) {
 if (!data || typeof data !== 'object') return ''
@@ -92,9 +93,11 @@ export function createSseRuntime({ state, host = {} }) {
   const follows = state.follows
   const observers = state.observers
   const lastObserved = state.lastObserved
-  // emitMux 与本运行时同属 sse.js：直接由同一个 state bag 再取一份，
+  const lastObservedByDevice = state.lastObservedByDevice
+  const pending = state.pending
+  // emitMux / muxVisibleTo 与本运行时同属 sse.js：直接由同一个 state bag 再取一份，
   // 不额外要求宿主注入（两份都只是 state 上的无状态包装）。
-  const { emitMux } = createMuxRuntime({ state })
+  const { muxVisibleTo, emitMux } = createMuxRuntime({ state })
     function forgetQueue(sessionId) {
       const sid = String(sessionId || '')
       if (sid === '') return
@@ -483,8 +486,195 @@ export function createSseRuntime({ state, host = {} }) {
       } catch {}
     }
 
+    /** 开一个 SSE 连接。每次 GET /m/api/events.mux 一个。 */
+    function openMux(req, res) {
+      if ((req.method || 'GET').toUpperCase() !== 'GET') {
+        res.statusCode = 405
+        res.end()
+        return
+      }
+      // 鉴权：未配对设备拒绝（沿用 authenticatedDevice）。bundle 的 Fn() 把 403/401 判成
+      // unpaired 并走降级路径 —— 与今天 404 的降级结果一致，行为不改变。
+      const device = host.authenticatedDevice(req)
+      if (!device) {
+        req.resume()
+        sendJson(res, 403, { ok: false, error: { code: 'unpaired', message: 'mobile session is not paired' } })
+        return
+      }
+      // 并发上限：一次重连风暴不能无限持有宿主流与心跳定时器。EventSource 会自动重连。
+      if (muxStreams.size >= MAX_SSE_SUBSCRIBERS) {
+        sendJson(res, 429, { ok: false, error: { code: 'too-many-events', message: 'too many live streams' } })
+        return
+      }
+      const deviceId = device.deviceId
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        // Nginx 一类反代会缓冲 SSE：显式关掉。
+        'X-Accel-Buffering': 'no',
+      })
+      try {
+        if (res.socket && typeof res.socket.setNoDelay === 'function') res.socket.setNoDelay(true)
+      } catch {}
+      try {
+        if (typeof res.flushHeaders === 'function') res.flushHeaders()
+      } catch {}
+
+      const controller = new AbortController()
+      let heartbeat
+      let syncTimer
+      let lifetimeTimer
+
+      const stream = {
+        deviceId,
+        closed: false,
+        // 每会话已推过的最大 seq：follow 重启/重试会重放同一批事件，靠它去重。
+        seqWatermark: new Map(),
+        // 每会话已推过的队列指纹：**每条流独立**。新流 / 重连流天然是空表，
+        // 所以断流期间变过的队列会在它进场时补发（详见 emitQueue 的注释）。
+        queueFp: new Map(),
+        write(line, frame) {
+          if (this.closed) return
+          // 路由过滤：手机不看的会话，其事件不过隧道（省移动流量）。
+          if (!muxVisibleTo(this.deviceId, frame)) return
+          // 去重：session/event 按 (sessionId → maxSeq) 水位，只推严格递增的 seq。
+          if (frame.type === 'session/event' && frame.event && typeof frame.event.seq === 'number') {
+            const last = this.seqWatermark.get(frame.sessionId)
+            if (last !== undefined && frame.event.seq <= last) return
+            this.seqWatermark.set(frame.sessionId, frame.event.seq)
+          }
+          try {
+            res.write(line)
+          } catch {
+            closeStream()
+          }
+        },
+        close() {
+          closeStream()
+        },
+      }
+      muxStreams.add(stream)
+
+      // 新流进场先补一份当前队列（零成本：每流指纹为空 / 与当前值相同就不写）。
+      // 断流期间队列变过的帧只推给了当时还活着的流，新流永远等不到它们；
+      // 观察登记也可能已随上一条流被 releaseDevice 清掉，所以用 lastObservedByDevice
+      // 兜住「同一个聊天页刚重连、还没来得及 observe 重申」的这段空窗。
+      {
+        const watching = host.observedSessions(deviceId)
+        if (watching.length === 0) {
+          const last = lastObservedByDevice.get(deviceId)
+          if (typeof last === 'string' && last !== '') emitQueue(last)
+        } else {
+          for (const watched of watching) emitQueue(watched)
+        }
+      }
+
+      function closeStream() {
+        if (stream.closed) return
+        stream.closed = true
+        muxStreams.delete(stream)
+        controller.abort()
+        if (heartbeat !== undefined) clearInterval(heartbeat)
+        if (syncTimer !== undefined) clearInterval(syncTimer)
+        if (lifetimeTimer !== undefined) clearTimeout(lifetimeTimer)
+        // SSE 流是观察登记的生命周期：**这台设备已经没有活着的流**才释放登记。
+        //
+        // 不能无条件 releaseDevice：同一台设备天然会并存多条流 —— EventSource 重连时
+        // 新旧两条会短暂重叠，同一个 token 也可能同时开在几个标签页/客户端上。任何一条
+        // 关闭就把整台设备的 observations 清空（releaseDevice 是设备级的），剩下那条
+        // 流会立刻失去路由：session/event 被 muxVisibleTo 判成「设备没在看」而丢弃，
+        // 正在生成的回复就停在中途、最终 assistant/message 也永远收不到 —— 这正是
+        // 手机端「只显示一半 / 停在思考中」的复现路径之一（实测 2 条流时消息 0 送达，
+        // 单条流时 100% 送达）。所以按设备做引用计数，最后一条流关闭时才释放。
+        const deviceStillStreaming = [...muxStreams].some((s) => s.deviceId === deviceId)
+        if (!deviceStillStreaming) host.releaseDevice(deviceId)
+        try {
+          res.end()
+        } catch {}
+      }
+      const onClose = () => closeStream()
+      // 关闭必须是幂等的：不论是从 socket 关闭、器纤卸载还是显式调用过来，都只走一次。
+      res.on('close', onClose)
+      req.on('close', onClose)
+      req.on('error', onClose)
+
+      /** 设备被桌面撤销/停用后立即断流，不等下次重连（与 dsh-palm 同）。 */
+      function deviceStillPaired() {
+        const found = host.devices.get(deviceId)
+        if (found === undefined) return false
+        for (const token of host.deviceTokensOf(req)) {
+          if (found.token === token) {
+            found.lastSeenAt = Date.now()
+            return true
+          }
+        }
+        return false
+      }
+
+      heartbeat = setInterval(() => {
+        if (stream.closed) return
+        if (!deviceStillPaired()) {
+          closeStream()
+          return
+        }
+        // 注释心跳：代理/浏览器不会因为空闲超时掐断长连接。必须短于 bundle 的 stall 阈值
+        //（活着 36s / 未活 12s，见 MuxClient.isSseStalled）。
+        try {
+          res.write(': ping\n\n')
+        } catch {
+          closeStream()
+        }
+      }, SSE_HEARTBEAT_MS)
+
+      // 开场快照：手机可能在待处理项出现的那一刻没有活着的流（后台/锁屏/隧道抖动/正在重连），
+      // 于是它从没收到过那条 approval/requested。这里在新流建立后立刻补发一份，
+      // 手机一连上就能看到仍在等它的卡片（客户端按 approvalId / rpcId 幂等）。
+      host.purgePending()
+      for (const entry of [...pending.approvals.values()]) {
+        if (typeof entry.sessionId !== 'string' || typeof entry.approvalId !== 'string') continue
+        emitMux({
+          type: 'approval/requested',
+          sessionId: entry.sessionId,
+          approvalId: entry.approvalId,
+          toolName: typeof entry.toolName === 'string' ? entry.toolName : 'unknown',
+          ...(entry.callId === undefined ? {} : { callId: entry.callId }),
+          ...(entry.reason === undefined ? {} : { reason: host.mobileReason(entry) }),
+        }, entry.rpcId)
+      }
+      for (const entry of [...pending.questions.values()]) {
+        if (typeof entry.sessionId !== 'string') continue
+        emitMux({
+          type: 'question/requested',
+          sessionId: entry.sessionId,
+          questions: Array.isArray(entry.questions) ? entry.questions : [],
+        }, entry.rpcId)
+      }
+
+      // 把设备的观察集合同步到 follow 单例：这条 SSE 连接看什么，就确保什么有人在跟进。
+      // 设备换会话时旧的 follow 不会立刻停 —— 由下面的 OBSERVE_TTL_MS 宽限期回收，
+      // 这样手机短时回来还能续上同一条宿主流（不需要从零重放）。
+      syncTimer = setInterval(() => {
+        if (stream.closed) return
+        if (!deviceStillPaired()) {
+          closeStream()
+          return
+        }
+        for (const sessionId of host.observedSessions(deviceId)) ensureFollow(sessionId)
+        // 队列补漏：Agent 消费掉排队项（轮次结束/开始新回合）时没有通知我们，
+        // 靠这个 2s 节拍把变化推下去。emitQueue 内部按指纹去重，没变化就不推帧。
+        for (const sessionId of host.observedSessions(deviceId)) emitQueue(sessionId)
+      }, 2000)
+
+      // 连接寿命上限：超长挂机也回收一次（手机的 EventSource 会自动重连并重新 observe）。
+      // follow 单例不随它回收 —— 回收的是这条 socket，不是会话跟随。
+      lifetimeTimer = setTimeout(closeStream, SSE_MAX_LIFETIME_MS)
+    }
+
   return {
     forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent, emitQueue,
     replayAssistantSnapshot, anyoneObserving, lastObservedAt, ensureFollow, stopFollow,
+    openMux,
   }
 }
