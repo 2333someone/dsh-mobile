@@ -10,6 +10,7 @@
  * 同步执行；只做搬家，不改页面行为与视觉。
  */
 import { MODEL_BUTTON_HTML } from './model-button.ts'
+import { EMOJI_ICON_HTML } from './emoji-icon.ts'
 import { TURN_PILL_HTML } from './turn-pill.ts'
 import { PRESET_BTN_HTML } from './preset-btn.ts'
 import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
@@ -17,6 +18,7 @@ import { USAGE_INLINE_HTML } from './usage-inline.ts'
 
 const TOOLBAR_ORDER: readonly string[] = [
   MODEL_BUTTON_HTML,
+  EMOJI_ICON_HTML,
   TURN_PILL_HTML,
   PRESET_BTN_HTML,
   QUEUE_DOCK_PLACE_HTML,
