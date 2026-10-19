@@ -20,7 +20,10 @@ function sync(el: HTMLTextAreaElement): void {
   let lineHeight = parseFloat(style.lineHeight)
   if (!(lineHeight > 0)) lineHeight = size * 1.4
   const explicitBreak = String(el.value || '').includes('\n')
-  const wrapped = el.scrollHeight > lineHeight * 1.6 + 4
+  const pt = parseFloat(style.paddingTop) || 0
+  const pb = parseFloat(style.paddingBottom) || 0
+  const content = el.scrollHeight - pt - pb
+  const wrapped = content > lineHeight * 1.5 + 1
   el.classList.toggle(MULTILINE, explicitBreak || wrapped)
 }
 
