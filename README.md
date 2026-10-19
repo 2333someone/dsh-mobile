@@ -38,11 +38,13 @@
     devicesFile: ''   # 默认 ~/.dsh/dsh-mobile-devices.json
 ```
 
-## 已知限制（相对 dsh-palm 原版）
+## 实时推送与交互（相对 dsh-palm 原版）
 
-- **实时推送未接**：`/m/api/events.mux` / `events.notify` 返回 404，手机端退回轮询（原版 README 所述 fallback）；消息不丢，但不如原版即时。
-- **审批/提问应答未接**：`respond` 方法未实现，手机端无法替 agent 确认工具调用/回答 ask_user_question；这类轮次需在桌面处理。
-- 手机端设备管理页（`pair.devices` 等本地方法）未接，设备管理请在桌面设置页操作。
+- **实时推送已接**：`/m/api/events.mux` 是 SSE 长连接，服务端把宿主帧翻译成 `session/event` 后推给手机；发送消息后气泡实测 100–200ms 出现，不再依赖轮询兜底。
+  仅通知类端点 `events.notify` 仍未实现（保持 404），手机端通知走轮询 / Web Push。
+- **审批/提问应答已接**：`mobile.pending` 列出待处理项，`mobile.respond` 支持审批（`approvalId` + `outcome`）与提问（`answer: { answers: [...] }`）。
+  进入会话时会对该会话补发 `approval/requested` / `question/requested` 帧，提问卡 1s 内可见；工作区列表与会话行左缘以橙条标示待处理，聊天页有审批时铃铛亮橙点。
+- **设备管理已接**：`pair.devices` / `pair.revoke` / `pair.rename` / `pair.setPrimary`，手机设置页可查看、重命名、撤销设备。
 
 ## 开发提示
 
