@@ -10444,6 +10444,25 @@ function manifestJson() {
 }
 
 // ── apply ───────────────────────────────────────────────────────────────────
+// ── 受保护会话 ──────────────────────────────────────────────────────────────
+// 记录在 ~/.dsh/dsh-mobile-protected.json（{ "sessionIds": [...] }）。
+// 手机端不允许归档这些会话；插件加载/热重载时还会把它们从归档集合里恢复，
+// 防止滑动删除、清理脚本之类的操作把用户主会话误归档（列表里「消失」）。
+function protectedSessionsFile() {
+  return join(homedir(), '.dsh', 'dsh-mobile-protected.json')
+}
+
+function loadProtectedSessionIds() {
+  try {
+    const raw = readFileSync(protectedSessionsFile(), 'utf8')
+    const parsed = JSON.parse(raw)
+    const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed.sessionIds) ? parsed.sessionIds : []
+    return new Set(list.filter((id) => typeof id === 'string' && id !== ''))
+  } catch {
+    return new Set()
+  }
+}
+
 export function apply(ctx, config) {
   const cfg = {
     enabled: true,
@@ -13125,6 +13144,10 @@ export function apply(ctx, config) {
         // → { archivedSessionIds }。registry 上这个方法接收 (sessionId, options)，
         // 把归档集合装进自己的状态；它**不会**替我们过滤 session.list，
         // 所以上面那条 list 必须自己按 archivedSessionIds 剔除（已加）。
+        // 受保护会话：任何来源都不许从手机端归档（桌面端仍可操作）。
+        if (loadProtectedSessionIds().has(String((payload && payload.sessionId) || ''))) {
+          return { ok: false, error: { code: 'protected', message: '该会话受保护，不能从手机端归档' } }
+        }
         let archived = []
         try {
           const reg = wr()
@@ -13138,6 +13161,24 @@ export function apply(ctx, config) {
           return { ok: false, error: { code: 'archive-failed', message } }
         }
         if (archived.length === 0) archived = [String(payload.sessionId)]
+        return { ok: true, value: { archivedSessionIds: archived } }
+      }
+      case 'workspace.unarchiveSession': {
+        // 反归档：把会话从 registry 的归档集合里移除（宿主 setState 会持久化），
+        // 用来恢复滑动删除误伤的会话。幂等：不在集合里时什么也不做。
+        let archived = []
+        try {
+          const reg = wr()
+          if (!reg || typeof reg.unarchiveSession !== 'function') {
+            return { ok: false, error: { code: 'unavailable', message: '宿主工作区服务不支持反归档' } }
+          }
+          await reg.unarchiveSession(String((payload && payload.sessionId) || ''))
+          if (Array.isArray(reg.archivedSessionIds)) archived = [...reg.archivedSessionIds]
+        } catch (err) {
+          const message = err && err.message ? err.message : String(err)
+          console.error('[dsh-mobile] unarchiveSession failed:', message)
+          return { ok: false, error: { code: 'unarchive-failed', message } }
+        }
         return { ok: true, value: { archivedSessionIds: archived } }
       }
       case 'mobile.preferences': {
@@ -15661,6 +15702,24 @@ export function apply(ctx, config) {
     timer.unref?.()
     return () => clearInterval(timer)
   }, 'dsh-mobile: completion notify')
+
+  // 受保护会话：加载/热重载后自动反归档（幂等；registry 未就绪就跳过）。
+  // 延迟执行，等宿主的 workspaceRegistry 完成装配。
+  {
+    const protectedIds = loadProtectedSessionIds()
+    if (protectedIds.size > 0) {
+      const timer = setTimeout(() => {
+        try {
+          const reg = wr()
+          if (!reg || typeof reg.unarchiveSession !== 'function') return
+          for (const id of protectedIds) {
+            Promise.resolve(reg.unarchiveSession(id)).catch(() => {})
+          }
+        } catch {}
+      }, 1500)
+      timer.unref?.()
+    }
+  }
 
   console.log(`[dsh-mobile] mounted: mobile bundle on webServer + 0.0.0.0:${cfg.mobilePort} (devices: ${devices.size})`)
 }
