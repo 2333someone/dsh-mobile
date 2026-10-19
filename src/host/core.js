@@ -22,6 +22,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathS
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { textOfEventData, createMuxRuntime, createSseRuntime } from './sse.js'
+import { createRpcRegistry } from './rpc/index.js'
+import { createSettingsRpc } from './rpc/settings.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
@@ -591,6 +593,19 @@ export function createHost(ctx, config) {
       observedSessions,
       releaseDevice,
     },
+  })
+
+  // ── RPC 注册表（迁移期与 dispatchRpc 的 switch 并存）───────────────────────
+  // 注册表优先命中；还没搬的域继续落到 switch 里。这样每搬一个域，方法集合与
+  // 语义都保持不变（校验脚本：.dsh-scratch/rpc-diff.mjs）。
+  const rpcRegistry = createRpcRegistry({
+    domains: [
+      createSettingsRpc({
+        getService: (name) => (typeof ctx.get === 'function' ? ctx.get(name) : undefined),
+        devices,
+        persistDevices: () => persistDevices(cfg.devicesFile, devices),
+      }),
+    ],
   })
 
   const {
@@ -2923,6 +2938,13 @@ export function createHost(ctx, config) {
 
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
+    // 注册表优先：已搬进 src/host/rpc/ 的域在这里命中，还没搬的继续落到下面的 switch。
+    // 异常不在这里包 —— 仍由 handleRpc 里那一个 try/catch 统一成错误信封，错误码语义不变。
+    const registered = rpcRegistry.get(method)
+    if (registered !== undefined) {
+      const deviceId = rpcContext && typeof rpcContext.deviceId === 'string' ? rpcContext.deviceId : undefined
+      return await registered(payload, { deviceId })
+    }
     switch (method) {
       case 'session.list': {
         const { items = [] } = await controller.list({ cursor: payload.cursor }, new AbortController().signal)
@@ -3252,75 +3274,8 @@ export function createHost(ctx, config) {
         return { ok: true, value: { approvals, questions, sessions: [...bySession.values()] } }
       }
       // ── 设置页 ──
-      case 'settings.read':
-      case 'settings.describe': {
-        const settings = typeof ctx.get === 'function' ? ctx.get('settings') : undefined
-        if (!settings || typeof settings.describe !== 'function') {
-          return { ok: true, value: { writable: false, hasDocument: false, namespaces: [] } }
-        }
-        let list
-        try {
-          list = settings.describe({ redactSecrets: true })
-        } catch {
-          list = []
-        }
-        const namespaces = (Array.isArray(list) ? list : []).map((d) => ({
-          ns: d.ns,
-          schema: d.schema,
-          value: d.value,
-          ...(d.base !== undefined ? { base: d.base } : {}),
-          ...(d.user !== undefined ? { user: d.user } : {}),
-          applies: d.applies || 'live',
-          secrets: Array.isArray(d.secrets) ? d.secrets : [],
-          revision: d.revision,
-        }))
-        // 外观偏好按设备独立：bundle 每次启动都会读 ui-theme.preference 并应用
-        // （Fr(value)），如果不覆盖，它就会用宿主那份跨端同步值把手机上刚设的
-        // 深色顶掉 —— 表现就是「设成深色，刷新又变浅色」。
-        // 这里把该设备自己的选择回填进去，手机之间/桌面端互不影响。
-        const settingsDevice = rpcContext && typeof rpcContext.deviceId === 'string'
-          ? devices.get(rpcContext.deviceId)
-          : undefined
-        const deviceTheme = settingsDevice && typeof settingsDevice.theme === 'string' ? settingsDevice.theme : ''
-        if (deviceTheme === 'dark' || deviceTheme === 'light' || deviceTheme === 'system') {
-          for (const entry of namespaces) {
-            if (entry.ns !== 'ui-theme') continue
-            const value = entry.value && typeof entry.value === 'object' ? { ...entry.value } : {}
-            value.preference = deviceTheme
-            entry.value = value
-          }
-        }
-        return { ok: true, value: { writable: false, hasDocument: false, namespaces } }
-      }
-      case 'settings.mutate': {
-        // 手机端只开放「外观偏好」这一项，而且是**按设备**存：
-        //   · 写宿主 ui-theme 是跨端同步设置，手机上换深色会把桌面 GUI 一起改掉；
-        //   · 用户预期是「手机自己的主题跟着手机走」，所以存进设备表，
-        //     启动时再由上面的 settings.read 回填给 bundle。
-        const targetId = rpcContext && typeof rpcContext.deviceId === 'string' ? rpcContext.deviceId : ''
-        const target = devices.get(targetId)
-        if (!target) return { ok: false, error: { code: 'unpaired', message: '设备未配对' } }
-        const ns = typeof payload?.ns === 'string' ? payload.ns : ''
-        if (ns !== 'ui-theme') {
-          return { ok: false, error: { code: 'forbidden', message: '该设置项不允许在手机端修改' } }
-        }
-        const ops = Array.isArray(payload?.ops) ? payload.ops : []
-        let nextTheme = ''
-        for (const op of ops) {
-          if (!op || op.op !== 'set' || !Array.isArray(op.path) || op.path.length !== 1 || op.path[0] !== 'preference') {
-            return { ok: false, error: { code: 'bad-request', message: '只支持设置外观偏好' } }
-          }
-          if (op.value !== 'dark' && op.value !== 'light' && op.value !== 'system') {
-            return { ok: false, error: { code: 'bad-request', message: '外观偏好只能是 dark / light / system' } }
-          }
-          nextTheme = op.value
-        }
-        if (nextTheme !== '' && target.theme !== nextTheme) {
-          target.theme = nextTheme
-          persistDevices(cfg.devicesFile, devices)
-        }
-        return { ok: true, value: { ok: true } }
-      }
+      // settings.read / settings.describe / settings.mutate 已搬进
+      // src/host/rpc/settings.js（注册表优先命中，这里不再有 case）。
       // ── 设备管理 ──
       case 'pair.devices': {
         const list = [...devices.entries()].map(([deviceId, d]) => {
