@@ -1976,14 +1976,15 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  /* 22px：与桌面命令菜单的图标观感一致（16px 时「笔尖/齿轮齿」这类填充细节会糊掉）。 */
+  width: 22px;
+  height: 22px;
   color: var(--text-tertiary, #6a6a7a);
 }
 .dm-cmd-iconbox .dm-cmd-icon {
   display: block;
-  width: 19px;
-  height: 19px;
+  width: 22px;
+  height: 22px;
 }
 /* 行内左侧：图标 + /name + 中文标签；右侧：说明（右对齐、单行省略，约 46%）。 */
 .dm-cmd-left {
