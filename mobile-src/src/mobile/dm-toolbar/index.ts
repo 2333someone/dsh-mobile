@@ -17,6 +17,7 @@ import { PRESET_STATUS_HTML } from './preset-status.ts'
 import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
 import { USAGE_INLINE_HTML } from './usage-inline.ts'
 import { PENDING_ALERTS_HTML } from './pending-alerts.ts'
+import { SETTINGS_SCOPE_HTML } from './settings-scope.ts'
 
 const TOOLBAR_ORDER: readonly string[] = [
   MODEL_BUTTON_HTML,
@@ -26,7 +27,8 @@ const TOOLBAR_ORDER: readonly string[] = [
   PRESET_STATUS_HTML,
   QUEUE_DOCK_PLACE_HTML,
   USAGE_INLINE_HTML,
-  PENDING_ALERTS_HTML
+  PENDING_ALERTS_HTML,
+  SETTINGS_SCOPE_HTML
 ]
 
 let installed = false
