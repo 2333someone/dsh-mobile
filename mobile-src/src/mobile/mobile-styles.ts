@@ -6305,7 +6305,14 @@ button.settings-row:focus-visible {
 }
 .queue-dockBtn {
   flex: none;
-  padding: 3px 8px;
+  /* 与左侧文字共用同一条 18px 行盒（文字是 12px/18px）：按钮标签的 11px 字也排在
+     18px 行盒里，两者的基线网格一致，墨迹中心只差 ~0.3px；原来用 line-height:
+     normal 时行盒只有 ~13px，靠 flex 的盒居中会差 ~1px，字体回退不同（安卓/Windows
+     的 CJK 字体度量不同）时还会放大成「文字与按钮不在同一中线」。
+     上下内边距相应由 3px 改成 1.5px，按钮总高仍是 23px（1.5 + 18 + 1.5 + 2 边框），
+     行高、左右内边距、按钮尺寸都不变。 */
+  padding: 1.5px 8px;
+  line-height: 18px;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: transparent;
