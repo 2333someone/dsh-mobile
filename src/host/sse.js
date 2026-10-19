@@ -81,10 +81,10 @@ export function createMuxRuntime({ state }) {
 }
 
 /**
- * 有状态的 SSE 运行时（第一组）：队列指纹清理 + assistant-stream →
- * session/event 的帧翻译。容器来自 state bag，没有闭包捕获。
+ * 有状态的 SSE 运行时：队列帧与指纹 + assistant-stream → session/event 的帧翻译。
+ * 容器来自 state bag；宿主侧能力（读 inbox 等）由 `host` 注入，没有隐式闭包捕获。
  */
-export function createSseRuntime({ state }) {
+export function createSseRuntime({ state, host = {} }) {
   const muxStreams = state.muxStreams
   const streamStates = state.streamStates
   const lastStep = state.lastStep
@@ -200,5 +200,43 @@ export function createSseRuntime({ state }) {
       return buildAssistantChunkEvent(sessionId, st, slot, frame.time, chunk)
     }
 
-  return { forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent }
+    /**
+     * 读某会话当前的排队项，推一帧 session/queue。
+     * 数据源由宿主注入：`host.getQueueItems(sessionId)` 返回 `[{ message, placement }]`
+     *（宿主侧取自 agent.inbox：nextTurn = 等当前轮结束的排队，nextStep = 插队的）。
+     * 失败一律静默：队列显示是增强，不能因为读不到就把 SSE 流搞坏。
+     */
+    function emitQueue(sessionId) {
+      const sid = String(sessionId || '')
+      if (sid === '') return
+      let items
+      try {
+        const rows = host.getQueueItems(sid)
+        items = []
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const view = queueItemView(row && row.message, row && row.placement)
+          if (view) items.push(view)
+        }
+      } catch {
+        return
+      }
+      const fingerprint = JSON.stringify(items)
+      // 指纹必须按「每条 SSE 流」各记一份，不能是按会话一份：
+      //   · 手机锁屏/切后台/隧道抖动时流会断，这期间 emitQueue 推的帧没人收；
+      //   · 一条流只可能收到「它连上之后」的帧。若指纹是会话级的，重连时新流看到的
+      //     指纹已经是最新的，于是**永远不再补发**——dock 就停在断流前的条数上
+      //     （实测：宿主 inbox 7 条，界面停在「5 条排队」，等 30s 也不动）。
+      // 每流一份之后，新流的表是空的，一进场就会收到当前完整队列。
+      const line = muxLineOf({ type: 'session/queue', sessionId: sid, items })
+      if (line === undefined) return
+      for (const stream of [...muxStreams]) {
+        if (stream.closed) continue
+        if (!(stream.queueFp instanceof Map)) continue
+        if (stream.queueFp.get(sid) === fingerprint) continue
+        stream.queueFp.set(sid, fingerprint)
+        stream.write(line, { type: 'session/queue', sessionId: sid, items })
+      }
+    }
+
+  return { forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent, emitQueue }
 }

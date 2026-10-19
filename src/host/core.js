@@ -21,7 +21,7 @@ import { join, basename, resolve as resolvePath, relative as relativePath, isAbs
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
-import { textOfEventData, muxLineOf, queueItemView, createMuxRuntime, createSseRuntime } from './sse.js'
+import { textOfEventData, createMuxRuntime, createSseRuntime } from './sse.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
@@ -547,9 +547,30 @@ export function createHost(ctx, config) {
   const state = createHostState({ devices: loadDevices(cfg.devicesFile) })
   const devices = state.devices
   const { muxVisibleTo, emitMux } = createMuxRuntime({ state })
+  /**
+   * 把某会话的 inbox 摊平成 emitQueue 需要的 `[{ message, placement }]`。
+   * 宿主能力（ctx.get('agents')）只在这里出现一次，注入给 createSseRuntime，
+   * SSE 运行时不再伸手进 ctx。
+   */
+  function getQueueItems(sessionId) {
+    const store = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+    const agent = store && typeof store.get === 'function' ? store.get(sessionId) : undefined
+    const inbox = agent && agent.inbox
+    // 没有活着的 Agent = 没有排队项：推一次空帧让 dock 收起（幂等且便宜）。
+    if (!inbox) return []
+    const nextTurn = Array.isArray(inbox.nextTurn) ? inbox.nextTurn : []
+    const nextStep = Array.isArray(inbox.nextStep) ? inbox.nextStep : []
+    const out = []
+    for (const m of nextTurn) out.push({ message: m, placement: 'queued' })
+    // placement 用 'steering'：bundle 的 CSS 会给它加左侧强调条，
+    // 但 Ho() 只筛 'queued'，所以它不会污染「N 条排队」的计数 —— 正是想要的。
+    for (const m of nextStep) out.push({ message: m, placement: 'steering' })
+    return out
+  }
+
   const {
-    forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent,
-  } = createSseRuntime({ state })
+    forgetQueue, streamStateFor, noteStepEvent, assistantStreamEvent, emitQueue,
+  } = createSseRuntime({ state, host: { getQueueItems } })
 
   const {
     deviceTokensOf, authenticatedDevice, describeDeviceUA, createDevice,
@@ -4822,63 +4843,8 @@ export function createHost(ctx, config) {
   // 这里刻意不再保留会话级的全局指纹：全局指纹会让重连后的新流以为「已经推过了」，
   // 于是断流期间变化的队列永远补不回来。
 
-  /** 把一个 inbox 消息（UserMessage）翻成 bundle 的 le() 认得的行。 */
-
-
-  /**
-   * 读某会话当前的排队项，推一帧 session/queue。
-   * 数据源是宿主 agent.inbox（nextTurn = 等当前轮结束的排队，nextStep = 插队的）。
-   * 失败一律静默：队列显示是增强，不能因为读不到就把 SSE 流搞坏。
-   */
-  function emitQueue(sessionId) {
-    const sid = String(sessionId || '')
-    if (sid === '') return
-    let items
-    try {
-      const store = typeof ctx.get === 'function' ? ctx.get('agents') : undefined
-      const agent = store && typeof store.get === 'function' ? store.get(sid) : undefined
-      const inbox = agent && agent.inbox
-      if (!inbox) {
-        // 没有活着的 Agent = 没有排队项：推一次空帧让 dock 收起（幂等且便宜）。
-        items = []
-      } else {
-        const nextTurn = Array.isArray(inbox.nextTurn) ? inbox.nextTurn : []
-        const nextStep = Array.isArray(inbox.nextStep) ? inbox.nextStep : []
-        items = []
-        for (const m of nextTurn) {
-          const view = queueItemView(m, 'queued')
-          if (view) items.push(view)
-        }
-        for (const m of nextStep) {
-          // placement 用 'steering'：bundle 的 CSS 会给它加左侧强调条，
-          // 但 Ho() 只筛 'queued'，所以它不会污染「N 条排队」的计数 —— 正是想要的。
-          const view = queueItemView(m, 'steering')
-          if (view) items.push(view)
-        }
-      }
-    } catch {
-      return
-    }
-    const fingerprint = JSON.stringify(items)
-    // 指纹必须按「每条 SSE 流」各记一份，不能是按会话一份：
-    //   · 手机锁屏/切后台/隧道抖动时流会断，这期间 emitQueue 推的帧没人收；
-    //   · 一条流只可能收到「它连上之后」的帧。若指纹是会话级的，重连时新流看到的
-    //     指纹已经是最新的，于是**永远不再补发**——dock 就停在断流前的条数上
-    //     （实测：宿主 inbox 7 条，界面停在「5 条排队」，等 30s 也不动）。
-    // 每流一份之后，新流的表是空的，一进场就会收到当前完整队列。
-    const line = muxLineOf({ type: 'session/queue', sessionId: sid, items })
-    if (line === undefined) return
-    for (const stream of [...muxStreams]) {
-      if (stream.closed) continue
-      if (!(stream.queueFp instanceof Map)) continue
-      if (stream.queueFp.get(sid) === fingerprint) continue
-      stream.queueFp.set(sid, fingerprint)
-      stream.write(line, { type: 'session/queue', sessionId: sid, items })
-    }
-  }
-
-  /** 让某会话的队列帧对每条流重新可见（下次 emitQueue 必推）。 */
-
+  // 队列帧的读取与推送已搬进 createSseRuntime.emitQueue；宿主这边只剩 getQueueItems
+  //（见文件顶部的注入点）。queueItemView / muxLineOf 也已在 sse.js。
 
   /**
    * 子代理会话必须走 durable 父地址，否则宿主 validateAddress 会抛 session/agent-busy
