@@ -1110,18 +1110,7 @@ body,
   margin-left: 4px;
 }
 
-/* Host-side voice services hint on the voice page. */
-.settings-hostNote {
-  margin: 0 16px 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--accent-soft, #eef1ff);
-  color: var(--accent, #4d6bfe);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-/* Section sub-heading inside a page (e.g. 桌面端配置（只读）). */
+/* Section sub-heading inside a page. */
 .settings-subhead {
   margin: 14px 16px 6px;
   font-size: 12px;
@@ -5545,127 +5534,6 @@ button.settings-row:focus-visible {
   filter: brightness(1.08);
 }
 
-/* Voice service list rows inside the settings sheet. */
-.voice-service-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 56px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.voice-service-row:last-child {
-  border-bottom: none;
-}
-
-.voice-service-copy {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.voice-service-name {
-  font-size: 14px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.voice-service-desc {
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.voice-service-actions {
-  flex: none;
-  display: flex;
-  gap: 2px;
-}
-
-.voice-service-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease, transform 0.1s ease;
-}
-
-.voice-service-btn:active {
-  transform: scale(0.94);
-  background: var(--fill);
-}
-
-.voice-service-btn:disabled {
-  opacity: 0.35;
-  transform: none;
-}
-
-.voice-service-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.voice-service-btn-down svg {
-  transform: rotate(180deg);
-}
-
-.voice-service-btn-danger {
-  color: var(--danger);
-}
-
-/* Voice service edit form. */
-.voice-form {
-  padding: 4px 16px 12px;
-}
-
-.voice-form-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-
-.voice-form-label {
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.voice-form-input {
-  width: 100%;
-  height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-chip);
-  background: var(--card-bg);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.12s ease;
-}
-
-.voice-form-input:focus {
-  border-color: var(--accent);
-}
-
-.voice-form-input::placeholder {
-  color: var(--text-tertiary);
-}
-
 /* Paired-device management rows (settings → 设备管理). */
 .device-row {
   display: flex;
@@ -6214,7 +6082,7 @@ button.settings-row:focus-visible {
 }
 /* ── v2.1 increments: workspace tints / search morph / status semantics ──
    / previews / reasoning clamp / quote bar / quick commands /
-   voice sheet / offline banner / settings feedback. Appended after the base
+   offline banner / settings feedback. Appended after the base
    system so the established spec stays untouched. */
 
 /* Plain folder (workspace without sessions): gray tile. */
@@ -6562,95 +6430,6 @@ button.settings-row:focus-visible {
   background: var(--fill);
 }
 
-/* Voice recording sheet: 200px, waveform bars, live transcript. */
-.voice-backdrop {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 55;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  background: var(--backdrop);
-  animation: sheet-fade 0.18s ease;
-}
-
-.voice-sheet {
-  height: 200px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  background: var(--bg-surface);
-  border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
-  animation: sheet-up 0.3s ease-out both;
-}
-
-.voice-wave {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 44px;
-}
-
-.voice-wave span {
-  width: 5px;
-  height: 22px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  animation: voice-bar 1s ease-in-out infinite;
-}
-
-.voice-wave span:nth-child(1) { animation-delay: 0s; }
-.voice-wave span:nth-child(2) { animation-delay: 0.12s; }
-.voice-wave span:nth-child(3) { animation-delay: 0.24s; }
-.voice-wave span:nth-child(4) { animation-delay: 0.36s; }
-.voice-wave span:nth-child(5) { animation-delay: 0.48s; }
-
-@keyframes voice-bar {
-  0%, 100% {
-    transform: scaleY(0.35);
-    opacity: 0.5;
-  }
-  50% {
-    transform: scaleY(1.25);
-    opacity: 1;
-  }
-}
-
-.voice-text {
-  max-width: 82vw;
-  min-height: 22px;
-  color: var(--accent);
-  font-size: 14px;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.voice-done {
-  height: 40px;
-  padding: 0 24px;
-  border: none;
-  border-radius: var(--radius-capsule);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.voice-done:active {
-  transform: scale(0.97);
-  filter: brightness(1.08);
-}
-
 /* Settings search field. */
 .settings-search {
   padding: 0 16px 12px;
@@ -6676,11 +6455,7 @@ button.settings-row:active {
   .chat-reasoning-more,
   .chat-offline-banner,
   .chat-offline-retry,
-  .chat-quote-bar,
-  .voice-backdrop,
-  .voice-sheet,
-  .voice-wave span,
-  .voice-done {
+  .chat-quote-bar {
     animation: none;
     transition: none;
   }

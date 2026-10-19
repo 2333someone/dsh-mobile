@@ -233,11 +233,6 @@ export function CheckIcon(props: SVGProps<SVGSVGElement>) {
   return <Icon name="actionCheck" {...props} />
 }
 
-/** Microphone (voice input). */
-export function MicIcon(props: SVGProps<SVGSVGElement>) {
-  return <Icon name="pageVoice" {...props} />
-}
-
 /** Close × (dismiss quote bar / search). */
 export function CloseIcon(props: SVGProps<SVGSVGElement>) {
   return <Icon name="actionClose" {...props} />

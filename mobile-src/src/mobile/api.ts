@@ -12,7 +12,6 @@ import type { SubagentCatalog } from '../api-proxy-types'
 import type { RenderMessage, TodoSnapshot } from './messages.ts'
 import { callUnary } from './rpc.ts'
 import type { PromptPart } from './image.ts'
-import type { VoiceService } from './voice-services.ts'
 
 /** One session.list page. */
 export interface SessionPage {
@@ -532,27 +531,6 @@ export async function sendCommand(sessionId: string, line: string): Promise<Comm
   return await callUnary<CommandExecOutcome>('mobile.commandExec', { sessionId, line }, undefined, 180_000)
 }
 
-/**
- * Transcribe one base64 WAV through the phone-configured speech-to-text
- * services (`mobile.transcribe`, answered by the plugin). The services are
- * tried in order by the host; the cap is long (180 s) because a slow link
- * can stretch the call.
- */
-export async function transcribeVoice(audio: string, services: VoiceService[]): Promise<string> {
-  const response = await callUnary<{ text: string }>('mobile.transcribe', { audio, services }, undefined, 180_000)
-  return response.text
-}
-
-/**
- * The host-side fallback transcription services (dsh-palm.yaml `transcribe:`),
- * if any — display facts only. The host API keys never leave the host, so
- * these services cannot be used from the phone and are not merged into the
- * local service list (see syncHostVoiceServices).
- */
-export async function fetchHostVoiceServices(): Promise<Array<{ name: string; baseURL: string; model: string }>> {
-  const response = await callUnary<{ services: Array<{ name: string; baseURL: string; model: string }> }>('mobile.voiceServices', {})
-  return response.services
-}
 
 /* ── per-provider usage / balance display ─────────────────────────────── */
 

@@ -43,8 +43,6 @@ export const SETTINGS_SCOPE_HTML = `<script>
       '用量': 'desktop',
       // 通知子页走 push.config → 宿主 ~/.dsh/dsh-mobile-push.json
       '通知': 'sync',
-      // 语音：手机端服务在 localStorage，桌面端已配置服务只读
-      '语音服务': 'phone',
       // 设备：宿主 devices JSON，配对域，桌面无对应设置
       '设备管理': 'phone',
       // 主机配置（写 profile cordis.patch.yml → 桌面共享）

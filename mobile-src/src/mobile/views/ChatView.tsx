@@ -20,7 +20,7 @@ import { dropSessionFromCaches, loadDraft, loadReadingTurn, removeDraft, removeR
 import { usePageVisible } from '../foreground.ts'
 import { loadCachedHistory } from '../history-cache.ts'
 import { errorText, staleHostHint } from './App.tsx'
-import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, transcribeVoice, listSessions, history, type CommandDescriptor } from '../api.ts'
+import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, listSessions, history, type CommandDescriptor } from '../api.ts'
 import type { SessionModels } from '../../api-proxy-types'
 import type { PendingApproval, PendingQuestionItem } from '../api.ts'
 import { buildPromptParts, compressImageFile, imageFromClipboard, MAX_ATTACHED_IMAGES, type AttachedImage, type PromptPart } from '../image.ts'
@@ -76,12 +76,10 @@ import { FilePreviewSheet } from '../file-preview-sheet.tsx'
 import { ImageLightbox } from '../image-lightbox.tsx'
 import { updateQueue, queueItemViewOf, type QueueItemView } from '../api.ts'
 import { RpcCallError } from '../rpc.ts'
-import { startVoiceRecording, voiceSupported, type VoiceRecording } from '../voice-input.ts'
-import { getVoiceServices } from '../voice-services.ts'
 import { toast } from '../toast.tsx'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
-import { CheckIcon, ChevronDownIcon, CloseIcon, MicIcon, ModelIcon, MoreIcon, PencilIcon, PlusIcon, SendIcon, ShieldIcon } from '../icons.tsx'
+import { CheckIcon, ChevronDownIcon, CloseIcon, ModelIcon, MoreIcon, PencilIcon, PlusIcon, SendIcon, ShieldIcon } from '../icons.tsx'
 import { MessageRow } from '../message-row.tsx'
 import { LONG_TEXT_LIMIT, LONG_TEXT_PREVIEW } from '../markdown-text.tsx'
 import { ApprovalPanel, ModelSheet, PermissionSheet, PlusSheet, QuestionPanel, TurnListSheet, parsePermissionSelect, type PermissionSelectValue } from '../sheets.tsx'
@@ -511,13 +509,6 @@ export function ChatView({
   const [queuedCount, setQueuedCount] = useState(0)
   /** The queued outbox entries (banner lets the user remove one at a time). */
   const [queuedEntries, setQueuedEntries] = useState<OutboxEntry[]>([])
-  /** Voice recording sheet + the live recorder handle and its phase. */
-  const [voiceOpen, setVoiceOpen] = useState(false)
-  const [voicePartial, setVoicePartial] = useState('')
-  const [voicePhase, setVoicePhase] = useState<'recording' | 'transcribing'>('recording')
-  const voiceRef = useRef<VoiceRecording | undefined>(undefined)
-  /** True while the chat is mounted; guards async voice callbacks after unmount. */
-  const mountedRef = useRef(true)
   /** Pinch-zoom state for code blocks (one active gesture at a time). */
   const pinchRef = useRef<{ block: HTMLElement; dist0: number; scale0: number } | undefined>(undefined)
   /**
@@ -2792,94 +2783,6 @@ export function ChatView({
     )
   }, [input, attachImages, sending, session.sessionId, mux, quoted, runCommand])
 
-  /* ── voice input ───────────────────────────────────────────────────── */
-
-  const voicePartialRef = useRef('')
-
-  // Release the mic when the chat unmounts (session switch / back): a pending
-  // getUserMedia authorization or a live recorder must never leak the
-  // MediaStream (the browser's recording indicator would stay on). The
-  // mountedRef guard also stops the async openVoice callback from setting
-  // state on an unmounted component.
-  useEffect(() => () => {
-    mountedRef.current = false
-    voiceRef.current?.cancel()
-    voiceRef.current = undefined
-  }, [])
-
-  /** Discard the current recording and close the sheet. */
-  const closeVoice = useCallback((): void => {
-    voiceRef.current?.cancel()
-    voiceRef.current = undefined
-    voicePartialRef.current = ''
-    setVoicePartial('')
-    setVoiceOpen(false)
-    setVoicePhase('recording')
-  }, [])
-
-  /** Finish recording → upload the WAV → transcribe → fill the composer. */
-  const finishVoice = useCallback((): void => {
-    const recorder = voiceRef.current
-    if (recorder === undefined) {
-      setVoiceOpen(false)
-      return
-    }
-    voiceRef.current = undefined
-    setVoicePhase('transcribing')
-    void recorder.stop().then(
-      (wavBase64) => {
-        voicePartialRef.current = '转写中...'
-        setVoicePartial('转写中...')
-        void transcribeVoice(wavBase64, getVoiceServices()).then(
-          (text) => {
-            voicePartialRef.current = ''
-            setVoicePartial('')
-            setVoiceOpen(false)
-            setVoicePhase('recording')
-            if (text.trim() !== '') {
-              setInput(previous => (previous.trim() === '' ? text.trim() : `${previous.replace(/\s+$/, '')} ${text.trim()}`))
-            }
-          },
-          (reason: unknown) => {
-            setVoiceOpen(false)
-            setVoicePhase('recording')
-            toast(reason instanceof Error ? reason.message : String(reason))
-          },
-        )
-      },
-      (message: unknown) => {
-        setVoiceOpen(false)
-        setVoicePhase('recording')
-        toast(message instanceof Error ? message.message : String(message))
-      },
-    )
-  }, [])
-
-  /** Open the recording sheet and start capturing audio. */
-  const openVoice = useCallback((): void => {
-    voicePartialRef.current = ''
-    setVoicePhase('recording')
-    void startVoiceRecording({
-      // The 60 s hard cap is reached: auto-finish so the sheet transcribes
-      // what was captured instead of sitting on "正在听..." forever.
-      onTimeout: () => { finishVoice() },
-    }).then(
-      (recorder) => {
-        // The chat unmounted while the mic was still authorizing: release
-        // the stream instead of opening a sheet on a dead component.
-        if (!mountedRef.current) {
-          recorder.cancel()
-          return
-        }
-        voiceRef.current = recorder
-        setVoiceOpen(true)
-      },
-      (message: unknown) => {
-        if (mountedRef.current) toast(message instanceof Error ? message.message : String(message))
-      },
-    )
-  }, [finishVoice])
-
   /**
    * Stop the active turn (desktop parity: the composer's primary button
    * becomes a stop button while running). The turn/end frame arriving over
@@ -3644,16 +3547,6 @@ export function ChatView({
           >
             <PlusIcon width={20} height={20} />
           </button>
-          {voiceSupported() && (
-            <button
-              type="button"
-              className="chat-attach-btn"
-              aria-label="语音输入"
-              onClick={openVoice}
-            >
-              <MicIcon width={20} height={20} />
-            </button>
-          )}
           <textarea
             className="chat-input"
             rows={1}
@@ -3820,34 +3713,6 @@ export function ChatView({
           onCancel={() => { setDeleting(false) }}
           onConfirm={handleDeleteSession}
         />
-      )}
-      {voiceOpen && (
-        <div className="voice-backdrop" onClick={() => { closeVoice() }}>
-          <div
-            className="voice-sheet"
-            role="dialog"
-            aria-modal="true"
-            aria-label="语音输入"
-            onClick={(event) => { event.stopPropagation() }}
-          >
-            <div className={'voice-wave' + (voicePhase === 'transcribing' ? ' voice-wave-idle' : '')} aria-hidden>
-              <span /><span /><span /><span /><span />
-            </div>
-            <div className="voice-text" role="status">
-              {voicePhase === 'transcribing'
-                ? '转写中...'
-                : voicePartial !== '' ? voicePartial : '正在听...'}
-            </div>
-            <button
-              type="button"
-              className="voice-done"
-              disabled={voicePhase === 'transcribing'}
-              onClick={finishVoice}
-            >
-              {voicePhase === 'transcribing' ? '请稍候' : '完成'}
-            </button>
-          </div>
-        </div>
       )}
       {ctxMenu !== undefined && (
         <>
