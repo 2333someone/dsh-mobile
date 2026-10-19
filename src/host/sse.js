@@ -57,6 +57,10 @@ export function queueItemView(message, placement) {
  * 等下一步与注册表一起显式化。
  */
 export function createMuxRuntime({ state }) {
+    // 容器来自 state bag（core 里同一份引用）。之前这里漏了取用，
+    // muxVisibleTo/emitMux 会在运行时抛 "observers / muxStreams is not defined"。
+    const observers = state.observers
+    const muxStreams = state.muxStreams
     function muxVisibleTo(deviceId, frame) {
       // 控制镜像 / 会话列表状态 / 审批 / 提问 / 错误 —— 手机上的全局面
       //（任务条、名单、待处理面板），与 dsh-palm 的 MUX_ALWAYS_FORWARDED 同义。
