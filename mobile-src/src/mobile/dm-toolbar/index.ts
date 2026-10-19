@@ -15,6 +15,7 @@ import { TURN_PILL_HTML } from './turn-pill.ts'
 import { PRESET_BTN_HTML } from './preset-btn.ts'
 import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
 import { USAGE_INLINE_HTML } from './usage-inline.ts'
+import { PENDING_ALERTS_HTML } from './pending-alerts.ts'
 
 const TOOLBAR_ORDER: readonly string[] = [
   MODEL_BUTTON_HTML,
@@ -22,7 +23,8 @@ const TOOLBAR_ORDER: readonly string[] = [
   TURN_PILL_HTML,
   PRESET_BTN_HTML,
   QUEUE_DOCK_PLACE_HTML,
-  USAGE_INLINE_HTML
+  USAGE_INLINE_HTML,
+  PENDING_ALERTS_HTML
 ]
 
 let installed = false
