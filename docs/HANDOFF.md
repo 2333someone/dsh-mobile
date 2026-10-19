@@ -63,25 +63,60 @@ group 3 已把 `buildAssistantChunkEvent / expandSnapshotStream` 搬回流式状
 2. `session/queue` 在 `MUX_ALWAYS_FORWARDED` 里，任何会话的队列帧都推给所有流；
    断言只校验**形状**，别断言 `sessionId` 等于刚 observe 的那个。
 
-## 二、RPC 注册表（70 个 case → Map）—— 下一轮的独立项目
+## 二、RPC 注册表（64 个方法 → Map）—— 进行中，7/64 已搬
 
-1. 先建 `src/host/rpc/index.js`：`Map<method, handler>` + 统一 `{ ok:false, error:{code,message} }` 包装
-2. 再按域拆 `session / workspace / settings / models / plugins / device / mobile`
-3. handler 签名统一 `(payload, bag) => Promise<Result>`
+### 先纠正两个数
 
-动手前先把方法名**枚举出来对账**：当前 `core.js` 里带点的 `case 'x.y'` 有 **63 个唯一值**，
-而 `docs/CONTRACT.md` 记的是 **64 个 RPC 方法**（+6 个 HTTP 面 = 70）。差的这一个要先查清
-（大概率在 switch 之外单独接了），否则「方法集合 diff 为空」这条验收从一开始就不成立。
+1. **是 64 个方法，不是 63**：交接单原先的「63」是统计口径漏了 `agentPreset.list`
+   （首字母大写的域名被正则 `[a-z]+` 排除）。真实清单：
+   `mobile` 36、`session` 10、`workspace` 6、`pair` 4、`push` 3、`settings` 3、
+   `subagent` 1、`agentPreset` 1 = **64**（+6 个 HTTP 面 = 70 契约面）。
+2. 交接单里的 `md5 = 5ae4718a…` **取数口径未复现**（试过多种拼接/排序都不等）。
+   现在改用可复现的基线：`.dsh-scratch/core-methods.txt`（搬迁前从 switch 抽出的 64 个名字）
+   + `.dsh-scratch/rpc-diff.mjs`（把「switch case ∪ rpc 注册表键」与基线逐字 diff，
+   并打印 `md5(union)`，当前 **ae0e06a3fa5f5608ef58e0149a10f72e**）。**以这个脚本为准。**
 
-验收：
-- **70 个方法名集合前后 diff 为空**
-- 故意让一个 handler 抛错，其它方法与其它设备不受影响
-- 8 次加载 pageerror = 0
+### 已建成的基础设施
 
-> 本轮已用更直接的方式核对过一次：`git diff c178c9e..HEAD -- src/host/core.js` 里
-> **没有任何 `case '...'` 行变化**，且新旧方法名集合逐字 diff 为空（63 vs 63）。
-> 交接单原来给的 `md5 = 5ae4718a…` 取数口径未复现（试了 3 种配方都不等），
-> 下一轮请先确认 md5 是怎么算的，否则别拿它当判据。
+```
+src/host/rpc/index.js    createRpcRegistry({ domains }) → Map<method, handler>
+src/host/rpc/settings.js settings.read / settings.describe / settings.mutate   ✅
+src/host/rpc/subagent.js subagent.list                                        ✅
+src/host/rpc/push.js     push.config / push.subscribe / push.unsubscribe       ✅
+```
+
+- handler 签名统一 `(payload, bag) => Result`，`bag` 目前只有 `{ deviceId }`
+- **注册表不捕获异常**：抛错仍由 `handleRpc` 原有的 try/catch 包成错误信封，错误码语义不变
+- `dispatchRpc` 先查注册表，未命中再落 switch（**迁移期混合派发**，方法集合任何时刻都完整）
+- 域工厂接收依赖（`getService / devices / persistDevices / deliverNotify / …`），
+  可变状态（如 `notifyConfig`）用 `getX()/setX()` 访问器注入，别传值
+- core 里后声明的依赖（`sc`、`deviceTokensOf`、`subagentParent`）用 getter/箭头推迟取值，避开 TDZ
+
+### 搬一个域的标准动作（剩下的 57 个照这个做）
+
+1. 新建 `src/host/rpc/<domain>.js`，导出 `create<Domain>Rpc(deps)`，方法体从 switch **原样复制**
+2. core：加 import、把域加进 `rpcRegistry` 的 `domains` 数组、删掉对应 `case`（原位置留指针注释）
+3. **方法集合校验**：`node .dsh-scratch/rpc-diff.mjs` → 必须仍是 64、md5 仍是 `ae0e06a3…`
+4. **行为校验**：写一个只读探针（照 `.dsh-scratch/settings-probe.mjs` / `rpc-probe2.mjs`），
+   reload 前后各跑一次、`diff` 输出
+5. `node --check` → 热重载 → `npm run smoke` → commit → push → 镜像 `pull --ff-only`
+
+### 剩余工作
+
+| 域 | 方法数 | 备注 |
+| --- | --- | --- |
+| `mobile` | 36 | 最大，建议再拆成 mobile-read / mobile-write / mobile-plugin 三份 |
+| `session` | 10 | 依赖 `controller`（`sc()`）、`captureSession` 等 |
+| `workspace` | 6 | |
+| `pair` | 4 | 含设备表写操作，注意 `persistDevices` |
+| `agentPreset` | 1 | 可与 `session` 合一个文件 |
+
+验收（沿用）：64 个方法名集合 diff 为空；故意让一个 handler 抛错，其它方法/设备不受影响；
+8 次加载 pageerror = 0。
+
+⚠️ 写探针的坑：**别拿 `session.list` 第一条当参数** —— 列表按 updatedAt 排序，两次运行之间
+会变，会造成「搬前有数据、搬后空」的假 diff（本轮 `subagent.list` 就踩过）。
+用写死的 `sessionId`，或先取稳定的那个。
 
 ## 三、纪律（沿用）
 
@@ -123,7 +158,13 @@ group 3 已把 `buildAssistantChunkEvent / expandSnapshotStream` 搬回流式状
   单测 14/14、真跑 `assistant/chunk` 101 条带 turn/step。
 - 2026-10-19 `7bbfd3f` **group 4 完成**：`openMux` 整块搬入（含心跳 / 同步节拍 / 寿命定时器）；
   实测 events.mux 200、`: ping`、381 帧、queue 形状正确，live-follow 全 PASS。
-- **下一步**：RPC 注册表（`src/host/rpc/`，7 个域文件），先对账 63 vs 64 的方法名差异。
+- 2026-10-19 `4b83f7b` **RPC 注册表 1/7**：建 `src/host/rpc/index.js`（Map + 校验）与
+  `settings.js`；`dispatchRpc` 改为「注册表优先、switch 兜底」；settings 三个方法输出
+  搬迁前后逐字节相同。
+- 2026-10-19 `04ed1ac` **RPC 注册表 2–3/7**：`subagent.js`（1）、`push.js`（3）；
+  方法集合 57(switch) + 7(注册表) = 64，md5 `ae0e06a3…` 与基线一致。
+- **下一步**：继续搬 57 个方法（mobile 36 / session 10 / workspace 6 / pair 4 / agentPreset 1），
+  照「二、标准动作」五步做，每搬一个域跑一次 `rpc-diff.mjs` + 前后探针 diff。
 
 ## 本轮验收结果（独立复核：sse-verifier 用自建脚本，不采信 lead 数据）
 
@@ -138,4 +179,5 @@ group 3 已把 `buildAssistantChunkEvent / expandSnapshotStream` 搬回流式状
 | UI | 首页 3 行 / 工具栏 7 按钮 | 同 | 同；命令面板 2+6+技能源（漂移） |
 
 `node --check` 双绿、`npm run smoke` 6/6 在每一组都跑过；`core.js` 5,759 → **5,228** 行，
-`sse.js` 81 → **677** 行。RPC 方法名集合 `c178c9e` vs `HEAD` 逐字 diff 为空（63 vs 63）。
+`sse.js` 81 → **677** 行。RPC 方法名集合 `c178c9e` vs `HEAD` 逐字 diff 为空
+（64 vs 64，md5 `ae0e06a3…`；交接单原写的 63 是正则漏了 `agentPreset.list`）。
