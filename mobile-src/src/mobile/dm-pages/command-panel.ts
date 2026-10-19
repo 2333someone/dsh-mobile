@@ -8,20 +8,20 @@ import { ICONS, iconParts, type IconName } from '../design/icons.tsx'
  * `dm-pages/index.ts` 在 bundle 启动时按原顺序安装到 document。
  */
 /**
- * 命令面板的全部图标都来自 `design/icons.tsx`（唯一图标源，桌面端同一份 svg），
- * 这里**不画任何形状**，只做「名字 → catalog 键」的映射：
- *   · 宿主命令：file/goal/plan/feedback/compact/permission/model/export 与桌面
- *     ui-commands 的 HOST_FACES 一一对应；orchestrate 桌面没有 → catalog 里是
- *     借用项（commandOrchestrate，来源见 icons.tsx 的 borrowed 注释）。
- *   · 技能行：桌面 slash 候选本身不带图标（ui-skill 的 candidates 只给
- *     name/description），所以按技能的 name/description 语义映射到桌面 primitives
- *     里现成的图标（SKILL_ICON_RULES）；没有任何命中的回退到 commandSkill
- *     （桌面 SkillRow 用的那枚 IconSkillOutlineRegular）。
+ * 命令面板的图标：
+ *   · 宿主命令 9 条（添加 / 指令）带图标，全部来自 `design/icons.tsx`（唯一图标源），
+ *     这里只做「名字 → catalog 键」的映射（**不在这里画任何形状**）：
+ *     file/goal/plan/feedback/compact/permission/model/export 与桌面 ui-commands 的
+ *     HOST_FACES 一一对应；orchestrate 桌面没有 → catalog 里是本仓库自绘项
+ *     （commandOrchestrate，source 标注 `ours`，风格对齐同组桌面图标）。
+ *   · 技能行**不渲染图标**（用户拍板「严格照桌面」）：桌面 `/` 菜单的技能候选只有
+ *     名称 + 描述，ui-skill 的 candidates 不带图标字段。技能行的文字通过
+ *     `.dm-cmd-row-noicon` 的左侧缩进与命令行文字对齐，不生成空的图标占位元素。
  */
 type IconKey = IconName
 
 const ICON_CATALOG: Readonly<Record<string, IconKey>> = {
-  // 宿主命令 / 本机动作（与桌面命令 face 同名）
+  // 宿主命令 / 本机动作（与桌面命令 face 同名）；技能行没有图标，不在此表。
   file: 'commandFile',
   goal: 'commandGoal',
   plan: 'commandPlan',
@@ -31,41 +31,7 @@ const ICON_CATALOG: Readonly<Record<string, IconKey>> = {
   model: 'commandModel',
   export: 'commandExport',
   orchestrate: 'commandOrchestrate',
-  skill: 'commandSkill',
-  // 技能语义规则可用的桌面现成图标
-  search: 'actionSearch',
-  edit: 'actionEdit',
-  download: 'actionDownload',
-  refresh: 'actionRefresh',
-  terminal: 'pageBuiltinTerminal',
-  plugins: 'pagePlugins',
-  subagent: 'pageBuiltinSubagent',
-  shield: 'commandPermission',
-  usage: 'pageUsage',
-  models: 'pageModels',
 }
-
-/**
- * 技能 → 桌面现成图标的语义规则（按顺序命中；pattern 在页面里构造成 RegExp）。
- * 桌面端自己不给每个技能配图标，这里只挑**已存在的桌面图标**做语义近似，
- * 绝不新增/自绘形状；未命中任何规则时回退 commandSkill。
- */
-const SKILL_ICON_RULES: ReadonlyArray<readonly [string, string]> = [
-  ['orchestrat', 'orchestrate'],
-  ['find[-_ ]?skills?|skill.*(discover|install)', 'search'],
-  ['computer[-_ ]use|gui|screen|browser', 'models'],
-  ['diagnos|sandbox|acl', 'shield'],
-  ['orca[-_ ]?cli|terminal|shell|bash|\\bcli\\b', 'terminal'],
-  ['^office-export-pdf|export-pdf', 'download'],
-  ['^office-recalculate|recalculate|formula', 'refresh'],
-  ['^office-render|render', 'models'],
-  ['^office-docx|docx|\\bword\\b', 'edit'],
-  ['^office-xlsx|xlsx|excel|spreadsheet|\\bsheet\\b', 'usage'],
-  ['^office-pptx|pptx|powerpoint|slide', 'models'],
-  ['^office\\b|\\boffice', 'file'],
-  ['cordis|plugin|composition|preset', 'plugins'],
-  ['subagent|agent[-_ ]team|team|worker', 'subagent'],
-]
 
 const CMD_ICON_PARTS: Readonly<Record<string, { vb: string; html: string; sw?: string }>> = (() => {
   const out: Record<string, { vb: string; html: string; sw?: string }> = {}
@@ -369,29 +335,18 @@ export const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" t
       return parts.join(' ').toLowerCase();
     }
 
-    // ── 行首图标：全部来自 design/icons.tsx 的桌面端图标（唯一来源）─────────────
+    // ── 行首图标：只有「添加 / 指令」两组的命令带图标，全部来自 design/icons.tsx ──
     // 宿主命令与桌面 ui-commands 的 HOST_FACES 一一对应；orchestrate 桌面没有 →
-    // catalog 里是借用项；技能行按 name/description 语义映射到桌面现成图标
-    // （SKILL_ICON_RULES），未命中回退到桌面 SkillRow 的技能图标（commandSkill）。
+    // catalog 里是本仓库自绘项（source = ours）。技能行严格照桌面：不渲染图标。
     var CMD_ICONS = ${JSON.stringify(CMD_ICON_PARTS)};
     var CMD_ICON_SOURCES = ${JSON.stringify(CMD_ICON_SOURCES)};
-    var SKILL_ICON_RULES = ${JSON.stringify(SKILL_ICON_RULES)}.map(function (rule) {
-      return [new RegExp(rule[0], 'i'), rule[1]];
-    });
     window.__dmCommandIconSources = CMD_ICON_SOURCES;
 
-    // 图标键：命令/本机动作按 name 命中；技能行先走语义规则，再回退 skill。
+    // 图标键：命令/本机动作按 name 命中；技能行（group=技能）没有图标。
     function iconKeyOf(it) {
+      if (it && it.group === '技能') return '';
       var key = it && typeof it.name === 'string' ? it.name : '';
-      if (CMD_ICONS[key]) return key;
-      if (it && it.group === '技能') {
-        var hay = String(it.name || '') + ' ' + String(it.description || '');
-        for (var i = 0; i < SKILL_ICON_RULES.length; i++) {
-          if (CMD_ICONS[SKILL_ICON_RULES[i][1]] && SKILL_ICON_RULES[i][0].test(hay)) return SKILL_ICON_RULES[i][1];
-        }
-        if (CMD_ICONS.skill) return 'skill';
-      }
-      return '';
+      return CMD_ICONS[key] ? key : '';
     }
 
     // 尺寸归一：所有行统一 16×16 渲染（桌面命令 face 的默认尺寸），描边用图标
@@ -404,10 +359,10 @@ export const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" t
       return '<svg class="dm-cmd-icon" width="16" height="16" viewBox="' + icon.vb + '" fill="none" stroke="currentColor" stroke-width="' + (icon.sw || '1.2') + '" style="width:16px;height:16px" aria-hidden="true">' + icon.html + '</svg>';
     }
 
-    // 一行 = [图标] [/name 中文标签] [右侧说明，单行省略]
+    // 一行 = [图标（仅命令行）] [/name 中文标签] [右侧说明，单行省略]
     // 与桌面 / 菜单同款：不再放来源徽标、不再放尖括号参数占位（用户明确说没用且乱）。
-    // 说明右对齐、约占 46%，完整文本进 title（桌面悬浮/手机长按可见）；技能与命令
-    // 用同一套结构，只是分组标题不同。
+    // 技能行严格照桌面：**不渲染图标元素**，用 .dm-cmd-row-noicon 的缩进让文字与
+    // 命令行文字同一条左边线（不留空图标盒子）。
     function rowOf(it) {
       var row = document.createElement('button');
       row.type = 'button';
@@ -415,13 +370,17 @@ export const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" t
       row.setAttribute('data-name', it.name);
       if (it.source) row.setAttribute('data-source', it.source);
       if (it.group) row.setAttribute('data-group', it.group);
-      row.setAttribute('data-icon', iconKeyOf(it));
       var iconKey = iconKeyOf(it);
+      row.setAttribute('data-icon', iconKey);
       if (iconKey !== '') row.setAttribute('data-icon-src', CMD_ICON_SOURCES[iconKey] || iconKey);
-      var icon = iconHtml(it);
-      var iconBox = el('span', 'dm-cmd-iconbox');
-      if (icon !== '') iconBox.innerHTML = icon;
-      row.appendChild(iconBox);
+      if (iconKey !== '') {
+        var icon = iconHtml(it);
+        var iconBox = el('span', 'dm-cmd-iconbox');
+        iconBox.innerHTML = icon;
+        row.appendChild(iconBox);
+      } else {
+        row.classList.add('dm-cmd-row-noicon');
+      }
       var left = el('span', 'dm-cmd-left');
       // 命令名也中文化：/目标、/压缩…；技能保持 /英文技能名（宿主标识无法中文化）。
       // 英文命令名放进 title（桌面悬浮可见）且 data-name 仍是英文，映射与测试都不受影响。

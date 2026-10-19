@@ -7167,4 +7167,10 @@ details.think-block[open] .chat-disclosure-caret {
   background: var(--accent-soft);
   transform: scale(var(--press-scale));
 }
+/* 技能行严格照桌面 / 菜单：不渲染图标元素。文字与命令行文字同一条左边线——
+   命令行文字 = 行左内边距 12 + 图标盒 20 + 行 gap 10 = 42px；技能行没有图标盒，
+   用 30px 左缩进补上「图标盒 + gap」，既不生成空图标元素，也不留空一块盒子。 */
+.dm-cmd-row-noicon > .dm-cmd-left {
+  margin-left: 30px;
+}
 `;

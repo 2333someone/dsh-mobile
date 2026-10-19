@@ -629,10 +629,12 @@ export const ICONS: Readonly<Record<IconName, IconMeta>> = {
     chunkOffset: 861247,
   },
   /**
-   * 桌面端「技能」图标：原本直接内联在命令面板的注入脚本里（一份手抄副本），
-   * 现在收进唯一图标源。桌面 ui-skill 的候选行本身不带图标（candidates 只给
-   * name/description），代表 skill 的现成图标就是这一枚（桌面 SkillRow 用，
-   * size 14 / stroke 1）；未命中任何语义规则的技能行回退到它。
+   * 桌面端「技能」图标（IconSkillOutlineRegular，桌面 SkillRow 用，size 14 / stroke 1）。
+   *
+   * **命令面板已不再使用**：用户拍板「严格照桌面」——桌面 `/` 菜单的技能候选只有
+   * 名称+描述、不带图标，所以手机面板的技能行现在也不渲染图标。这一项保留在图标
+   * 目录里作为桌面 skill 语义的现成图标（其它地方需要时可直接引用），命令面板不再
+   * 映射到它。
    */
   'commandSkill': {
     group: 'desktop',
@@ -640,26 +642,29 @@ export const ICONS: Readonly<Record<IconName, IconMeta>> = {
     viewBox: '0 0 17 17',
     rootProps: {"viewBox":"0 0 17 17","fill":"none","strokeWidth":1},
     inner: "<path d=\"M4.57788 5.77124H10.7029\" stroke=\"currentColor\"/><path d=\"M4.57788 8.89819H7.91879\" stroke=\"currentColor\"/><path d=\"M12.1404 1.19446C12.9442 1.19446 13.6404 1.81999 13.6404 2.64465V8.89856H12.6404V2.64465C12.6404 2.42015 12.4411 2.19446 12.1404 2.19446H3.14038C2.83968 2.19446 2.64038 2.42015 2.64038 2.64465V13.0929C2.64082 13.3172 2.84001 13.5421 3.14038 13.5421H8.88159V14.5421H3.14038C2.33675 14.5421 1.6408 13.9172 1.64038 13.0929V2.64465C1.64038 1.81999 2.33651 1.19446 3.14038 1.19446H12.1404Z\" fill=\"currentColor\"/><path d=\"M12.0051 15.1056C12.0051 13.6395 10.8166 12.451 9.35059 12.451C10.8166 12.451 12.0051 11.2626 12.0051 9.79651C12.0051 11.2626 13.1936 12.451 14.6597 12.451C13.1936 12.451 12.0051 13.6395 12.0051 15.1056Z\" stroke=\"currentColor\"/>",
-    use: "命令面板：技能行（桌面 ui-skill SkillRow 的图标；未命中语义规则时回退）",
+    use: "图标目录：桌面 skill 图标（命令面板技能行已改为无图标，不再引用）",
     source: "@deepseek-ai/dsh-web-frontend/dist/assets/index-CN7NIWNw.js（primitives 实现）· IconSkillOutlineRegular（defIdent QP / comp Zy）",
     defIdent: 'QP',
     chunkOffset: 864030,
   },
   /**
-   * 命令面板：/orchestrate（编排）。桌面端**没有**这条命令的图标（ui-commands 的
-   * HOST_FACES 只覆盖 goal/plan/feedback/compact/permission/export 六条），所以
-   * 不另画形状，借用同一份桌面 primitives 的「多人」图标表达「派发/编排多个 agent」。
+   * 命令面板：/orchestrate（编排 / 分发 / 多任务派发）。
+   *
+   * **ours —— 本仓库自绘**（2026-10 用户拍板：桌面端没有 orchestrate 命令图标，
+   * ui-commands 的 HOST_FACES 只覆盖 goal/plan/feedback/compact/permission/export
+   * 六条；不再借用「多人」图标）。风格严格对齐同组桌面命令图标：16×16 视框、
+   * stroke-width 1、圆头圆角、单色 currentColor、16px 渲染。
+   * 语义：左侧一个节点向右分出两条分支箭头（一个任务派发给多个执行者）；
+   * 16px 下只保留「节点 + Y 形分叉 + 箭头」，不堆细节。
    */
   'commandOrchestrate': {
     group: 'desktop',
     size: 16,
     viewBox: '0 0 16 16',
     rootProps: {"viewBox":"0 0 16 16","fill":"none","strokeWidth":1},
-    inner: "<path d=\"M6 8.25C7.51878 8.25 8.75 7.01878 8.75 5.5C8.75 3.98122 7.51878 2.75 6 2.75C4.48122 2.75 3.25 3.98122 3.25 5.5C3.25 7.01878 4.48122 8.25 6 8.25Z\" stroke=\"currentColor\"/><path d=\"M1 14.5C1 11.5 3.5 10.25 6 10.25C8.5 10.25 11 11.5 11 14.5\" stroke=\"currentColor\"/><path d=\"M10.5 2.9C11.65 3.35 12.45 4.35 12.45 5.5C12.45 6.65 11.65 7.65 10.5 8.1\" stroke=\"currentColor\"/><path d=\"M12.4 10.6C13.9 11.3 15 12.6 15 14.5\" stroke=\"currentColor\"/>",
-    use: "命令面板：/orchestrate（编排）",
-    source: "@deepseek-ai/dsh-web-frontend/dist/assets/index-CN7NIWNw.js（primitives 实现）· IconUsersOutlineRegular（defIdent VN / comp hy）",
-    defIdent: 'VN',
-    borrowed: "桌面端没有 orchestrate 的命令图标；借用桌面同源的 IconUsersOutlineRegular（多人 = 多 agent 编排/派发）",
+    inner: "<circle cx=\"2.7\" cy=\"8\" r=\"1.6\"/><path d=\"M4.9 7.2 13.4 4\"/><path d=\"M11.37 3.48 13.4 4 12.21 5.73\"/><path d=\"M4.9 8.8 13.4 12\"/><path d=\"M11.37 12.52 13.4 12 12.21 10.27\"/>",
+    use: "命令面板：/orchestrate（编排 / 分发 / 多任务派发）",
+    source: "ours（本仓库自绘；风格对齐桌面命令图标：16 视框 / stroke 1 / round 端点；桌面无对应图标）",
   },
 }
 
