@@ -5542,6 +5542,17 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
  * 只在**单行**时接管；一旦换行（多行输入）就把内联 padding 撤掉，回落到
  * CSS 的 11/11 对称值，避免多行时上紧下松。
  *
+ * ⚠️ 高度必须从「基线」量，不能从「当前高度」反推：
+ *   bundle 的 `.chat-input` 带 `field-sizing: content`（bundle CSS，禁止改），
+ *   输入框高度 = 内容高 + padding + 边框。若拿当前高度反推 padding，写进去的
+ *   padding 本身又参与高度计算 —— 任何一次临时变高（草稿折行成两行）都会被
+ *   固化成新的下限，删光文字后输入框再也缩不回 44/46px。
+ *   所以每次先撤掉内联 padding、量出「单行基线高度」，再用它算居中 padding：
+ *   基线只由字体/行高/CSS 决定，算出来的 padding 之和恰好等于基线内容框，
+ *   高度不会漂移。多行判定也改用「基线内容高 > 1.5 行高」，不再依赖
+ *   scrollHeight —— 在 field-sizing: content 下输入框跟着内容长高，
+ *   scrollHeight 永远等于 clientHeight，旧判据永远不会命中。
+ *
  * 兼容性：measureText / getImageData 不可用时直接放弃（保持 CSS 原值），
  * 不抛错、不影响输入。字体加载完成后再重量一次（首帧可能是回退字体）。
  */
@@ -5553,6 +5564,7 @@ const INPUT_TEXT_CENTER_HTML = `<script>
 
     var inkCache = {};
     var lastKey = '';
+    var lastPads = null;
     // 单行文字整体上移的默认量（px）。用户反馈：几何居中后仍觉得略低；
     // 先上移 1px，仍偏低，再上移 1px → 共 2px。
     var DEFAULT_BIAS = 2;
@@ -5614,12 +5626,28 @@ const INPUT_TEXT_CENTER_HTML = `<script>
     }
 
     function clearInline(el) {
-      if (!el.__dmInputCentered) return;
       try {
-        el.style.removeProperty('padding-top');
-        el.style.removeProperty('padding-bottom');
+        if (el.style.getPropertyValue('padding-top') !== '') el.style.removeProperty('padding-top');
+        if (el.style.getPropertyValue('padding-bottom') !== '') el.style.removeProperty('padding-bottom');
       } catch (e) {}
       el.__dmInputCentered = false;
+    }
+
+    // 撤掉本脚本写的内联 padding，回到 CSS 基线（theme.css 的 11/11），
+    // 再量「单行时输入框本来该有多高」。基线只由字体/行高/CSS 决定，
+    // 与上一次写过什么 padding 无关；因此不会像「按当前高度反推」那样
+    // 把任何一次临时变高固化成新的下限（输入框再也缩不回去的根因）。
+    function measureBase(el) {
+      clearInline(el);
+      var cs = window.getComputedStyle(el);
+      var height = el.getBoundingClientRect().height || el.offsetHeight || 0;
+      return {
+        height: height,
+        pt: parseFloat(cs.paddingTop) || 0,
+        pb: parseFloat(cs.paddingBottom) || 0,
+        btop: parseFloat(cs.borderTopWidth) || 0,
+        bbot: parseFloat(cs.borderBottomWidth) || 0
+      };
     }
 
     function apply() {
@@ -5630,14 +5658,19 @@ const INPUT_TEXT_CENTER_HTML = `<script>
       var lineHeight = parseFloat(cs.lineHeight);
       if (!(lineHeight > 0)) lineHeight = fontSize * 1.4;
 
-      // 只在单行时接管：有换行、或内容高度已超出可视高度 → 撤掉内联值
-      var multiline = String(el.value || '').indexOf('\\n') >= 0 || el.scrollHeight > el.clientHeight + 1;
-      if (multiline) { clearInline(el); lastKey = ''; return; }
+      // 显式换行 → 多行，不接管
+      if (String(el.value || '').indexOf('\\n') >= 0) { clearInline(el); lastKey = ''; return; }
+
+      // 关键顺序：先回到基线再量。.chat-input 带 field-sizing: content，
+      // 内联 padding 是高度的组成部分，用「当前高度」反推会自我维持。
+      var base = measureBase(el);
+      if (!(base.height > 0)) return;
+      var contentH = base.height - base.btop - base.bbot - base.pt - base.pb;
+      // 视觉折行（内容高明显超过一行）→ 多行，不接管，保持 CSS 11/11
+      if (contentH > lineHeight * 1.5 + 1) { lastKey = ''; return; }
 
       var sample = (el.getAttribute('placeholder') || '').trim() || '\\u8bf4\\u70b9\\u4ec0\\u4e48';
       var font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
-      var height = el.getBoundingClientRect().height || el.offsetHeight;
-      if (!(height > 0)) return;
 
       // 视觉偏置（px）：纯几何居中后肉眼仍觉得文字略低，整体上移一点。
       // 运行时可改 window.__dmInputBias 微调（下次 apply 生效）；调好写回 DEFAULT_BIAS。
@@ -5645,31 +5678,37 @@ const INPUT_TEXT_CENTER_HTML = `<script>
         ? window.__dmInputBias
         : DEFAULT_BIAS;
 
-      var key = [font, sample, lineHeight, height, cs.borderTopWidth, cs.borderBottomWidth, BIAS].join('|');
-      if (key === lastKey) return;
+      var key = [font, sample, lineHeight, base.height, base.btop, base.bbot, BIAS].join('|');
 
-      var inkRel = inkCenterFromBaseline(font, sample, fontSize);
-      if (inkRel === null) return;
-      var baseline = baselineInLineBox(el, sample, lineHeight);
-      if (baseline === null) return;
+      // 基线没变就复用上次算好的 padding。measureBase 已经把内联值撤掉了，
+      // 所以这里必须重新写回去，不能像旧实现那样直接 return（否则会停在未居中状态）。
+      var pads = lastPads;
+      if (key !== lastKey || pads === null) {
+        var inkRel = inkCenterFromBaseline(font, sample, fontSize);
+        if (inkRel === null) { lastKey = ''; lastPads = null; return; }
+        var baseline = baselineInLineBox(el, sample, lineHeight);
+        if (baseline === null) { lastKey = ''; lastPads = null; return; }
 
-      var btop = parseFloat(cs.borderTopWidth) || 0;
-      var bbot = parseFloat(cs.borderBottomWidth) || 0;
-      var inkCenter = baseline + inkRel;                 // 墨迹中心 → 相对内容盒顶部
-      var pt = height / 2 - btop - inkCenter - BIAS;     // 几何居中，再整体上移 BIAS
-      var pb = height - btop - bbot - lineHeight - pt;
-      if (!isFinite(pt) || !isFinite(pb)) return;
-      if (pt < 0 || pb < 0 || pt > 30 || pb > 30) return;
+        var inkCenter = baseline + inkRel;                 // 墨迹中心 → 相对内容盒顶部
+        var pt = base.height / 2 - base.btop - inkCenter - BIAS; // 几何居中，再整体上移 BIAS
+        var pb = base.height - base.btop - base.bbot - lineHeight - pt;
+        if (!isFinite(pt) || !isFinite(pb)) { lastKey = ''; lastPads = null; return; }
+        if (pt < 0 || pb < 0 || pt > 30 || pb > 30) { lastKey = ''; lastPads = null; return; }
 
-      var vt = (Math.round(pt * 100) / 100) + 'px';
-      var vb = (Math.round(pb * 100) / 100) + 'px';
+        pads = {
+          vt: (Math.round(pt * 100) / 100) + 'px',
+          vb: (Math.round(pb * 100) / 100) + 'px'
+        };
+        lastKey = key;
+        lastPads = pads;
+      }
+
       try {
-        el.style.setProperty('padding-top', vt, 'important');
-        el.style.setProperty('padding-bottom', vb, 'important');
+        el.style.setProperty('padding-top', pads.vt, 'important');
+        el.style.setProperty('padding-bottom', pads.vb, 'important');
       } catch (e) { return; }
       el.__dmInputCentered = true;
       el.setAttribute('data-dm-input-centered', '1');
-      lastKey = key;
     }
 
     var queued = false;
@@ -5693,7 +5732,8 @@ const INPUT_TEXT_CENTER_HTML = `<script>
     window.addEventListener('resize', function () { lastKey = ''; schedule(); }, true);
     document.addEventListener('DOMContentLoaded', schedule);
     // 轮询而不是全量 MutationObserver：流式输出时 DOM 每秒变几十次，
-    // 全量观察会让这里反复重算 canvas；600ms 一次足够，且 key 不变时直接返回。
+    // 全量观察会让这里反复重算 canvas；600ms 一次足够。基线 key 不变时
+    // 直接复用上次算好的 padding（不重跑 canvas/探针），只重新写回内联值。
     setInterval(schedule, 600);
     schedule();
   } catch (e) {}
@@ -12746,8 +12786,7 @@ export function apply(ctx, config) {
           if (typeof parentHint === 'string' && parentHint !== '' && parentHint !== sid) {
             subagentParent.set(sid, parentHint)
           }
-          addObservationExtra(rpcContext.deviceId, sid)
-          ensureFollow(sid)
+          observeSession(rpcContext.deviceId, sid)
           // ── B：进会话立即补发该会话当前 pending 的卡片请求帧 ────────────────
           // bundle 的提问卡/审批卡只靠：①提问发生当时的 mux 帧；②会话内
           // mobile.pending 轮询（SSE live 时 60s、非 live 1.5s）。所以「提问发生在
@@ -12810,8 +12849,7 @@ export function apply(ctx, config) {
         // ensureFollow 幂等，已在跟随时直接复用。
         if (rpcContext && typeof rpcContext.deviceId === 'string' && payload.sessionId) {
           const sid = String(payload.sessionId)
-          addObservationExtra(rpcContext.deviceId, sid)
-          ensureFollow(sid)
+          observeSession(rpcContext.deviceId, sid)
         }
         await controller.prompt(
           {
@@ -14229,6 +14267,24 @@ export function apply(ctx, config) {
     set.add(sessionId)
   }
 
+  /**
+   * 让这台设备开始跟随某个会话 —— 全插件唯一的「并集登记」出口。
+   *
+   * 语义 = addObservationExtra（并集，不顶掉其它会话）+ ensureFollow（幂等起流）。
+   * 两处 RPC（session.history 的 subscribe 分支、session.prompt）都必须走这里。
+   * 历史教训：这段逻辑曾各写一遍，于是
+   *   · fccb115：单条 SSE 关闭误清设备级观察集 → 回复停在中途；
+   *   · 312b954：session.prompt 漏了登记 → 发消息不出现气泡、退出重进才见。
+   * 收敛成一个函数，避免第三次漏写。
+   *
+   * 注意：mobile.observe 不能走这里 —— 那是 bundle 每 30s 重申一次的**独占**语义
+   * （addObservation 会整体替换该设备的观察集），和这里的并集追加不是一回事。
+   */
+  function observeSession(deviceId, sessionId) {
+    addObservationExtra(deviceId, sessionId)
+    ensureFollow(sessionId)
+  }
+
   function removeObservation(deviceId, sessionId) {
     const set = observers.get(deviceId)
     if (set === undefined) return
@@ -15415,8 +15471,17 @@ export function apply(ctx, config) {
   ctx.effect(() => {
     const timer = setInterval(() => {
       const now = Date.now()
+      let changed = false
       for (const [deviceId, d] of devices) {
-        if (now - (d.lastSeenAt || d.createdAt) > IDLE_EXPIRE_MS) devices.delete(deviceId)
+        if (now - (d.lastSeenAt || d.createdAt) > IDLE_EXPIRE_MS) {
+          devices.delete(deviceId)
+          changed = true
+        }
+      }
+      // 过期设备必须落盘：否则设备文件永久累积，且进程重启后 loadDevices 会把
+      // 过期设备连同 token 一起复活（重新可认证、配对名额被死设备占住）。
+      if (changed) {
+        try { persistDevices(cfg.devicesFile, devices) } catch (e) {}
       }
       if (pairToken && now > pairToken.expiresAt) pairToken = null
     }, SWEEP_INTERVAL_MS)
