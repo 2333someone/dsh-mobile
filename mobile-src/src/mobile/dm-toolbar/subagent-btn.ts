@@ -25,18 +25,25 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
   //   { sid, parent, itemSeq, seenSeq, live, es, reconcileTimer, list, pendingNew }
   var chat = null;
   var lastSessionId = '';
+  // 面板打开时锁定的「父会话」：面板自己会为子代理发 session.history，
+  // 那些请求带的是子代理 sid；不能让它污染 currentSession()，否则返回列表时
+  // 会拿子代理 sid 去查父会话的缓存，结果闪成「加载中」再变空白。
+  var panelSid = '';
 
   // ── 预取缓存 ────────────────────────────────────────────────────────────
   // 之前是「点开面板 → 才发 subagent.list → 等响应才渲染」，首屏必然空一段。
   // 现在改成进聊天页就后台预取并缓存（按会话 id 存），点开面板先用缓存立即渲染。
   //
   // 缓存三态必须分清，否则会把「还没拉到」误报成「确实没有」：
-  //   CACHE_SID === '' 或 cacheRows === null → 还没拉成功过（渲染「加载中…」）
-  //   cacheRows.length === 0                → 拉成功且确实为空（渲染「当前没有子代理」）
-  //   cacheRows.length > 0                  → 有数据（渲染列表）
-  var CACHE_SID = '';
-  var cacheRows = null;     // null = 未知；数组 = 已知（可能为空数组）
-  var cacheFetchedAt = 0;
+  //   cachedRows(sid) === null     → 还没拉成功过（渲染「加载中…」）
+  //   cachedRows(sid).length === 0 → 拉成功且确实为空（渲染「当前没有子代理」）
+  //   cachedRows(sid).length > 0   → 有数据（渲染列表）
+  // 缓存按会话分桶（sid → { rows, at }）。之前是单槽 + CACHE_SID：面板自己的
+  // 详情页会为子代理发 session.history，别的注入脚本（预设状态等）会把子代理
+  // sid 误当成「当前会话」并轮询它，单槽缓存随即被清掉 —— 返回列表时就只剩
+  // 「加载中」。分桶后父会话的列表数据不再被别的 sid 覆盖。
+  var CACHE_LIMIT = 4;
+  var cache = new Map();    // sid → { rows: Array, at: number }
   var inflight = null;      // 正在飞的请求，调用点共享，避免重复打 RPC
   var inflightSid = '';
   var bgSid = '';           // 后台预取当前服务的会话 id
@@ -52,8 +59,14 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
         var url = typeof input === 'string' ? input : (input && input.url) || '';
         if (url.indexOf('/m/api/') >= 0 && init && typeof init.body === 'string') {
           var body = JSON.parse(init.body);
-          if (body && body.payload && typeof body.payload.sessionId === 'string' && body.payload.sessionId) {
-            lastSessionId = body.payload.sessionId;
+          // 面板自己发的 RPC（rpcId 前缀 dm-sub-）读的是子代理会话，不能算
+          // 「当前会话」；只有 bundle 主界面的请求才更新 lastSessionId。
+          var ownRpc = !!(body && typeof body.rpcId === 'string' && body.rpcId.indexOf('dm-sub-') === 0);
+          var reported = body && body.payload ? body.payload.sessionId : undefined;
+          // 只认聊天会话（宿主 id 形如 session-*）。子代理会话是裸 UUID，
+          // 面板为它发的历史读取、以及其它脚本被带偏后的轮询都不该改写「当前会话」。
+          if (!ownRpc && typeof reported === 'string' && reported.indexOf('session-') === 0) {
+            lastSessionId = reported;
           }
         }
       } catch (e) {}
@@ -121,18 +134,24 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
   }
 
   // ── 列表读取：统一走这里，命中缓存就同步返回 ──────────────────────────
-  // 返回 null 表示「这份缓存不属于当前会话」；返回数组表示已知结果（可能为空）。
+  // 返回 null 表示「这个会话还没成功拉过」；返回数组表示已知结果（可能为空）。
   function cachedRows(sid) {
-    if (!sid || CACHE_SID !== sid) return null;
-    return cacheRows;
+    if (!sid) return null;
+    var hit = cache.get(sid);
+    return hit ? hit.rows : null;
   }
 
-  // 会话切换：缓存作废（同一会话内不清，避免刷新时闪一下「加载中」）。
+  function cacheFetchedAtOf(sid) {
+    var hit = cache.get(sid);
+    return hit ? hit.at : 0;
+  }
+
+  // 只做容量收敛：其它会话的缓存不再被「切会话」清掉（分桶的意义就在这）。
   function invalidateCache(sid) {
-    if (CACHE_SID !== '' && CACHE_SID !== sid) {
-      CACHE_SID = '';
-      cacheRows = null;
-      cacheFetchedAt = 0;
+    while (cache.size > CACHE_LIMIT) {
+      var first = cache.keys().next().value;
+      if (first === undefined || first === sid) break;
+      cache.delete(first);
     }
   }
 
@@ -185,15 +204,15 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     inflightSid = sid;
     var committed = false;
     inflight = rpc('subagent.list', { parentSessionId: sid }).then(function (res) {
-      if (inflightSid === sid) {
-        var rows = rowsOf(res);
-        CACHE_SID = sid;
-        cacheRows = rows;
-        cacheFetchedAt = Date.now();
-        committed = true;
-        return rows;
-      }
-      return null;
+      if (inflightSid !== sid) return null;
+      // 失败响应（ok:false / 无 result）绝不能当「空列表」写进缓存：
+      // 那会把错误态伪装成「当前没有子代理」。
+      if (!res || res.ok !== true) return null;
+      var rows = rowsOf(res);
+      cache.set(sid, { rows: rows, at: Date.now() });
+      invalidateCache(sid);
+      committed = true;
+      return rows;
     }).catch(function () {
       if (inflightSid === sid && !committed) {
         lastFailSid = sid;
@@ -220,7 +239,7 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
       invalidateCache(sid);
       bgSid = sid;
       if (!sid) return;
-      if (cachedRows(sid) !== null && Date.now() - cacheFetchedAt < 1000) return;
+      if (cachedRows(sid) !== null && Date.now() - cacheFetchedAtOf(sid) < 1000) return;
       fetchList(sid);
     } catch (e) {}
   }
@@ -277,6 +296,14 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     head.appendChild(title);
     head.appendChild(close);
     var body = el('div', 'dm-subagent-body');
+    // 列表与聊天内容各有一个常驻容器：视图切换只改 hidden，不重建 DOM。
+    // 这样「进入详情」不会把列表整棵树删掉（不再闪一下），「返回列表」也
+    // 立刻显示上次的列表（不再先空白再变「加载中」）。
+    var listView = el('div', 'dm-subagent-listview');
+    var chatView = el('div', 'dm-subagent-chatview');
+    chatView.hidden = true;
+    body.appendChild(listView);
+    body.appendChild(chatView);
     sheet.appendChild(head);
     sheet.appendChild(body);
     back.appendChild(sheet);
@@ -289,7 +316,14 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     close.addEventListener('click', function (e) { e.preventDefault(); closePanel(); });
     back2.addEventListener('click', function (e) {
       e.preventDefault();
-      if (view !== 'list') { stopChat(); view = 'list'; chatSid = ''; renderList(true); }
+      if (view === 'list') return;
+      stopChat();
+      view = 'list';
+      chatSid = '';
+      showListView();
+      // 列表 DOM 还在（只是 hidden），这里同步用缓存刷一次（内容没变不动 DOM），
+      // 同时发一次后台刷新。返回路径上不会出现空白帧。
+      renderList(false);
     });
     // 滚动策略：停在顶部就继续保持贴顶（新消息前插后仍看得到最新）；一旦下滑
     // 读旧消息，就不再抢滚动位置（前插时会补偿 scrollTop，见 prependHtml）。
@@ -298,14 +332,32 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
       if (chatAtTop()) hideNewTip(true);
     }, { passive: true });
 
-    panel = { back: back, sheet: sheet, head: head, title: title, back2: back2, body: body };
+    panel = {
+      back: back, sheet: sheet, head: head, title: title, back2: back2,
+      body: body, listView: listView, chatView: chatView,
+    };
     return panel;
+  }
+
+  // 视图切换只动 hidden：两个容器都常驻，切换不重建任何 DOM。
+  function showListView() {
+    if (!panel) return;
+    panel.listView.hidden = false;
+    panel.chatView.hidden = true;
+  }
+  function showChatView() {
+    if (!panel) return;
+    panel.listView.hidden = true;
+    panel.chatView.hidden = false;
   }
 
   function openPanel() {
     if (!panel) build();
+    // 父会话在这里锁定：之后面板为子代理发的 session.history 不会改它。
+    panelSid = currentSession();
     panel.back.classList.add('dm-subagent-open');
     if (view !== 'list') { stopChat(); view = 'list'; chatSid = ''; }
+    showListView();
     renderList(true);
     startTimer();
   }
@@ -315,6 +367,7 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
   function closePanel() {
     stopTimer();
     stopChat();     // 离开面板：关 EventSource、停对账定时器，无泄漏
+    panelSid = '';
     if (!panel) return;
     var back = panel.back;
     if (!back.classList.contains('dm-subagent-open')) return;
@@ -352,7 +405,7 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     view = 'list';
     panel.back2.classList.remove('dm-subagent-show');
 
-    var sid = currentSession();
+    var sid = panelSid || currentSession();
     if (!sid) {
       panel.title.textContent = '子代理';
       writeBody('<p class="dm-subagent-hint">未识别到当前会话</p>');
@@ -374,7 +427,12 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     if (!p) return;
     p.then(function (rows) {
       if (!panel || view !== 'list') return;
-      if (!rows) return;              // 请求失败：保留原样，下次轮询再试
+      if (!rows) {
+        // 请求失败：有缓存就保留旧内容；没有缓存时给明确的错误态
+        // （不是空白，也不是「当前没有子代理」这种空态）。
+        if (cachedRows(sid) === null) writeBody('<p class="dm-subagent-hint">加载子代理列表失败，正在重试…</p>');
+        return;
+      }
       if (currentSession() !== sid) return;  // 期间切了会话：丢弃这次结果
       paintList(rows);
     }).catch(function () {});
@@ -471,12 +529,12 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
   // 列表 ↔ 聊天视图来回切时也才不会误判成「没变」而漏画。
   function writeBody(html) {
     if (!panel) return;
-    panel.body.setAttribute('data-dm-html', html);
-    panel.body.innerHTML = html;
+    panel.listView.setAttribute('data-dm-html', html);
+    panel.listView.innerHTML = html;
   }
   function setBody(html) {
     if (!panel) return;
-    if (panel.body.getAttribute('data-dm-html') === html) return;
+    if (panel.listView.getAttribute('data-dm-html') === html) return;
     writeBody(html);
   }
 
@@ -688,11 +746,12 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
 
   function createChatShell() {
     if (!panel) return null;
-    panel.body.removeAttribute('data-dm-html');
-    panel.body.innerHTML = '';
+    // 只清「聊天」容器：列表容器与它的 DOM/滚动位置都留着，返回时秒开。
+    panel.chatView.innerHTML = '';
     var list = el('div', 'dm-subagent-chat');
     list.setAttribute('data-dm-chat', '1');
-    panel.body.appendChild(list);
+    panel.chatView.appendChild(list);
+    showChatView();
     return list;
   }
 
@@ -703,7 +762,7 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     try { if (old.es) old.es.close(); } catch (e) {}
     if (old.reconcileTimer !== null && old.reconcileTimer !== undefined) window.clearInterval(old.reconcileTimer);
     if (panel) {
-      panel.body.removeAttribute('data-dm-chat-sid');
+      panel.chatView.removeAttribute('data-dm-chat-sid');
       // 恢复浏览器默认的滚动锚定（聊天视图里是我们自己接管补偿的）。
       panel.body.style.overflowAnchor = '';
       if (panel.newTip) panel.newTip.hidden = true;
@@ -775,7 +834,7 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     panel.title.textContent = '子代理 · ' + String(sid).slice(0, 8);
     chat = {
       sid: sid,
-      parent: currentSession(),
+      parent: panelSid || currentSession(),
       itemSeq: -1,
       seenSeq: -1,
       live: null,
@@ -786,7 +845,7 @@ export const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-ico
     };
     var target = chat;
     chat.list = createChatShell();
-    panel.body.setAttribute('data-dm-chat-sid', sid);
+    panel.chatView.setAttribute('data-dm-chat-sid', sid);
     // 聊天视图自己补偿前插带来的高度差，关掉浏览器的滚动锚定，行为才可预测。
     panel.body.style.overflowAnchor = 'none';
     panel.body.scrollTop = 0;
