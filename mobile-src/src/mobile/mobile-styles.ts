@@ -2,7 +2,10 @@
  * Mobile surface stylesheet, shipped as a string and injected at boot (the
  * standalone page has no CSS-module pipeline).
  *
- * Design system (2026-08 v2): one token vocabulary (--bg-page / --card-bg /
+ * Design system (2026-10 v3, "young but calm"): the palette/radii/spacing/
+ * type/shadow/glass tokens live in ./design/tokens.ts and the motion system in
+ * ./design/motion.ts — the blocks below are generated from them. One token
+ * vocabulary (--bg-page / --card-bg /
  * --text-primary …), one unified card spec — width 100% of the 16px-inset
  * column, 14px radius, --card-bg/--card-border/--card-shadow, fixed height
  * tiers (small 56 / medium 72 / bubble min 48) — and one internal alignment
@@ -11,205 +14,17 @@
  * data-theme='dark' and through prefers-color-scheme when the mode is
  * 'system'. Radii: chip 10 / card 14 / sheet 20 / menu 12 / capsule 24.
  */
-export const mobileCss = `/* ── design tokens ───────────────────────────────────────────────────── */
+import { tokensCss } from './design/tokens.ts'
+import { motionCss } from './design/motion.ts'
 
-:root {
-  /* surfaces */
-  --bg-page: #f5f5f7;
-  --bg-surface: #ffffff;
-  --bg-elevated: #f1f1f4;
-  --bg-input: #ffffff;
-  --dialog-bg: #ffffff;
-  --toast-bg: #1a1a2e;
-  --toast-text: #ffffff;
-  /* text ladder */
-  --text-primary: #1a1a2e;
-  --text-secondary: #4a4a5a;
-  --text-tertiary: #6a6a7a;
-  --text-quaternary: #9a9aaa;
-  --text-muted: #b0b0c0;
-  /* borders */
-  --border-default: #e2e4e8;
-  --border-subtle: #f0f0f2;
-  --border-focus: #6366f1;
-  /* accent + status */
-  --accent: #6366f1;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(99, 102, 241, 0.1);
-  --accent-glow: rgba(99, 102, 241, 0.2);
-  --positive: #22c55e;
-  --warning: #f59e0b;
-  --danger: #ef4444;
-  --danger-soft: rgba(239, 68, 68, 0.1);
-  /* unified card spec */
-  --card-bg: #ffffff;
-  --card-border: #e8e8ed;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 28px rgba(16, 24, 40, 0.16);
-  /* interaction washes */
-  --fill: rgba(26, 26, 46, 0.05);
-  --fill-strong: rgba(26, 26, 46, 0.09);
-  /* code blocks: clearly darker than the page so the panel reads at a
-     glance (light: #e8ecf2 body + #dfe4ec head bar; github-light tokens) */
-  --code-bg: #e8ecf2;
-  --code-text: #3a3f52;
-  --code-border: #d0d7de;
-  --code-head-bg: #dfe4ec;
-  --code-head-border: #d0d7de;
-  /* syntax tokens (one-light palette: warm triad — purple keywords, green
-     strings, orange-gold numbers/types — reads clearly on small screens) */
-  --tok-keyword: #a626a4;
-  --tok-string: #50a14f;
-  --tok-comment: #a0a1a7;
-  --tok-number: #986801;
-  --tok-type: #e45649;
-  --tok-func: #4078f2;
-  --tok-prop: #986801;
-  /* diff view */
-  --diff-add: #22c55e;
-  --diff-del: #ef4444;
-  --diff-add-bg: rgba(34, 197, 94, 0.12);
-  --diff-del-bg: rgba(239, 68, 68, 0.12);
-  --diff-add-word: rgba(34, 197, 94, 0.22);
-  --diff-del-word: rgba(239, 68, 68, 0.22);
-  /* chrome */
-  --backdrop: rgba(15, 18, 34, 0.45);
-  --header-bg: rgba(245, 245, 247, 0.97);
-  /* type */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Noto Sans SC', 'Segoe UI', sans-serif;
-  --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* radii ladder */
-  --radius-chip: 10px;
-  --radius-card: 14px;
-  --radius-sheet: 20px;
-  --radius-menu: 12px;
-  --radius-capsule: 24px;
-  --radius-full: 9999px;
-  /* spacing ladder (4px base) */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  /* type scale */
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-md: 13px;
-  --text-base: 15px;
-  --text-lg: 16.5px;
-}
+export const mobileCss = `/* ── 设计 token ──────────────────────────────────────────────────────
+   配色 / 圆角 / 间距 / 字体 / 阴影 / 玻璃 / 页面柔光全部来自
+   src/mobile/design/tokens.ts；动效时长、曲线、按压、错峰来自
+   src/mobile/design/motion.ts。组件样式一律只引用 var(--*)，不再写字面色值。 */
+${tokensCss()}
+${motionCss()}
 
-/* Explicit dark: pinned by the toggle, the settings sheet, or the host. */
-:root[data-theme='dark'] {
-  --bg-page: #0a0a0f;
-  --bg-surface: #13131a;
-  --bg-elevated: #1c1c28;
-  --bg-input: #16161f;
-  --dialog-bg: #1c1c28;
-  --toast-bg: #2a2a3a;
-  --toast-text: #f0f0f5;
-  --text-primary: #f0f0f5;
-  --text-secondary: #a0a0b0;
-  --text-tertiary: #6a6a7a;
-  --text-quaternary: #4a4a5a;
-  --text-muted: #3a3a4a;
-  --border-default: #2a2a3a;
-  --border-subtle: #1e1e2a;
-  --border-focus: #3a3a50;
-  --accent: #6366f1;
-  --accent-contrast: #ffffff;
-  --accent-soft: rgba(99, 102, 241, 0.15);
-  --accent-glow: rgba(99, 102, 241, 0.3);
-  --positive: #4ade80;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --danger-soft: rgba(248, 113, 113, 0.14);
-  --card-bg: #13131a;
-  --card-border: #1e1e2a;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.5);
-  --fill: rgba(240, 240, 245, 0.06);
-  --fill-strong: rgba(240, 240, 245, 0.1);
-  --code-bg: #161b22;
-  --code-text: #b8bad0;
-  --code-border: #30363d;
-  --code-head-bg: #1c2128;
-  --code-head-border: #30363d;
-  /* syntax tokens (one-dark palette) */
-  --tok-keyword: #c678dd;
-  --tok-string: #98c379;
-  --tok-comment: #5c6370;
-  --tok-number: #d19a66;
-  --tok-type: #e5c07b;
-  --tok-func: #61afef;
-  --tok-prop: #d19a66;
-  --diff-add: #4ade80;
-  --diff-del: #f87171;
-  --diff-add-bg: rgba(74, 222, 128, 0.12);
-  --diff-del-bg: rgba(248, 113, 113, 0.12);
-  --diff-add-word: rgba(74, 222, 128, 0.25);
-  --diff-del-word: rgba(248, 113, 113, 0.25);
-  --backdrop: rgba(0, 0, 0, 0.6);
-  --header-bg: rgba(10, 10, 15, 0.96);
-}
 
-/* System mode: the OS scheme decides while no palette is pinned. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg-page: #0a0a0f;
-    --bg-surface: #13131a;
-    --bg-elevated: #1c1c28;
-    --bg-input: #16161f;
-    --dialog-bg: #1c1c28;
-    --toast-bg: #2a2a3a;
-    --toast-text: #f0f0f5;
-    --text-primary: #f0f0f5;
-    --text-secondary: #a0a0b0;
-    --text-tertiary: #6a6a7a;
-    --text-quaternary: #4a4a5a;
-    --text-muted: #3a3a4a;
-    --border-default: #2a2a3a;
-    --border-subtle: #1e1e2a;
-    --border-focus: #3a3a50;
-    --accent: #6366f1;
-    --accent-contrast: #ffffff;
-    --accent-soft: rgba(99, 102, 241, 0.15);
-    --accent-glow: rgba(99, 102, 241, 0.3);
-    --positive: #4ade80;
-    --warning: #fbbf24;
-    --danger: #f87171;
-    --danger-soft: rgba(248, 113, 113, 0.14);
-    --card-bg: #13131a;
-    --card-border: #1e1e2a;
-    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.5);
-    --fill: rgba(240, 240, 245, 0.06);
-    --fill-strong: rgba(240, 240, 245, 0.1);
-    --code-bg: #161b22;
-    --code-text: #b8bad0;
-    --code-border: #30363d;
-    --code-head-bg: #1c2128;
-    --code-head-border: #30363d;
-    /* syntax tokens (one-dark palette, system mode) */
-    --tok-keyword: #c678dd;
-    --tok-string: #98c379;
-    --tok-comment: #5c6370;
-    --tok-number: #d19a66;
-    --tok-type: #e5c07b;
-    --tok-func: #61afef;
-    --tok-prop: #d19a66;
-    --diff-add: #4ade80;
-    --diff-del: #f87171;
-    --diff-add-bg: rgba(74, 222, 128, 0.08);
-    --diff-del-bg: rgba(248, 113, 113, 0.08);
-    --diff-add-word: rgba(74, 222, 128, 0.25);
-    --diff-del-word: rgba(248, 113, 113, 0.25);
-    --backdrop: rgba(0, 0, 0, 0.6);
-    --header-bg: rgba(10, 10, 15, 0.96);
-  }
-}
 
 /* ── base + mobile-browser hardening ─────────────────────────────────── */
 
@@ -225,7 +40,9 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg-page);
+  background-color: var(--bg-page);
+  background-image: var(--bg-glow);
+  background-repeat: no-repeat;
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: var(--text-base);
@@ -7315,5 +7132,122 @@ details.think-block[open] .chat-disclosure-caret {
 .chat-jump-turns-live {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* ── v3「年轻但不吵」：B 的视觉语言 + A/B 之间的密度 ─────────────────────
+   玻璃只用于浮层（输入栏 / 工具栏 / 命令面板遮罩），页面本身只用一层柔光底；
+   列表行高 72（token --row-height）；组 1 聊天工具栏的图标本体原样不动。 */
+
+/* 分类标题留白（B 的呼吸感，但比 B 原型的 20px 收一点） */
+.mobile-groupTitle {
+  padding-top: 16px;
+  letter-spacing: 0.02em;
+}
+
+/* 列表入场错峰：前 7 项 50ms 递增，只动 opacity/transform */
+.mobile-list > li {
+  animation: dm-rise-in var(--duration-base) var(--ease-standard) both;
+}
+.mobile-list > li:nth-child(1) { animation-delay: 0ms; }
+.mobile-list > li:nth-child(2) { animation-delay: calc(var(--stagger-step) * 1); }
+.mobile-list > li:nth-child(3) { animation-delay: calc(var(--stagger-step) * 2); }
+.mobile-list > li:nth-child(4) { animation-delay: calc(var(--stagger-step) * 3); }
+.mobile-list > li:nth-child(5) { animation-delay: calc(var(--stagger-step) * 4); }
+.mobile-list > li:nth-child(6) { animation-delay: calc(var(--stagger-step) * 5); }
+.mobile-list > li:nth-child(7) { animation-delay: calc(var(--stagger-step) * 6); }
+
+/* 快筛胶囊：全圆角、白底、轻阴影 */
+.mobile-quickchip {
+  height: 38px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  box-shadow: var(--card-shadow);
+  transition: transform var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+.mobile-quickchip:active {
+  transform: scale(var(--press-scale));
+}
+
+/* 按压反馈统一：120ms、scale(.97) */
+.mobile-row,
+.mobile-create {
+  transition: transform var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    color 0.3s ease;
+}
+.mobile-row:active,
+.mobile-create:active {
+  transform: scale(var(--press-scale));
+}
+
+/* 工具栏容器：玻璃胶囊（图标本体尺寸/描边/颜色保持现状） */
+#dm-tools {
+  gap: 2px;
+  padding: 3px 5px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-full);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+}
+#dm-tools .dm-tool-btn,
+#dm-model-btn {
+  width: var(--tool-height);
+  height: var(--tool-height);
+  border-radius: var(--radius-full);
+  transition: transform var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
+}
+#dm-tools .dm-tool-btn:active,
+#dm-model-btn:active {
+  background: var(--accent-soft);
+  transform: scale(var(--press-scale));
+}
+
+/* 输入区：玻璃条 + 胶囊输入框 + 柔光阴影 */
+.chat-inputbar {
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
+}
+.chat-input {
+  border-color: var(--glass-border);
+  box-shadow: 0 6px 18px rgba(76, 84, 150, 0.1);
+  transition: border-color var(--duration-base) var(--ease-standard),
+    box-shadow var(--duration-base) var(--ease-standard);
+}
+.chat-input:focus {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 6px 18px rgba(76, 84, 150, 0.12);
+}
+
+/* 命令面板：玻璃遮罩 + 28px 顶部圆角 + 胶囊搜索 + 16px 行 */
+.dm-cmd-backdrop {
+  background: color-mix(in srgb, var(--backdrop) 82%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.dm-cmd-sheet {
+  border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
+  background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+  -webkit-backdrop-filter: saturate(1.3) blur(20px);
+  backdrop-filter: saturate(1.3) blur(20px);
+  box-shadow: var(--shadow-lg);
+}
+.dm-cmd-search {
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+}
+.dm-cmd-row {
+  border-radius: var(--radius-menu);
+  transition: transform var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
+}
+.dm-cmd-row:active {
+  background: var(--accent-soft);
+  transform: scale(var(--press-scale));
 }
 `;
