@@ -133,8 +133,8 @@ const MOBILE_SEARCH_ALL_METHOD = 'mobile.searchAll'
  * so the badge never queries faster than the roster refresh.
  */
 const MOBILE_RUNNING_SESSIONS_METHOD = 'mobile.runningSessions'
-/** The published package the About sheet checks against. */
-const PACKAGE_NAME = '@eternalloveone/dsh-palm'
+/** The published package the About sheet checks against (our own package). */
+const PACKAGE_NAME = 'dsh-mobile'
 /**
  * The host-side fallback transcription service (dsh-palm.yaml `transcribe:`),
  * returned so the phone can import it into its own service list. The phone

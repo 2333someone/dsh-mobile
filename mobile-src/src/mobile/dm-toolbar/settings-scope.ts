@@ -14,7 +14,8 @@
 // 2) 「用量」不再单独成组、不再自动展开成余额卡：改成一行的入口（放在
 //    「主机配置」组里，与「模型」并列），右侧显示当前余额，点开是我们自绘的
 //    用量详情页（dm-page 壳 + 刷新），数据仍来自宿主 RPC mobile.usage。
-// 3) 「关于」页清空项目介绍（保留版本号、检查更新、依赖自检）；
+// 3) 「关于」页的名称/版本/更新源自 v0.1.0 起由 bundle 自己渲染（版本取根
+//    package.json，检查更新走宿主 config.updateUrl），这里不再做 DOM 改写。
 //    「反馈与建议」不再指向别人的仓库：地址改由插件 config.githubUrl 提供，
 //    未配置时只 toast「GitHub 地址待填写」，点击不会打开任何链接。
 export const SETTINGS_SCOPE_HTML = `<script>
@@ -131,41 +132,6 @@ export const SETTINGS_SCOPE_HTML = `<script>
       var badge = makeBadge('desktop');
       if (name && name.parentNode === head && name.nextSibling) head.insertBefore(badge, name.nextSibling);
       else head.appendChild(badge);
-    }
-
-    // ── 「关于」页：清空项目介绍，只保留版本号 ─────────────────────────────
-    // bundle 里那段是：「掌上 DSH（dsh-palm）· 版本 X」 + <br> + 「DSH 移动端界面：…」。
-    // 用户要求清空项目介绍、保留版本号与「检查更新 / 依赖自检」。
-    // 做法：整段 <p> 隐藏（不动 React 管理的文本节点，避免卸载时 removeChild 报错），
-    // 在它前面插一行只含版本号的 <p class="sheet-confirm-desc">。
-    function cleanAbout() {
-      var sheets = document.querySelectorAll('.sheet[aria-label="关于"]');
-      for (var i = 0; i < sheets.length; i++) {
-        var body = sheets[i].querySelector('.sheet-body');
-        if (!body) continue;
-        // 已经插过版本行就跳过（否则会在自己的节点上反复处理，越插越多）
-        if (body.querySelector('[data-dm-about-line]')) continue;
-        var candidates = body.querySelectorAll('.sheet-confirm-desc');
-        for (var j = 0; j < candidates.length; j++) {
-          var p = candidates[j];
-          if (p.hasAttribute('data-dm-about') || p.hasAttribute('data-dm-about-line')) continue;
-          if ((p.textContent || '').indexOf('掌上 DSH') < 0) continue;
-          var version = '';
-          for (var n = p.firstChild; n; n = n.nextSibling) {
-            if (n.nodeName === 'BR') break;
-            version += n.textContent || '';
-          }
-          version = version.replace(/\s+$/, '');
-          p.setAttribute('data-dm-about', '1');
-          p.style.display = 'none';
-          var line = document.createElement('p');
-          line.className = 'sheet-confirm-desc dm-about-line';
-          line.setAttribute('data-dm-about-line', '1');
-          line.textContent = version;
-          body.insertBefore(line, p);
-          break;
-        }
-      }
     }
 
     // ── 「反馈与建议」：清空指向别人仓库的那句，地址改由插件 config.githubUrl 提供 ──
@@ -467,7 +433,6 @@ export const SETTINGS_SCOPE_HTML = `<script>
       var rows = document.querySelectorAll('.settings-row, .mobile-row');
       for (var i = 0; i < rows.length; i++) applyRow(rows[i]);
       applyUsageCard();
-      cleanAbout();
       loadGithubUrl();
       paintFeedback();
       ensureUsageRow();

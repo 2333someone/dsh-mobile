@@ -18,18 +18,21 @@ const here = dirname(fileURLToPath(import.meta.url))
 const outfile = join(here, '..', 'assets', 'mobile.bundle.js')
 const started = Date.now()
 
-// 源码里 `import pkg from '../../../package.json'` 只用到 pkg.version。
+// 源码里 `import pkg from '../../../../package.json'` 只用到 pkg.version。
+// 版本唯一真值是**仓库根** package.json（插件自身版本）；mobile-src/package.json
+// 那份 1.6.0 只是 vendored 的 dsh-palm 上游版本号，不参与「关于」显示。
 // 上游（rollup/rolldown + json 插件）会把整个 JSON 裁成只用到的字段；esbuild 没有
 // 字段级 tree-shaking，会把 name/description/devDependencies 一起内联进 bundle。
-// 这个 onLoad 把本目录的 package.json 换成只含 version 的最小 JSON：
-//   · 产物与上游一致（只有 `1.6.0` 一个常量，不带本仓库的包名/依赖清单）；
+// 这个 onLoad 把根 package.json 换成只含 version 的最小 JSON：
+//   · 产物只带一个版本常量，不带本仓库的包名/依赖清单；
 //   · 源码保持原样（不为了构建改业务文件）。
 // node_modules 里的 package.json 不匹配这个绝对路径过滤，照常解析。
-const pkgVersion = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8')).version
+const rootPkg = join(here, '..', 'package.json')
+const pkgVersion = JSON.parse(readFileSync(rootPkg, 'utf8')).version
 const pinPkgVersion = {
   name: 'pin-pkg-version',
   setup(builder) {
-    const filter = new RegExp(`${join(here, 'package.json').replace(/\\/g, '\\\\')}$`)
+    const filter = new RegExp(`${rootPkg.replace(/\\/g, '\\\\')}$`)
     builder.onLoad({ filter }, () => ({
       contents: JSON.stringify({ version: pkgVersion }),
       loader: 'json',

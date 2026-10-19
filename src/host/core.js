@@ -24,7 +24,7 @@ import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:z
 import { textOfEventData, muxLineOf, queueItemView, createMuxRuntime } from './sse.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
-import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR } from './config.js'
+import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
 import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuffer, readBody, readJsonBody, parseCookies, isLoopback, lanIPv4Addresses } from './http.js'
 
@@ -1017,6 +1017,10 @@ export function createHost(ctx, config) {
     // 默认空 = 还没填自己的仓库：手机端 desc 清空、点击只 toast「GitHub 地址待填写」，
     // 绝不回落到别人的仓库（bundle 里写死的 dsh-palm 链接由注入脚本拦掉）。
     githubUrl: '',
+    // 「设置 → 通用 → 关于 → 检查更新」的更新源（自有仓库/对象存储的 JSON）。
+    // 默认空 = 尚未配置：手机端只提示「尚未配置更新源」，不报错也不假装成功。
+    // 配成任意可 GET 的 URL，返回 { "version": "x.y.z", "url": "下载/发布页" }。
+    updateUrl: '',
     transcribeServices: [],
     // 手机端模型列表里隐藏的老模型（DeepSeek v3.x / R1 与旧混元）；可在配置里覆盖。
     hiddenModels: [
@@ -1748,10 +1752,11 @@ export function createHost(ctx, config) {
   /**
    * 手机端读设置用：把当前发送模式 + 反馈 GitHub 地址随启动探针一起下发。
    * githubUrl 为空串表示还没配置：设置页「反馈与建议」会清空描述并在点击时只 toast。
+   * version 是插件自身版本（根 package.json），「关于」页显示与更新比对共用。
    */
   function sendModeView() {
     const url = typeof cfg.githubUrl === 'string' ? cfg.githubUrl.trim() : ''
-    return { sendMode, mobileEnterToSend: true, githubUrl: url }
+    return { sendMode, mobileEnterToSend: true, githubUrl: url, version: PLUGIN_VERSION }
   }
 
   /**
@@ -4702,9 +4707,37 @@ export function createHost(ctx, config) {
         }
         return { ok: false, error: { code: 'bad-request', message: '缺少 approvalId 或 answer' } }
       }
-      // ── 诊断 ──
+      // ── 「关于 → 检查更新」：只用我们自己的更新源，不再查上游 npm 包 ──
+      // 更新源 = 插件 config.updateUrl（默认空）。语义：
+      //   未配置 → configured:false（前端提示「尚未配置更新源」，不报错、不假装成功）；
+      //   已配置 → 宿主 GET 该 URL（浏览器直连会撞 CORS），解析 {version,url} 后
+      //            与 PLUGIN_VERSION 比对，返回 isNewer。
+      // 请求失败照常返回 ok:false，前端显示「检查失败」，不会把失败说成「已是最新」。
       case 'mobile.latestVersion': {
-        return { ok: true, value: { latest: '0.1.0', isNewer: false } }
+        const current = PLUGIN_VERSION
+        const updateUrl = typeof cfg.updateUrl === 'string' ? cfg.updateUrl.trim() : ''
+        if (updateUrl === '') {
+          return { ok: true, value: { configured: false, current, latest: '', url: '', isNewer: false } }
+        }
+        try {
+          const response = await fetch(updateUrl, {
+            signal: AbortSignal.timeout(UPDATE_FETCH_TIMEOUT_MS),
+            headers: { accept: 'application/json' },
+          })
+          if (!response.ok) throw new Error(`更新源返回 HTTP ${String(response.status)}`)
+          const body = await response.json()
+          const latest = body && typeof body.version === 'string' ? body.version.trim() : ''
+          if (latest === '') throw new Error('更新源缺少 version 字段')
+          const url = body && typeof body.url === 'string' ? body.url.trim() : ''
+          return {
+            ok: true,
+            value: { configured: true, current, latest, url, isNewer: compareVersions(latest, current) > 0 },
+          }
+        } catch (err) {
+          const message = err && err.message ? err.message : String(err)
+          console.error('[dsh-mobile] update check failed:', message)
+          return { ok: false, error: { code: 'update-check-failed', message } }
+        }
       }
       // ── 用量 / 套餐与配额：只报 DeepSeek 官方余额 ────────────────────────
       // 数据一律在宿主进程内取：优先平台登录态（不需要 API Key），取不到再回退到

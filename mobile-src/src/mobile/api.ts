@@ -181,9 +181,23 @@ export async function notifyEvents(): Promise<{ items: NotifyEventView[] }> {
   return await callUnary<{ items: NotifyEventView[] }>('mobile.notifyEvents', {})
 }
 
-/** The published latest version + whether the local one is behind. */
-export async function latestVersion(): Promise<{ latest: string; isNewer: boolean }> {
-  return await callUnary<{ latest: string; isNewer: boolean }>('mobile.latestVersion', {})
+/** 「关于 → 检查更新」：宿主拿插件 config.updateUrl 查自有更新源的结果。 */
+export interface UpdateCheckView {
+  /** 是否配置了更新源；false 时 latest/url 为空，前端只提示「尚未配置更新源」。 */
+  configured: boolean
+  /** 当前插件版本（根 package.json）。 */
+  current: string
+  /** 更新源返回的最新版本（configured=false 时为空串）。 */
+  latest: string
+  /** 更新源附带的发布/下载页（可为空串）。 */
+  url: string
+  /** latest 是否比 current 新。 */
+  isNewer: boolean
+}
+
+/** 查自有更新源：未配置不报错，配置了才真的去 GET。 */
+export async function checkUpdate(): Promise<UpdateCheckView> {
+  return await callUnary<UpdateCheckView>('mobile.latestVersion', {})
 }
 
 /**

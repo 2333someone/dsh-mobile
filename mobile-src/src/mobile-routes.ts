@@ -220,7 +220,7 @@ export function makeMobileRoutes(): WebRoute[] {
   const handlePage = async (_req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const bundle = await ensureBundle()
     if (bundle === undefined) {
-      writeStatic(res, 503, 'text/plain', 'mobile bundle not built: run pnpm --filter @eternalloveone/dsh-palm build')
+      writeStatic(res, 503, 'text/plain', 'mobile bundle not built: run pnpm --filter dsh-mobile build')
       return
     }
     writeStatic(res, 200, 'text/html', pageHtml(MOBILE_BUNDLE_URL + '?v=' + bundle.hash))
@@ -235,7 +235,7 @@ export function makeMobileRoutes(): WebRoute[] {
   const handleBundle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const bundle = await ensureBundle()
     if (bundle === undefined) {
-      writeStatic(res, 503, 'text/plain', 'mobile bundle not built: run pnpm --filter @eternalloveone/dsh-palm build')
+      writeStatic(res, 503, 'text/plain', 'mobile bundle not built: run pnpm --filter dsh-mobile build')
       return
     }
     // Local patch (2026-08-23): compress the mobile bundle so phones on weak

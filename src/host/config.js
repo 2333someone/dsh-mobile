@@ -4,6 +4,41 @@
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+
+// ── 插件自身版本 + 更新源 ───────────────────────────────────────────────────
+// 版本唯一真值 = **根** package.json（不是 mobile-src/package.json 里那份
+// vendored dsh-palm 的 1.6.0）。手机端「关于」显示、构建期 pin、更新比对都用它。
+export const PLUGIN_VERSION = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+).version
+// 「检查更新」由宿主 GET config.updateUrl（手机浏览器直连第三方更新源会撞
+// CORS，所以请求必须在宿主进程里发）。超时短一点：设置页只等一次点击。
+export const UPDATE_FETCH_TIMEOUT_MS = 10 * 1000
+
+/**
+ * 版本比较：按点分数字段逐段比，忽略前缀 v 与预发布/构建后缀。
+ * 返回 >0 表示 a 比 b 新，0 表示相同，<0 表示更旧。
+ */
+export function compareVersions(a, b) {
+  const parse = (text) => String(text ?? '')
+    .trim()
+    .replace(/^v/i, '')
+    .split('-')[0]
+    .split('.')
+    .map((part) => {
+      const n = Number.parseInt(part, 10)
+      return Number.isFinite(n) ? n : 0
+    })
+  const left = parse(a)
+  const right = parse(b)
+  const length = Math.max(left.length, right.length)
+  for (let i = 0; i < length; i++) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
 
 export const USAGE_CACHE_TTL_MS = 60 * 1000
 export const BALANCE_FETCH_TIMEOUT_MS = 20 * 1000

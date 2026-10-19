@@ -15,9 +15,9 @@ describe('fetchLatestVersion', () => {
       json: async () => ({ version: '0.7.3' }),
     } as unknown as Response)
     vi.stubGlobal('fetch', fetchMock)
-    expect(await fetchLatestVersion('@eternalloveone/dsh-palm')).toBe('0.7.3')
+    expect(await fetchLatestVersion('dsh-mobile')).toBe('0.7.3')
     const [url, init] = fetchMock.mock.calls[0]!
-    expect(String(url)).toBe('https://registry.npmjs.org/@eternalloveone%2Fdsh-palm/latest')
+    expect(String(url)).toBe('https://registry.npmjs.org/dsh-mobile/latest')
     expect((init as { headers: Record<string, string> }).headers.accept).toBe('application/json')
   })
 

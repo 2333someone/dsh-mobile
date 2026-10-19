@@ -11,8 +11,8 @@
 
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { SettingsNamespaceView } from '../../api-proxy-types'
-import pkg from '../../../package.json'
-import { fetchUsage, latestVersion, listDevices, mutateSettings, notifyEvents, readDiagnostics, readNotifyConfig, readSettings, renameDevice, revokeDevice, setPrimaryDevice, testNotifyChannels, writeNotifyConfig, type DependencyCheckView, type NotifyEventView, type PairedDeviceView, type UsageProviderView, type UsageView } from '../api.ts'
+import pkg from '../../../../package.json'
+import { checkUpdate, fetchUsage, listDevices, mutateSettings, notifyEvents, readDiagnostics, readNotifyConfig, readSettings, renameDevice, revokeDevice, setPrimaryDevice, testNotifyChannels, writeNotifyConfig, type DependencyCheckView, type NotifyEventView, type PairedDeviceView, type UsageProviderView, type UsageView } from '../api.ts'
 import { errorText } from './App.tsx'
 import { notificationPermission, notificationSupported, requestNotificationPermission, startNotify, webPushState, enableWebPush, disableWebPush, webPushSupported } from '../notify.ts'
 import { getMobileThemeMode, setMobileThemeMode, subscribeMobileTheme, type MobileThemeMode } from '../mobile-theme.ts'
@@ -92,8 +92,8 @@ const SETTINGS_GROUPS: Array<{ id: string; title: string; namespaces: string[] }
   { id: 'presets', title: 'Agent 预设', namespaces: ['agent-presets'] },
 ]
 
-/** One searchable sub-configuration entry: lives INSIDE the notify / voice
- *  sub-pages, which the main-page keyword filter cannot reach. Tapping a
+/** One searchable sub-configuration entry: lives INSIDE the notification
+ *  sub-page, which the main-page keyword filter cannot reach. Tapping a
  *  search hit opens the owning sub-page and scrolls the entry into view
  *  with a one-shot pulse (data-locate-id anchor on the rendered entry). */
 interface SettingsIndexEntry {
@@ -819,14 +819,25 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
   }
 
-  /** About sheet: compare the published npm version with the local one. */
+  /**
+   * About sheet: ask the host to check OUR update source (plugin config
+   * `updateUrl`). Unconfigured is a normal state — say so plainly instead of
+   * erroring or pretending we are up to date. The host does the HTTP GET so
+   * the check never depends on the update server's CORS headers.
+   */
   const handleVersionCheck = async (): Promise<void> => {
     setVersionBusy(true)
     try {
-      const { latest, isNewer } = await latestVersion()
-      setVersionStatus(isNewer
-        ? `发现新版本 ${latest} —— 可在桌面端 dsh 升级插件`
-        : `已是最新版本（${pkg.version}）`)
+      const result = await checkUpdate()
+      if (!result.configured) {
+        setVersionStatus('尚未配置更新源')
+      } else if (result.isNewer) {
+        setVersionStatus(result.url === ''
+          ? `有新版本 ${result.latest}（当前 ${result.current}）`
+          : `有新版本 ${result.latest}（当前 ${result.current}）· ${result.url}`)
+      } else {
+        setVersionStatus(`已是最新版本（${result.current}）`)
+      }
     } catch {
       setVersionStatus('检查失败，请稍后重试')
     } finally {
@@ -1332,7 +1343,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
         {indexHits.length > 0 && (
           <ul className="settings-group">
-            <li className="settings-groupTitle">配置项 <span className="settings-groupDesc">通知 / 语音页内</span></li>
+            <li className="settings-groupTitle">配置项 <span className="settings-groupDesc">通知页内</span></li>
             {indexHits.map(item => (
               <li key={item.id}>
                 <button
@@ -1564,7 +1575,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             <SettingsRow
               icon={<InfoIcon />}
               title="关于"
-              desc={`掌上 DSH · 版本 ${pkg.version}${BUILD_HASH === undefined ? '' : ` · 构建 ${BUILD_HASH}`}`}
+              desc={`掌上 DSH · dsh-mobile · 版本 ${pkg.version}${BUILD_HASH === undefined ? '' : ` · 构建 ${BUILD_HASH}`}`}
               action={<RowChevron />}
               onClick={() => { setSheet('about') }}
             />
@@ -1627,9 +1638,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       {sheet === 'about' && (
         <Sheet title="关于" onClose={() => { setSheet(null) }}>
           <p className="sheet-confirm-desc">
-            掌上 DSH（dsh-palm）· 版本 {pkg.version}
+            掌上 DSH · dsh-mobile
             <br />
-            DSH 移动端界面：扫码配对、工作区、会话与实时对话。
+            版本 {pkg.version}
+            {BUILD_HASH === undefined ? '' : ` · 构建 ${BUILD_HASH}`}
           </p>
           <div className="sheet-confirm-actions">
             <button
