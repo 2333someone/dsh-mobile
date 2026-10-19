@@ -3058,6 +3058,19 @@ html.dm-host-page-open body {
   line-height: 22px !important;
 }
 
+/* 输入栏里的 40px 发送/停止按钮原来按 flex-end 与 46px 输入框底边对齐，
+   于是按钮中心比输入框中心低 3px —— 视觉上文字就显得「偏高」。
+   改成居中对齐后，文字、胶囊、按钮共用同一条水平中线。
+   注：文字本身的毫米级偏差由 INPUT_TEXT_CENTER_HTML 按实际字体墨迹自适应修正。 */
+.chat-inputbar {
+  align-items: center !important;
+}
+/* 发送按钮自身带 align-self:flex-end，会抵消上面的 align-items，单独压一条。 */
+.chat-inputbar .chat-send,
+.chat-inputbar .chat-send-stop {
+  align-self: center !important;
+}
+
 /* ── 会话行「删除」：横向胶囊、内缩、藏在行下面 ───────────────────────────
    bundle 的 .mobile-row-swipe-action 是 top/bottom/right 全贴边的直角红块（80px），
    .mobile-row-swipe 虽然 overflow:hidden，但卡片自身圆角被归零，滑开时红色会

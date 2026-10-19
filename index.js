@@ -5469,6 +5469,172 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
 </script>`
 
 /**
+ * 聊天输入框：单行文字按「实际字体墨迹中心」垂直居中。
+ *
+ * 问题：`.chat-input` 是 <textarea>，单行时文字位置由「行盒 + 字体度量」决定。
+ * 原来写死 padding-top/bottom 11px + line-height 22px（几何上正好 46px），
+ * 但不同机型/字体下 CJK 墨迹在行盒里的位置并不对称，用户仍看到「文字偏上」，
+ * 而且偏多少随字体变化，写死像素调不准。
+ *
+ * 做法（与 ICON_OPTICAL_ALIGN 同一套思路，不猜、不硬编码）：
+ *   1. 用 canvas 以输入框的真实 font 画出占位文本，逐像素扫出墨迹上下边界，
+ *      得到「墨迹中心相对基线」的偏移 inkRel；
+ *   2. 用同字体/同行高的隐藏探针量出「基线相对内容盒顶部」的位置 baseline；
+ *   3. 于是墨迹中心相对内容盒顶部 = baseline + inkRel；
+ *   4. 反解 padding：让墨迹中心落在盒子垂直中线上，padding-bottom 取剩余高度。
+ * 只在**单行**时接管；一旦换行（多行输入）就把内联 padding 撤掉，回落到
+ * CSS 的 11/11 对称值，避免多行时上紧下松。
+ *
+ * 兼容性：measureText / getImageData 不可用时直接放弃（保持 CSS 原值），
+ * 不抛错、不影响输入。字体加载完成后再重量一次（首帧可能是回退字体）。
+ */
+const INPUT_TEXT_CENTER_HTML = `<script>
+(function () {
+  try {
+    if (window.__dmInputCenter) return;
+    window.__dmInputCenter = true;
+
+    var inkCache = {};
+    var lastKey = '';
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext ? canvas.getContext('2d') : null;
+
+    function inkCenterFromBaseline(font, text, fontSize) {
+      if (!ctx) return null;
+      var key = font + '|' + text;
+      if (Object.prototype.hasOwnProperty.call(inkCache, key)) return inkCache[key];
+      var pad = Math.ceil(fontSize * 3);
+      ctx.font = font;
+      var m;
+      try { m = ctx.measureText(text); } catch (e) { inkCache[key] = null; return null; }
+      var w = Math.ceil(m.width) + pad * 2;
+      var h = Math.ceil(fontSize * 5) + pad * 2;
+      if (!(w > 0) || !(h > 0) || w > 4096) { inkCache[key] = null; return null; }
+      canvas.width = w;
+      canvas.height = h;
+      ctx.font = font;
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#000';
+      var baselineY = pad + fontSize * 2;
+      try { ctx.fillText(text, pad, baselineY); } catch (e) { inkCache[key] = null; return null; }
+      var data;
+      try { data = ctx.getImageData(0, 0, w, h).data; } catch (e) { inkCache[key] = null; return null; }
+      var top = -1;
+      var bottom = -1;
+      for (var y = 0; y < h; y++) {
+        var has = false;
+        for (var x = 0; x < w; x++) {
+          if (data[(y * w + x) * 4 + 3] > 24) { has = true; break; }
+        }
+        if (has) { if (top < 0) top = y; bottom = y; }
+      }
+      var out = top < 0 ? null : ((top + bottom) / 2 - baselineY);
+      inkCache[key] = out;
+      return out;
+    }
+
+    function baselineInLineBox(el, sample, lineHeight) {
+      var cs = window.getComputedStyle(el);
+      var box = document.createElement('div');
+      box.setAttribute('aria-hidden', 'true');
+      box.style.cssText = 'position:fixed;left:-9999px;top:0;visibility:hidden;pointer-events:none;' +
+        'margin:0;padding:0;border:0;white-space:pre;' +
+        'font:' + cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + '/' + lineHeight + 'px ' + cs.fontFamily + ';' +
+        'line-height:' + lineHeight + 'px';
+      box.textContent = sample;
+      var probe = document.createElement('span');
+      probe.style.cssText = 'display:inline-block;width:0;height:0;overflow:hidden;vertical-align:baseline';
+      box.appendChild(probe);
+      document.body.appendChild(box);
+      var b = box.getBoundingClientRect();
+      var p = probe.getBoundingClientRect();
+      document.body.removeChild(box);
+      if (!(b.height > 0)) return null;
+      return p.bottom - b.top;
+    }
+
+    function clearInline(el) {
+      if (!el.__dmInputCentered) return;
+      try {
+        el.style.removeProperty('padding-top');
+        el.style.removeProperty('padding-bottom');
+      } catch (e) {}
+      el.__dmInputCentered = false;
+    }
+
+    function apply() {
+      var el = document.querySelector('.chat-input');
+      if (!el || el.nodeType !== 1) return;
+      var cs = window.getComputedStyle(el);
+      var fontSize = parseFloat(cs.fontSize) || 16;
+      var lineHeight = parseFloat(cs.lineHeight);
+      if (!(lineHeight > 0)) lineHeight = fontSize * 1.4;
+
+      // 只在单行时接管：有换行、或内容高度已超出可视高度 → 撤掉内联值
+      var multiline = String(el.value || '').indexOf('\\n') >= 0 || el.scrollHeight > el.clientHeight + 1;
+      if (multiline) { clearInline(el); lastKey = ''; return; }
+
+      var sample = (el.getAttribute('placeholder') || '').trim() || '\\u8bf4\\u70b9\\u4ec0\\u4e48';
+      var font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      var height = el.getBoundingClientRect().height || el.offsetHeight;
+      if (!(height > 0)) return;
+
+      var key = [font, sample, lineHeight, height, cs.borderTopWidth, cs.borderBottomWidth].join('|');
+      if (key === lastKey) return;
+
+      var inkRel = inkCenterFromBaseline(font, sample, fontSize);
+      if (inkRel === null) return;
+      var baseline = baselineInLineBox(el, sample, lineHeight);
+      if (baseline === null) return;
+
+      var btop = parseFloat(cs.borderTopWidth) || 0;
+      var bbot = parseFloat(cs.borderBottomWidth) || 0;
+      var inkCenter = baseline + inkRel;                 // 墨迹中心 → 相对内容盒顶部
+      var pt = height / 2 - btop - inkCenter;            // 让墨迹中心落在盒子中线
+      var pb = height - btop - bbot - lineHeight - pt;
+      if (!isFinite(pt) || !isFinite(pb)) return;
+      if (pt < 0 || pb < 0 || pt > 30 || pb > 30) return;
+
+      var vt = (Math.round(pt * 100) / 100) + 'px';
+      var vb = (Math.round(pb * 100) / 100) + 'px';
+      try {
+        el.style.setProperty('padding-top', vt, 'important');
+        el.style.setProperty('padding-bottom', vb, 'important');
+      } catch (e) { return; }
+      el.__dmInputCentered = true;
+      el.setAttribute('data-dm-input-centered', '1');
+      lastKey = key;
+    }
+
+    var queued = false;
+    function schedule() {
+      if (queued) return;
+      queued = true;
+      var run = function () {
+        queued = false;
+        try { apply(); } catch (e) {}
+      };
+      if (window.requestAnimationFrame) window.requestAnimationFrame(run);
+      else window.setTimeout(run, 0);
+    }
+
+    if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
+      document.fonts.ready.then(function () {
+        lastKey = '';
+        schedule();
+      }).catch(function () {});
+    }
+    window.addEventListener('resize', function () { lastKey = ''; schedule(); }, true);
+    document.addEventListener('DOMContentLoaded', schedule);
+    // 轮询而不是全量 MutationObserver：流式输出时 DOM 每秒变几十次，
+    // 全量观察会让这里反复重算 canvas；600ms 一次足够，且 key 不变时直接返回。
+    setInterval(schedule, 600);
+    schedule();
+  } catch (e) {}
+})();
+</script>`
+
+/**
  * 设置页「用量」：直接平铺，不需要先点开再点收起。
  *
  * bundle 的这块是折叠式的：
@@ -9698,6 +9864,7 @@ function mobilePageHtml() {
     CHAT_AUTOSCROLL_HTML,
     LOAD_OLDER_ALIGN_HTML,
     ICON_OPTICAL_ALIGN_HTML,
+    INPUT_TEXT_CENTER_HTML,
     USAGE_INLINE_HTML,
     HOST_PAGES_HTML,
     PENDING_ALERTS_HTML,
