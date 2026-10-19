@@ -1,10 +1,7 @@
 /**
- * 迁移 C：行为补丁的安装器。
- *
- * 这些补丁以前是宿主 index.js 的 `*_HTML` 注入字符串；现在源码在 dm-patches/，
- * 由 bundle 启动时按原注入顺序安装（<template> 解析 → 节点挂 body → 重建
- * <script> 同步执行）。需要更早执行的基础设施（ONLINE_GUARD / MUTATION_BUS /
- * VIEWPORT_VH）仍留在 HTML 里注入，不在这里。
+ * 迁移 C：行为补丁的安装器（见各模块头注释）。
+ * 需要早于 bundle 的基础设施（ONLINE_GUARD / MUTATION_BUS / VIEWPORT_VH）仍在
+ * HTML 里注入；其余由这里在 bundle 启动时按原顺序安装。
  */
 import { SEND_DECODE_GUARD_HTML } from './send-decode-guard.ts'
 import { SHEET_CLOSE_HTML } from './sheet-close.ts'
@@ -15,6 +12,7 @@ import { SEND_MODE_SETTINGS_HTML } from './send-mode-settings.ts'
 import { DEVICE_INFO_HTML } from './device-info.ts'
 import { NOTIFY_LAYOUT_HTML } from './notify-layout.ts'
 import { ADD_SHEET_FILTER_HTML } from './add-sheet-filter.ts'
+import { IMAGE_PREVIEW_HTML } from './image-preview.ts'
 import { CHAT_AUTOSCROLL_HTML } from './chat-autoscroll.ts'
 import { LOAD_OLDER_ALIGN_HTML } from './load-older-align.ts'
 
@@ -28,13 +26,13 @@ const PATCH_ORDER: readonly string[] = [
   DEVICE_INFO_HTML,
   NOTIFY_LAYOUT_HTML,
   ADD_SHEET_FILTER_HTML,
+  IMAGE_PREVIEW_HTML,
   CHAT_AUTOSCROLL_HTML,
   LOAD_OLDER_ALIGN_HTML
 ]
 
 let installed = false
 
-/** 把已搬迁的行为补丁按原顺序挂到 document 上（幂等）。 */
 export function installDmPatches(): void {
   if (installed || typeof document === 'undefined') return
   installed = true
