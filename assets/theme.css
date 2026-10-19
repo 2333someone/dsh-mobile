@@ -3367,3 +3367,12 @@ img.chat-msg-image {
   line-height: 1;
   color: var(--text-quaternary, #9a9aaa);
 }
+
+/* ── 列表行右侧：「N 会话」胶囊与「›」箭头按墨迹中心对齐 ──────────────────
+   用户反馈两者「不在同一中线」。实测（390/320，2x 截图取字形墨迹）：
+   胶囊文字墨迹中心 = 行中心 +0.4px，而 `›` 字形墨迹中心 = 行中心 +3.2px
+   （字体基线导致字形整体偏下）。这里把箭头按墨迹差上移 2.8px，盒子高度、
+   行高 72 与整行布局都不变。折叠进 mobile-styles 时可保留同一数值。 */
+.mobile-row .mobile-chevron {
+  transform: translateY(-2.8px);
+}
