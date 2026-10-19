@@ -9,11 +9,13 @@
  * 安装方式与 A 批一致：<template> 解析 → 节点按序挂 <body> → 重建 <script>
  * 同步执行；只做搬家，不改页面行为与视觉。
  */
+import { MODEL_BUTTON_HTML } from './model-button.ts'
 import { TURN_PILL_HTML } from './turn-pill.ts'
 import { QUEUE_DOCK_PLACE_HTML } from './queue-dock-place.ts'
 import { USAGE_INLINE_HTML } from './usage-inline.ts'
 
 const TOOLBAR_ORDER: readonly string[] = [
+  MODEL_BUTTON_HTML,
   TURN_PILL_HTML,
   QUEUE_DOCK_PLACE_HTML,
   USAGE_INLINE_HTML
