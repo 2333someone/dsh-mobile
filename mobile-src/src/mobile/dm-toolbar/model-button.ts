@@ -203,6 +203,34 @@ export const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-l
     openCtxPanel();
   }, true);
 
+  // 「/」命令按钮与其余控件**同帧**出现：command-panel 的 ensure 由统一 tick 驱动，
+  // 而它注册得比本脚本早 —— 进聊天页的那次唤醒里它先跑（那时 #dm-tools 还没建），
+  // 只能等 600ms 的普通总线切片再补进来（实测 / = 683ms，其余控件 = 16ms）。
+  // 行是本脚本建的，所以在「React 把 .chat-tools 提交进 DOM」的微任务阶段先把行建好，
+  // 再同步唤醒一次 tick：/ 的 ensure 这一轮就能看到行，和其它控件一起在首帧前落位
+  // （实测最大最小差 ≤2ms）。观察器只在「行不存在且 .chat-tools 存在」时干活，其余
+  // 情况一次 getElementById 就返回。
+  function adoptBeforeFirstPaint() {
+    try {
+      if (document.getElementById('dm-tools')) return;
+      if (!document.querySelector('.chat-tools')) return;
+      ensureTools();
+      var row = document.getElementById('dm-tools');
+      if (!row) return;
+      var tick = window.__dmEnsureTick;
+      if (tick && typeof tick.wake === 'function') tick.wake();
+      // / 的 ensure 在本轮唤醒里先于其它「按锚点自我排序」的控件跑，会落在行中段；
+      // 这里补到最后，保持原有顺序（…权限 / 铃铛 / 子代理 / 命令）。
+      var cmd = document.getElementById('dm-cmd-btn');
+      if (cmd && cmd.parentNode === row) row.appendChild(cmd);
+    } catch (e) {}
+  }
+  try {
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(adoptBeforeFirstPaint).observe(document.documentElement, { childList: true, subtree: true });
+    }
+  } catch (e) {}
+
   if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensureTools, 240, function () { return !!document.querySelector('.chat-composer'); }); else setInterval(ensureTools, 240);
   ensureTools();
 })();

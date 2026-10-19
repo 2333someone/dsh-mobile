@@ -356,6 +356,10 @@ export const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" t
       mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
     }
   } catch (e) {}
+  // 与其它工具行控件共用同一条 ensure tick：进聊天页时 tick 会被同步唤醒，
+  // 模式按钮因此和 / 命令、权限等一起在首帧前落位。只靠这一条 300ms 网格的话，
+  // 实测会晚 0–300ms（用户能看到「其它图标先出、模式按钮后到」）。
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensure, 300, function () { return !!document.querySelector('.chat-composer'); });
   setInterval(ensure, 300);
   ensure();
 })();
