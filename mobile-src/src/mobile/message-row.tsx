@@ -11,7 +11,42 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { formatTime } from './views/App.tsx'
 import type { MessageImage, RenderMessage, ToolCallInfo, ToolDiffView } from './messages.ts'
-import { triggerEmojiOf, triggerTitleOf } from './messages.ts'
+import { triggerTitleOf } from './messages.ts'
+
+/**
+ * 两种卡片头左侧图形的**唯一来源**（「收到任务消息」卡 / 过程卡）。
+ *
+ * 以前这里用的是两枚系统 emoji（📨 / ⏳💭），字形来自 emoji 字体：粗细、基线、
+ * 颜色都跟聊天页其它图标对不上（用户原话「风格 图标位置」）。现在统一成同一套
+ * 描边规格：24 视框 / 18px 渲染 / stroke 1.75 / 圆头圆角 / currentColor（颜色由
+ * CSS 的 token 给）。形状本身保持原有的语义（信封 = 收到消息，云朵 = 思考）。
+ */
+function CardGlyph({ shape }: { readonly shape: 'inbox' | 'thinking' }) {
+  return (
+    <svg
+      className="chat-card-glyph"
+      width={18}
+      height={18}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {shape === 'inbox' ? (
+        <>
+          <rect x="3.5" y="5.5" width="17" height="13" rx="2.5" />
+          <path d="M4.2 7.4 12 12.9l7.8-5.5" />
+        </>
+      ) : (
+        <path d="M7.2 18.5h9.6a4.15 4.15 0 0 0 .42-8.28A5.6 5.6 0 0 0 6.5 9.1a4.75 4.75 0 0 0 .7 9.4Z" />
+      )}
+    </svg>
+  )
+}
 import { cachedAttachmentUrl, loadAttachmentUrl } from './attachment-images.ts'
 import { CollapsibleText, MarkdownText } from './markdown-text.tsx'
 import { diffTallyOf, formatDuration, isRowRunning, processErrorsText, processFilesText, processHeadText, processModel, processStateText, processStepsText, processTimeText, toolDiffLines, visibleRowCount, type ProcessModel, type ProcessOutcome, type ProcessReasoningRow } from './process-rows.ts'
@@ -80,7 +115,7 @@ export const MessageRow = memo(function MessageRow({ message, sessionId, showToo
           style={style}
         >
           <summary className="chat-trigger-head">
-            <span className="chat-trigger-icon" aria-hidden>{triggerEmojiOf(message.sourceKind)}</span>
+            <span className="chat-trigger-icon" aria-hidden><CardGlyph shape="inbox" /></span>
             <span className="chat-trigger-title">{triggerTitle}</span>
             {showTime && <span className="chat-trigger-time">{clock}</span>}
             <span className="chat-trigger-caret" aria-hidden>▾</span>
@@ -378,11 +413,15 @@ function ProcessGroup({ message, model, showToolCalls, focusedQuery, sessionId, 
   const stepsText = processStepsText(model, showToolCalls)
   const visibleRows = visibleRowCount(model, showToolCalls)
   // 行首符号（系统 emoji，动作由 CSS 给，结算后动画自动停止）：
-  // 运行中 ⏳ 沙漏 —— 配 .chat-proc-lead-running 的翻转动画（见 mobile-styles.ts）；
+  // 运行中给云朵 SVG（与「收到任务消息」卡同一套描边规格：18px / 1.75 / 圆头）；
   // 结束后**按结果**给符号：成功 ✅ / 失败 ❌ / 中断 ⏹️。此前一律显示 ✓，
   // 失败与中断也挂个对勾，属于误导。
-  const leadIcon = running ? '⏳' : model.outcome === 'failed' ? '❌' : model.outcome === 'stopped' ? '⏹️' : '✅'
-  const lead = <span className={`chat-proc-lead${running ? ' chat-proc-lead-running' : ''}`} aria-hidden>{leadIcon}</span>
+  const leadIcon = model.outcome === 'failed' ? '❌' : model.outcome === 'stopped' ? '⏹️' : '✅'
+  const lead = (
+    <span className={`chat-proc-lead${running ? ' chat-proc-lead-running' : ''}`} aria-hidden>
+      {running ? <CardGlyph shape="thinking" /> : leadIcon}
+    </span>
+  )
   if (visibleRows === 0) {
     return (
       <div className="chat-proc" data-proc-rows="0">

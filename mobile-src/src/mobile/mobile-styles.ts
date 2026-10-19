@@ -3299,33 +3299,23 @@ button.settings-row:focus-visible {
 
 .chat-proc-lead {
   flex: none;
-  /* emoji 与中文行对齐：定宽方形盒 + 双向居中 + line-height:1。emoji 字形的
-     上伸/下伸和中文不一样，不锁盒高就会把这一行顶高、也让符号看起来飘在文字上方。 */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  font-size: 13px;
-  line-height: 1;
-  color: var(--text-quaternary);
+  /* 图形规格由上面的 .chat-trigger-icon/.chat-proc-lead 共用规则给（18px 盒、
+     --text-tertiary、亚像素补偿）；这里只保留 flex 语义。 */
 }
 
+/* 运行中的思考图标是云朵 SVG（不再是 ⏳ emoji），所以原来那套 180° 沙漏翻转
+   动画一并去掉；颜色与静止态一致走 --text-tertiary，靠状态词表达"运行中"。
+   保留一条极轻的透明度呼吸，仍在合成层（opacity），reduced-motion 下关闭。 */
 .chat-proc-lead-running {
-  color: var(--accent);
-  /* 沙漏翻转：45%→55% 之间快速翻 180°，其余时间静置。沙漏上下对称，
-     所以从 180° 直接回到 0° 看不出接缝，像"倒过来接着漏"。纯 CSS 动画走
-     合成层，不做逐帧重渲染 —— 秒表闪烁的教训就是不碰 JS 定时器。
-     盒模型/字号由 .chat-proc-lead 统一给（emoji 必须与 13px 正文同高，别再单独放大）。 */
-  animation: chat-proc-flip 1.6s ease-in-out infinite;
+  color: var(--text-tertiary);
+  animation: chat-proc-breathe 2.4s ease-in-out infinite;
 }
 
-@keyframes chat-proc-flip {
-  0%, 45% { transform: rotate(0deg); }
-  55%, 100% { transform: rotate(180deg); }
+@keyframes chat-proc-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
-/* 系统开"减弱动态效果"时，沙漏静止（仍显示 ⏳，不做任何动作）。 */
 @media (prefers-reduced-motion: reduce) {
   .chat-proc-lead-running { animation: none; }
 }
@@ -3439,6 +3429,34 @@ button.settings-row:focus-visible {
 .chat-trigger-caret {
   flex: none;
   color: var(--text-tertiary);
+}
+/* 两张卡片头左侧图形（message-row.tsx 的 CardGlyph）：同一 18px 盒 + 同一描边，
+   颜色统一走 --text-tertiary。盒内居中后墨迹中心会略高于同排文字（文字有
+   下行空间），这里用 translateY 做亚像素补偿，让图标墨迹中心与首行文字墨迹中心
+   对齐（实测差值见验收打印）。 */
+.chat-trigger-icon,
+.chat-proc-lead {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-tertiary);
+}
+/* 亚像素补偿（按 3x 截图的墨迹重心实测，不是拍脑袋）：两处文字的字号不同
+   （唤醒卡 13px / 过程卡 11px），18px 的 SVG 盒在 flex 里居中后墨迹中心分别
+   比同排文字的墨迹中心高 1.06px / 低 0.69px。只位移图形盒，不改形状与布局。 */
+/* 注意：theme.css「迁移 C 内化」里有一条 .chat-trigger-head .chat-trigger-icon
+   { transform: translateY(-0.6px) }（原来给 emoji 用的光学对齐，选择器权重更高），
+   这里用同权重、但更晚注入的样式表把它覆盖掉：换成 SVG 后实测应再下移 1.06px。 */
+.chat-trigger-head .chat-trigger-icon {
+  transform: translateY(0.46px);
+}
+.chat-proc-lead {
+  transform: translateY(-0.2px);
+}
+.chat-card-glyph {
+  display: block;
 }
 .chat-trigger-title {
   flex: none;
