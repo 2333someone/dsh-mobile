@@ -105,6 +105,64 @@ interface SettingsIndexEntry {
   open: 'notify'
 }
 
+/**
+ * 上一次成功读到的设置快照（模块级，跨「进入/退出设置页」保留）。
+ *
+ * 用户反馈：进入设置页后「主机配置 / 用量」这些异步区先空一下才跳出内容。
+ * 现在进入时先用这份快照同步渲染（与上次完全相同的行数与行高），再后台静默
+ * 刷新；只有真正的首次进入（没有快照）才显示骨架行。
+ */
+interface SettingsSnapshot {
+  namespaces?: SettingsNamespaceView[]
+  notifyConfig?: Awaited<ReturnType<typeof readNotifyConfig>>
+  usage?: UsageView
+  at?: number
+}
+let settingsSnapshot: SettingsSnapshot = {}
+
+/** 记住一次成功读取（只增不清，避免后台刷新失败把已有缓存打空）。 */
+function rememberSettings(patch: Partial<SettingsSnapshot>): void {
+  settingsSnapshot = { ...settingsSnapshot, ...patch, at: Date.now() }
+}
+
+/**
+ * 异步区的骨架行：与真实 `.mobile-row` 同一行高（72px）、同一内边距，
+ * 所以「骨架 → 内容」不会把下面的分组往下推（CLS≈0）。
+ * 只用内联样式，不动全局样式表。
+ */
+function SkeletonRow(): ReactNode {
+  return (
+    <li
+      className="settings-row settings-row-skeleton"
+      aria-hidden
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        minHeight: 72,
+        width: 'calc(100% - 32px)',
+        margin: '0 16px 8px',
+        padding: '0 16px',
+        boxSizing: 'border-box',
+      }}
+    >
+      <span
+        style={{
+          flex: 'none',
+          width: 40,
+          height: 40,
+          borderRadius: 12,
+          background: 'var(--fill, rgba(26, 26, 46, 0.05))',
+        }}
+      />
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <span style={{ height: 12, width: '42%', borderRadius: 6, background: 'var(--fill-strong, rgba(26, 26, 46, 0.09))' }} />
+        <span style={{ height: 10, width: '68%', borderRadius: 5, background: 'var(--fill, rgba(26, 26, 46, 0.05))' }} />
+      </span>
+    </li>
+  )
+}
+
 const SETTINGS_INDEX: SettingsIndexEntry[] = [
   { id: 'notify-browser', label: '浏览器通知（启用）', group: '通知', keywords: ['浏览器通知', '通知权限', 'notify', 'enable'], open: 'notify' },
   { id: 'notify-kinds', label: '通知内容（三类事件开关）', group: '通知', keywords: ['通知内容', '规划完成', '后台任务', '长回复'], open: 'notify' },
@@ -476,7 +534,7 @@ function DeviceManagementView({ onBack }: { onBack(): void }) {
  * @returns the settings page.
  */
 export function SettingsView({ onBack }: SettingsViewProps) {
-  const [namespaces, setNamespaces] = useState<SettingsNamespaceView[] | undefined>(undefined)
+  const [namespaces, setNamespaces] = useState<SettingsNamespaceView[] | undefined>(() => settingsSnapshot.namespaces)
   const [error, setError] = useState<string | undefined>(undefined)
   const [openGroup, setOpenGroup] = useState<string | undefined>(undefined)
   const [marketOpen, setMarketOpen] = useState(false)
@@ -495,7 +553,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [deviceOpen, setDeviceOpen] = useState(false)
   // Completion notifications: browser permission + server-side thresholds.
   const [notifyPermission, setNotifyPermission] = useState<NotificationPermission | 'unsupported'>(() => notificationPermission())
-  const [notifyConfig, setNotifyConfig] = useState<Awaited<ReturnType<typeof readNotifyConfig>> | undefined>(undefined)
+  const [notifyConfig, setNotifyConfig] = useState<Awaited<ReturnType<typeof readNotifyConfig>> | undefined>(() => settingsSnapshot.notifyConfig)
+  // 通知配置读取失败：在「通知」分组里给错误提示，不当作空配置
+  const [notifyError, setNotifyError] = useState<string | undefined>(undefined)
   const [notifyBusy, setNotifyBusy] = useState(false)
   // L3 channel sheet: credentials are entered here and stored host-side
   // (they never ride the settings surface; the read view only reports
@@ -510,7 +570,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [webPushOn, setWebPushOn] = useState<boolean | undefined>(undefined)
   // Per-provider usage/balance (synced from desktop): collapsed into a summary
   // row by default; the group expands to the full provider list.
-  const [usage, setUsage] = useState<UsageView | undefined>(undefined)
+  const [usage, setUsage] = useState<UsageView | undefined>(() => settingsSnapshot.usage)
+  // 用量读取失败：行内错误提示（不是空值，也不是隐藏）
+  const [usageError, setUsageError] = useState<string | undefined>(undefined)
   const [usageBusy, setUsageBusy] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   // Providers with no queryable balance/usage endpoint never render on the
@@ -551,6 +613,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       (read) => {
         if (cancelled) return
         setNamespaces(read.namespaces)
+        rememberSettings({ namespaces: read.namespaces })
       },
       (reason: unknown) => {
         if (cancelled) return
@@ -568,6 +631,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       (config) => {
         if (cancelled) return
         setNotifyConfig(config)
+        rememberSettings({ notifyConfig: config })
         setThresholdInput(String(Math.round(config.turnThresholdMs / 1000)))
         setCooldownInput(String(Math.round(config.turnCooldownMs / 60_000)))
         setHideDetailsOn(config.hideDetails === true)
@@ -577,7 +641,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           turns: config.kinds.turns,
         })
       },
-      () => { /* notify unavailable: rows stay hidden */ },
+      (reason: unknown) => {
+        if (!cancelled) setNotifyError(errorText(reason))
+      },
     )
     return () => { cancelled = true }
   }, [])
@@ -622,8 +688,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   useEffect(() => {
     let cancelled = false
     void fetchUsage().then(
-      (view) => { if (!cancelled) setUsage(view) },
-      () => { /* usage unavailable: card stays hidden */ },
+      (view) => {
+        if (cancelled) return
+        setUsage(view)
+        setUsageError(undefined)
+        rememberSettings({ usage: view })
+      },
+      (reason: unknown) => {
+        if (!cancelled) setUsageError(errorText(reason))
+      },
     )
     return () => { cancelled = true }
   }, [])
@@ -1465,8 +1538,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         {hit('用量', '余量', '配额', '余额') && (
           <ul className="settings-group">
             <li className="settings-groupTitle">用量 <span className="settings-groupDesc">套餐与配额</span></li>
-            {usage === undefined && error === undefined && (
-              <li className="settings-note">加载中…</li>
+            {usage === undefined && usageError === undefined && error === undefined && <SkeletonRow />}
+            {(usageError !== undefined || (usage === undefined && error !== undefined)) && (
+              <li className="mobile-error settings-note" role="alert">{usageError ?? error}</li>
             )}
             {/* Providers with no balance/usage endpoint are hidden: only rows
                 the host can actually query (ok / no-key / error) render. */}
@@ -1502,6 +1576,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
         <ul className="settings-group">
           <li className="settings-groupTitle">通知 <span className="settings-groupDesc">任务完成提醒</span></li>
+          {notifyError !== undefined && (
+            <li className="mobile-error settings-note" role="alert">{notifyError}</li>
+          )}
           {hit('通知', 'notify', '推送', '提醒', '阈值', '间隔') && (
             <SettingsRow
               icon={<BellIcon />}
@@ -1529,8 +1606,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
         <ul className="settings-group">
           <li className="settings-groupTitle">主机配置 <span className="settings-groupDesc">模型 · 搜索 · 记忆 · 工具等</span></li>
-          {namespaces === undefined && error === undefined && (
-            <li className="settings-note">加载中…</li>
+          {namespaces === undefined && error === undefined && <SkeletonRow />}
+          {namespaces === undefined && error !== undefined && (
+            <li className="mobile-error settings-note" role="alert">{error}</li>
           )}
           {namespaces !== undefined && SETTINGS_GROUPS.map(group => {
             const members = group.namespaces

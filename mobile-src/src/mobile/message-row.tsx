@@ -351,12 +351,33 @@ function useLiveClock(active: boolean): number {
   return now
 }
 
-/** 折叠过程卡标题行的思考跑马灯：数据是当前 turn 最新一段 reasoning 的尾部。
- *  只在真的溢出时才滚（挂载后用 ResizeObserver 量一次，短文本保持静态省略号）；
- *  滚动是 transform 动画（合成层），时长按字数算；reduced-motion 由 CSS 降级。 */
-function ThinkMarquee({ text }: { readonly text: string }) {
+/**
+ * 折叠过程卡标题行的思考跑马灯：数据是当前 turn 最新一段 reasoning 的尾部。
+ *
+ * 速度模型（用户要求「文字滚多快跟着真实思考速度走，dsh 就是这样」）：
+ *   · 每 500ms 采样一次 reasoning 的**全量**长度（用 growth，不是截断后的显示文本），
+ *     取最近 1.5s 的滑动窗口算「字符/秒」产出速率；
+ *   · 目标速率 = clamp(cps / 30, 0.06, 2.5)：基准 30 字/秒 = 1 倍速（60px/s），
+ *     产出快就滚得快；思考暂停（cps=0）时降到 0.06 倍（接近停住），不再匀速空滚；
+ *   · 动画用 Web Animations API（百分比关键帧，文本变长也不用重建），调速只改
+ *     playbackRate —— 不会重置 currentTime，位移天然连续；每 500ms 向目标插值 35%，
+ *     避免速度抖动；
+ *   · prefers-reduced-motion 下不创建动画（CSS 静态截断 + 隐藏第二段）。
+ */
+const MARQUEE_BASE_CPS = 30
+const MARQUEE_MIN_RATE = 0.06
+const MARQUEE_MAX_RATE = 2.5
+const MARQUEE_PX_PER_SEC = 60
+
+function ThinkMarquee({ text, growth }: { readonly text: string; readonly growth: number }) {
   const ref = useRef<HTMLSpanElement>(null)
+  const trackRef = useRef<HTMLSpanElement>(null)
+  const animRef = useRef<Animation | null>(null)
+  const rateRef = useRef(0.25)
+  const growthRef = useRef(growth)
   const [overflow, setOverflow] = useState(false)
+
+  // 溢出才滚：ResizeObserver 量容器与内容；短文本保持静态省略号。
   useEffect(() => {
     const el = ref.current
     if (el === null) return undefined
@@ -367,13 +388,66 @@ function ThinkMarquee({ text }: { readonly text: string }) {
     ro.observe(el)
     return () => { ro.disconnect() }
   }, [text])
-  const duration = Math.max(8, Math.min(28, Math.round(text.length * 0.18)))
+
+  // 一条常驻的无限循环动画。只用百分比关键帧（-50% - 16px），文本增长不重建动画，
+  // 所以改速度时 currentTime 与 transform 都不跳。
+  useEffect(() => {
+    const track = trackRef.current
+    if (!overflow || track === null || typeof track.animate !== 'function') return undefined
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined
+    const run = track.firstElementChild
+    const runW = run === null ? 0 : run.getBoundingClientRect().width
+    const duration = Math.max(4000, ((runW + 32) / MARQUEE_PX_PER_SEC) * 1000)
+    let anim: Animation
+    try {
+      anim = track.animate(
+        [{ transform: 'translateX(0%)' }, { transform: 'translateX(calc(-50% - 16px))' }],
+        { duration, iterations: Infinity, easing: 'linear' },
+      )
+    } catch (error) {
+      return undefined
+    }
+    anim.playbackRate = rateRef.current
+    animRef.current = anim
+    return () => {
+      if (animRef.current === anim) animRef.current = null
+      anim.cancel()
+    }
+  }, [overflow])
+
+  // 最新 reasoning 长度每个渲染都写进 ref：采样 effect 只挂一次（如果把它挂到
+  // growth 上，流式时每个 chunk 都会清掉重挂 500ms 定时器，速率就永远采不到）。
+  growthRef.current = growth
+
+  // 产出速率采样 → 目标播放速率（插值后写回动画）。
+  useEffect(() => {
+    let last = growthRef.current
+    const samples: Array<{ t: number; v: number }> = []
+    const id = window.setInterval(() => {
+      const now = performance.now()
+      const value = growthRef.current
+      if (value < last) { samples.length = 0 }       // 换了一段 reasoning：窗口重置
+      last = value
+      samples.push({ t: now, v: value })
+      while (samples.length > 4) samples.shift()      // 4 × 500ms = 1.5s 窗口
+      const first = samples[0]
+      const seconds = (now - first.t) / 1000
+      const cps = seconds > 0.3 ? Math.max(0, (value - first.v) / seconds) : 0
+      const target = Math.min(MARQUEE_MAX_RATE, Math.max(MARQUEE_MIN_RATE, cps / MARQUEE_BASE_CPS))
+      rateRef.current += (target - rateRef.current) * 0.35
+      const anim = animRef.current
+      if (anim !== null) anim.playbackRate = rateRef.current
+      try {
+        const tr = trackRef.current
+        if (tr !== null) tr.dataset.dmMarquee = JSON.stringify({ cps: +cps.toFixed(1), target: +target.toFixed(2), rate: +rateRef.current.toFixed(2), samples: samples.length, growth: growthRef.current })
+      } catch (error) {}
+    }, 500)
+    return () => { window.clearInterval(id) }
+  }, [])
+
   return (
     <span ref={ref} className={'chat-proc-think' + (overflow ? ' chat-proc-think-scroll' : '')} title={text}>
-      <span
-        className="chat-proc-think-track"
-        style={overflow ? { animationDuration: `${duration}s` } : undefined}
-      >
+      <span ref={trackRef} className="chat-proc-think-track">
         <span className="chat-proc-think-run">{text}</span>
         {overflow && <span className="chat-proc-think-run" aria-hidden>{text}</span>}
       </span>
@@ -406,6 +480,15 @@ function ProcessGroup({ message, model, showToolCalls, focusedQuery, sessionId, 
       if (flat !== '') return flat.slice(-200)
     }
     return ''
+  }, [model.rows])
+  // 产出速率用「全量 reasoning 长度」算（显示的是尾部 200 字，长度会提前封顶，
+  // 用它测速会在 200 字后误判成"思考暂停"）。
+  const liveThinkingGrowth = useMemo(() => {
+    for (let i = model.rows.length - 1; i >= 0; i--) {
+      const row = model.rows[i]
+      if (row.kind === 'reasoning') return row.text.length
+    }
+    return 0
   }, [model.rows])
   // turn 结束后保留最后一次文本（不闪回「思考中」）：只在观察到运行中时冻结。
   const [frozenThinking, setFrozenThinking] = useState('')
@@ -511,7 +594,7 @@ function ProcessGroup({ message, model, showToolCalls, focusedQuery, sessionId, 
             <span className={`chat-step-icon${current.variant === undefined ? ' chat-step-icon-thinking' : ''}${running && current.variant === 'bash' ? ' chat-step-icon-spin' : ''}`} aria-hidden>
               {current.variant === undefined ? <CardGlyph shape="thinking" /> : stepIcon(current.variant)}
             </span>
-            {thinkingText !== '' ? <ThinkMarquee text={thinkingText} /> : <span className="chat-proc-current-text">{current.text}</span>}
+            {thinkingText !== '' ? <ThinkMarquee text={thinkingText} growth={liveThinkingGrowth} /> : <span className="chat-proc-current-text">{current.text}</span>}
             {filesText !== '' && <span className="chat-proc-meta">{filesText}</span>}
           </span>
         )}

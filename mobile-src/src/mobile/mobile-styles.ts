@@ -3374,8 +3374,8 @@ button.settings-row:focus-visible {
 /* 折叠过程卡标题行的「思考文本」跑马灯：数据 = 当前 turn 最新一段 reasoning 的尾部
    （message-row.tsx 的 ThinkMarquee）。短文本不滚 —— JS 量到没有溢出就不加
    -scroll 类，保持静态 ellipsis；溢出时两段文本 + 32px 间隔，translateX(-50%-16px)
-   正好无缝回卷。动画只碰 transform（合成层），时长按字数在行内给；reduced-motion
-   降级成静态截断（隐藏第二段）。 */
+   正好无缝回卷。动画只碰 transform（合成层）；**速度**由 JS 按真实产出速率改
+   playbackRate（不是固定时长），reduced-motion 降级成静态截断（隐藏第二段）。 */
 .chat-proc-think {
   flex: 1 1 auto;
   min-width: 0;
@@ -3389,18 +3389,13 @@ button.settings-row:focus-visible {
   gap: 32px;
   will-change: transform;
 }
-.chat-proc-think-scroll .chat-proc-think-track {
-  animation: dm-think-marquee 12s linear infinite;
-}
 .chat-proc-think-run {
   flex: none;
 }
-@keyframes dm-think-marquee {
-  from { transform: translateX(0); }
-  to { transform: translateX(calc(-50% - 16px)); }
-}
+/* 动画本体在 message-row.tsx 的 ThinkMarquee 里用 Web Animations API 创建
+   （playbackRate 跟随 reasoning 的真实产出速率；见那里的注释）。CSS 只负责
+   布局与 reduced-motion 的静态降级：不滚时截断省略，第二段隐藏。 */
 @media (prefers-reduced-motion: reduce) {
-  .chat-proc-think-scroll .chat-proc-think-track { animation: none; }
   .chat-proc-think-scroll .chat-proc-think-run + .chat-proc-think-run { display: none; }
   .chat-proc-think-scroll .chat-proc-think-run { overflow: hidden; text-overflow: ellipsis; }
 }
