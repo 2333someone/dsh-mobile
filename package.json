@@ -47,5 +47,8 @@
         "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
+  },
+  "scripts": {
+    "smoke": "node test/smoke.mjs"
   }
 }
