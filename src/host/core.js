@@ -24,6 +24,8 @@ import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:z
 import { textOfEventData, createMuxRuntime, createSseRuntime } from './sse.js'
 import { createRpcRegistry } from './rpc/index.js'
 import { createSettingsRpc } from './rpc/settings.js'
+import { createSubagentRpc } from './rpc/subagent.js'
+import { createPushRpc } from './rpc/push.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
@@ -598,12 +600,21 @@ export function createHost(ctx, config) {
   // ── RPC 注册表（迁移期与 dispatchRpc 的 switch 并存）───────────────────────
   // 注册表优先命中；还没搬的域继续落到 switch 里。这样每搬一个域，方法集合与
   // 语义都保持不变（校验脚本：.dsh-scratch/rpc-diff.mjs）。
+  const getService = (name) => (typeof ctx.get === 'function' ? ctx.get(name) : undefined)
   const rpcRegistry = createRpcRegistry({
     domains: [
       createSettingsRpc({
-        getService: (name) => (typeof ctx.get === 'function' ? ctx.get(name) : undefined),
+        getService,
         devices,
         persistDevices: () => persistDevices(cfg.devicesFile, devices),
+      }),
+      createSubagentRpc({ getService, recordSubagentParents }),
+      createPushRpc({
+        getNotifyConfig: () => notifyConfig,
+        setNotifyConfig: (next) => { notifyConfig = next },
+        deliverNotify,
+        notifyChannelsView,
+        saveNotifyConfig: (next) => saveNotifyConfig(cfg.pushConfigFile, next),
       }),
     ],
   })
@@ -3482,23 +3493,7 @@ export function createHost(ctx, config) {
           }
         }
       }
-      case 'subagent.list': {
-        const parentSessionId = typeof payload?.parentSessionId === 'string' ? payload.parentSessionId : ''
-        if (parentSessionId === '') return { ok: true, value: { entries: [], parentAvailable: false } }
-        const subagents = typeof ctx.get === 'function' ? ctx.get('subagents') : undefined
-        if (!subagents || typeof subagents.listDescendants !== 'function') {
-          return { ok: true, value: { entries: [], parentAvailable: false } }
-        }
-        try {
-          const rows = await subagents.listDescendants(parentSessionId, new AbortController().signal)
-          // 顺手登记「子代理 id → 父会话 id」：面板点开某行看聊天时要用父地址读，
-          // 这里记住了就免去反查（每行自带 parentId，本函数的入参就是它）。
-          recordSubagentParents(rows)
-          return { ok: true, value: { entries: rows, parentAvailable: rows.length > 0 } }
-        } catch {
-          return { ok: true, value: { entries: [], parentAvailable: false } }
-        }
-      }
+      // subagent.list 已搬进 src/host/rpc/subagent.js（注册表优先命中，这里不再有 case）。
       // ── 命令 / 搜索 ──
       case 'mobile.commands': {
         return { ok: true, value: commandCatalog(payload) }
@@ -3959,54 +3954,8 @@ export function createHost(ctx, config) {
       case 'mobile.notifyEvents': {
         return { ok: true, value: { items: [] } }
       }
-      case 'push.config': {
-        const body = payload || {}
-        if (body.test === true) {
-          deliverNotify(notifyConfig, { title: 'dsh 掌上 · 测试通知', body: '收到这条说明推送通道工作正常。' }).catch(() => {})
-          return { ok: true, value: { sent: true } }
-        }
-        if (body.get === true) {
-          const c = notifyConfig
-          return {
-            ok: true,
-            value: {
-              turnThresholdMs: c.turnThresholdMs,
-              turnCooldownMs: c.turnCooldownMs,
-              hideDetails: c.hideDetails === true,
-              kinds: {
-                jobs: !!(c.kinds && c.kinds.jobs === true),
-                todo: !(c.kinds && c.kinds.todo === false),
-                turns: !!(c.kinds && c.kinds.turns === true),
-              },
-              vapidPublicKey: '',
-              channels: notifyChannelsView(c.channels),
-            },
-          }
-        }
-        const patch = body.set
-        if (!patch || typeof patch !== 'object') {
-          return { ok: false, error: { code: 'bad-request', message: '缺少配置内容' } }
-        }
-        const next = { ...notifyConfig }
-        if (typeof patch.turnThresholdMs === 'number' && Number.isFinite(patch.turnThresholdMs)) next.turnThresholdMs = Math.max(0, Math.round(patch.turnThresholdMs))
-        if (typeof patch.turnCooldownMs === 'number' && Number.isFinite(patch.turnCooldownMs)) next.turnCooldownMs = Math.max(0, Math.round(patch.turnCooldownMs))
-        if (typeof patch.hideDetails === 'boolean') next.hideDetails = patch.hideDetails
-        if (patch.kinds && typeof patch.kinds === 'object') next.kinds = { ...(notifyConfig.kinds || {}), ...patch.kinds }
-        if (patch.channels && typeof patch.channels === 'object') {
-          const merged = { ...(notifyConfig.channels || {}) }
-          for (const [k, v] of Object.entries(patch.channels)) {
-            if (v && typeof v === 'object') merged[k] = { ...(merged[k] || {}), ...v }
-          }
-          next.channels = merged
-        }
-        notifyConfig = next
-        saveNotifyConfig(cfg.pushConfigFile, notifyConfig)
-        return { ok: true, value: { stored: true } }
-      }
-      case 'push.subscribe':
-      case 'push.unsubscribe': {
-        return { ok: true, value: { ok: true } }
-      }
+      // push.config / push.subscribe / push.unsubscribe 已搬进 src/host/rpc/push.js
+      //（注册表优先命中，这里不再有 case）。
       // ── 语音 / 附件 / 文件 ──
       case 'mobile.voiceServices': {
         const list = Array.isArray(cfg.transcribeServices) ? cfg.transcribeServices : []
