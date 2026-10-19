@@ -22,6 +22,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathS
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { textOfEventData, muxLineOf, queueItemView } from './sse.js'
+import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
@@ -1033,7 +1034,8 @@ export function createHost(ctx, config) {
 
   if (!cfg.enabled) return
 
-  const devices = loadDevices(cfg.devicesFile)
+  const state = createHostState({ devices: loadDevices(cfg.devicesFile) })
+  const devices = state.devices
   let pairToken = null // { code, expiresAt, fixed }
   let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
   // 发送模式：手机端唯一一处真值；下发 mobile.preferences，写回 session.prompt。
@@ -1512,11 +1514,8 @@ export function createHost(ctx, config) {
   // 因此：手机不答 ⇒ 行为与未装本插件逐字相同，绝不自动批准、绝不挂死会话。
   //
   // rpcId 只存在内存里；进程重启会丢，届时条目自然过期。
-  const pending = {
-    approvals: new Map(), // rpcId -> entry（含 resolve）
-    questions: new Map(), // rpcId -> entry（含 resolve）
-    byApprovalId: new Map(), // approvalId -> rpcId（bundle 按 approvalId 应答）
-  }
+  // 待处理注册表：容器在 state.js（ctxBag），这里用别名保持原引用。
+  const pending = state.pending
 
   function approvalView(entry) {
     return {
@@ -4957,7 +4956,7 @@ export function createHost(ctx, config) {
   // 后台任务 session/jobs：宿主没有非 RPC 的公开能力 → 不伪造，保持不推（bundle 会降级）。
 
   /** deviceId → 该设备正在看的会话集合（生命周期 = SSE 连接）。 */
-  const observers = new Map()
+  const observers = state.observers
 
   /**
    * deviceId → 最近一次声明在看的会话（**不随流关闭清掉**）。
@@ -4965,7 +4964,7 @@ export function createHost(ctx, config) {
    * 而 bundle 下一次 observe 重申要等最多 30s —— 期间新流拿不到任何队列帧，
    * dock 就停在断流前的条数上。用它把这段空窗抹掉。
    */
-  const lastObservedByDevice = new Map()
+  const lastObservedByDevice = state.lastObservedByDevice
 
   /**
    * 登记一台设备正在看的会话。
@@ -5072,9 +5071,9 @@ export function createHost(ctx, config) {
    * 「重连 → 下一次 observe 重申」这段最坏 30s 的空窗里，期间会话产生的事件没人跟进。
    * 所以这里按 sessionId 做单例，断开 SSE 不拆 follow；只有「再没有设备在看」时才回收。
    */
-  const follows = new Map() // sessionId -> { ref: AbortController, task }
+  const follows = state.follows // sessionId -> { ref: AbortController, task }
   /** sessionId -> 最近一次有设备声明在看它的时刻（回收器的计时基准）。 */
-  const lastObserved = new Map()
+  const lastObserved = state.lastObserved
 
   /** 还有设备在看这个会话吗。 */
   function anyoneObserving(sessionId) {
@@ -5098,7 +5097,7 @@ export function createHost(ctx, config) {
    * sessionId -> 当前这一轮流式 attempt 的去重/顺序状态。
    * `attemptId` 变了就换一套：新一轮的 index 从 0 重来，不能和上一轮混着判重。
    */
-  const streamStates = new Map()
+  const streamStates = state.streamStates
 
   /**
    * sessionId -> 已经流经本服务的最大「已落盘事件」seq（整数，宿主分配）。
@@ -5112,7 +5111,7 @@ export function createHost(ctx, config) {
    * follow 的 snapshot / event 帧都要更新它 —— 漏一帧，后续 chunk 就会落到
    * 真事件后面被 bundle 丢弃。
    */
-  const lastPersistedSeq = new Map()
+  const lastPersistedSeq = state.lastPersistedSeq
 
   /**
    * sessionId -> 最近一条已落盘 `step/start` 的 { turn, step }。
@@ -5127,7 +5126,7 @@ export function createHost(ctx, config) {
    * 兜底值取自真事件里的 `step/start`（follow 与全局总线都会送）：它先于该步的
    * 任何 chunk 落盘，所以中途接上也能拿到正确的 turn/step。
    */
-  const lastStep = new Map()
+  const lastStep = state.lastStep
 
   /** 记下真事件里的 turn/step 边界（step/start、turn/start 都带 turn，step/start 另带 step）。 */
   function noteStepEvent(sessionId, event) {
@@ -5469,7 +5468,7 @@ export function createHost(ctx, config) {
   }
 
   /** 所有存活的 SSE 连接（扇出目标）。 */
-  const muxStreams = new Set()
+  const muxStreams = state.muxStreams
 
   /** 一帧 → 一条 SSE data 行；不可序列化时返回 undefined。 */
 
