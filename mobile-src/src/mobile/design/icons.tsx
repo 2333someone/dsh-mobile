@@ -63,7 +63,6 @@ export type IconName =
   | 'pageAutomations'
   | 'pageModels'
   | 'pageUsage'
-  | 'pageVoice'
   | 'pageNotifications'
   | 'statusRunning'
   | 'statusSuccess'
@@ -284,17 +283,6 @@ export const ICONS: Readonly<Record<IconName, IconMeta>> = {
     source: "@deepseek-ai/dsh-web-frontend/dist/assets/index-CN7NIWNw.js（primitives 实现，字节偏移见 meta）· IconGaugeOutlineRegular",
     defIdent: 'DP',
     chunkOffset: 862093,
-  },
-  'pageVoice': {
-    group: 'desktop',
-    size: 16,
-    viewBox: '0 0 16 16',
-    rootProps: {"viewBox":"0 0 16 16","fill":"none","strokeWidth":1},
-    inner: "<rect x=\"4.5+r/2\" y=\"1+r/2\" rx=\"(7-r)/2\"></rect><path d=\"M2.35 8.675C3.075 11.3 5.2 13.125 8 13.125C10.8 13.125 12.925 11.3 13.65 8.675M8 13.125V15\"></path>",
-    use: "页面入口：语音（桌面 primitives 的麦克风图标；当前 client 未使用，但属于桌面图标集）",
-    source: "@deepseek-ai/dsh-web-frontend/dist/assets/index-CN7NIWNw.js（primitives 实现，字节偏移见 meta）· IconMicrophoneOutlineRegular",
-    defIdent: 'FD',
-    chunkOffset: 862677,
   },
   'pageNotifications': {
     group: 'desktop',
