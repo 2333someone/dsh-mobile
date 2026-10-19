@@ -958,43 +958,6 @@ const VIEWPORT_VH_HTML = `<script>
  * 换成型号/平台标签）；拿不到 model 的浏览器留着 UA，由宿主解析出
  * 「平台 · 浏览器」兜底，所以不会白跑。
  */
-const DEVICE_INFO_HTML = `<script>
-(function () {
-  try {
-    var send = function (info) {
-      try {
-        fetch('/m/api/mobile.reportDevice', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({
-            type: 'client-request',
-            rpcId: 'dev-' + String(Date.now()),
-            method: 'mobile.reportDevice',
-            payload: info
-          })
-        }).catch(function () {});
-      } catch (e) {}
-    };
-    var ua = typeof navigator === 'object' && typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
-    var data = typeof navigator === 'object' ? navigator.userAgentData : null;
-    if (data && typeof data.getHighEntropyValues === 'function') {
-      data.getHighEntropyValues(['model', 'platform', 'platformVersion']).then(function (v) {
-        send({
-          model: v && typeof v.model === 'string' ? v.model : '',
-          platform: v && typeof v.platform === 'string' ? v.platform : '',
-          platformVersion: v && typeof v.platformVersion === 'string' ? v.platformVersion : '',
-          ua: ua
-        });
-      }, function () {
-        send({ ua: ua });
-      });
-    } else {
-      send({ ua: ua });
-    }
-  } catch (e) {}
-})();
-</script>`
 
 /**
  * 通知设置页标记。
@@ -1005,37 +968,6 @@ const DEVICE_INFO_HTML = `<script>
  * <body> 上挂一个 .dm-notify-page（当前页标题是「通知」时），theme.css 用
  * body.dm-notify-page 作用域；挂在 body 上不会被 React 重渲染抹掉。
  */
-const NOTIFY_LAYOUT_HTML = `<script>
-(function () {
-  try {
-    if (!document.body) return;
-    function mark() {
-      var titles = document.querySelectorAll('.mobile-title');
-      var on = false;
-      for (var i = 0; i < titles.length; i++) {
-        var text = titles[i].textContent || '';
-        if (text.trim() === '通知') { on = true; break; }
-      }
-      var body = document.body;
-      if (on) {
-        if (!body.classList.contains('dm-notify-page')) body.classList.add('dm-notify-page');
-      } else if (body.classList.contains('dm-notify-page')) {
-        body.classList.remove('dm-notify-page');
-      }
-    }
-    mark();
-    var queued = false;
-    var mo = new MutationObserver(function () {
-      if (queued) return;
-      queued = true;
-      var run = function () { queued = false; mark(); };
-      if (window.requestAnimationFrame) window.requestAnimationFrame(run);
-      else window.setTimeout(run, 0);
-    });
-    mo.observe(document.body, { childList: true, subtree: true });
-  } catch (e) {}
-})();
-</script>`
 
 const CHAT_AUTOSCROLL_HTML = `<script>
 (function () {
@@ -1746,66 +1678,6 @@ const INPUT_TEXT_CENTER_HTML = `<script>
 
 
 
-// ── 「＋ 添加内容」面板只留附件动作 ────────────────────────────────────────
-// bundle 把 mobile.commands 的命令也渲染进这个面板（/goal、/plan…）。用户要求
-// 命令只出现在「/」面板，这里只保留「图片 / 拍照」。不改 mobile.commands RPC
-// （那条数据同时喂「/」面板），只裁这个 menu 的 DOM。
-const ADD_SHEET_FILTER_HTML = `
-<script>
-(function () {
-  try {
-    if (window.__dmAddSheetFilter) return;
-    window.__dmAddSheetFilter = true;
-
-    // 「＋ 添加内容」面板：bundle 把 mobile.commands 的命令也塞了进来（/goal、/plan…），
-    // 用户要求这里只留附件相关（图片 / 拍照），命令只在「/」面板出现。
-    // 注意：**不改 mobile.commands RPC** —— 那条数据同时喂「/」面板，改了就两边都没了。
-    var MENU = '[role="menu"][aria-label="添加内容"]';
-
-    function apply() {
-      var menus = document.querySelectorAll(MENU);
-      for (var i = 0; i < menus.length; i++) {
-        var menu = menus[i];
-        var opts = menu.querySelectorAll('.sheet-option');
-        var hidden = 0;
-        for (var j = 0; j < opts.length; j++) {
-          var title = opts[j].querySelector('.sheet-option-title');
-          var text = title ? String(title.textContent || '').replace(/^\s+/, '') : '';
-          if (text.charAt(0) === '/') {
-            if (opts[j].style.display !== 'none') opts[j].style.display = 'none';
-            hidden += 1;
-          }
-        }
-        // 命令块前面那条分隔线也收起（否则面板底部留一条突兀的横线）
-        var dividers = menu.querySelectorAll('.sheet-option-divider');
-        for (var k = 0; k < dividers.length; k++) {
-          var want = hidden > 0 ? 'none' : '';
-          if (dividers[k].style.display !== want) dividers[k].style.display = want;
-        }
-        if (menu.getAttribute('data-dm-add-filtered') !== String(hidden)) {
-          menu.setAttribute('data-dm-add-filtered', String(hidden));
-        }
-      }
-    }
-
-    var queued = false;
-    function schedule() {
-      if (queued) return;
-      queued = true;
-      window.setTimeout(function () {
-        queued = false;
-        try { apply(); } catch (e) {}
-      }, 60);
-    }
-    try {
-      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule); else new MutationObserver(schedule).observe(document.documentElement || document.body, { childList: true, subtree: true });
-    } catch (e) {}
-    window.setInterval(function () { try { apply(); } catch (e) {} }, 500);
-    apply();
-  } catch (e) {}
-})();
-</script>
-`
 
 // ── 全屏图片预览（待发送缩略图 + 聊天图片共用一套 overlay）──────────────────
 // 用户诉求：输入框上方「待发送」缩略图点了没反应；聊天里的图片又太大（CSS 侧限高，
@@ -2117,11 +1989,8 @@ function mobilePageHtml() {
     LOAD_OLDER_ALIGN_HTML,
     ICON_OPTICAL_ALIGN_HTML,
     INPUT_TEXT_CENTER_HTML,
-    ADD_SHEET_FILTER_HTML,
     // 聊天/待发送图片的全屏预览（捕获阶段委托，抢在 bundle 自带 lightbox 之前）。
     IMAGE_PREVIEW_HTML,
-    DEVICE_INFO_HTML,
-    NOTIFY_LAYOUT_HTML,
     '</body>',
     '</html>',
   ].join('')

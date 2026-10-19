@@ -12,6 +12,9 @@ import { PERMISSION_BTN_HTML } from './permission-btn.ts'
 import { SEND_MODE_HTML } from './send-mode.ts'
 import { CHAT_STATUS_HTML } from './chat-status.ts'
 import { SEND_MODE_SETTINGS_HTML } from './send-mode-settings.ts'
+import { DEVICE_INFO_HTML } from './device-info.ts'
+import { NOTIFY_LAYOUT_HTML } from './notify-layout.ts'
+import { ADD_SHEET_FILTER_HTML } from './add-sheet-filter.ts'
 
 const PATCH_ORDER: readonly string[] = [
   SEND_DECODE_GUARD_HTML,
@@ -19,7 +22,10 @@ const PATCH_ORDER: readonly string[] = [
   PERMISSION_BTN_HTML,
   SEND_MODE_HTML,
   CHAT_STATUS_HTML,
-  SEND_MODE_SETTINGS_HTML
+  SEND_MODE_SETTINGS_HTML,
+  DEVICE_INFO_HTML,
+  NOTIFY_LAYOUT_HTML,
+  ADD_SHEET_FILTER_HTML
 ]
 
 let installed = false
