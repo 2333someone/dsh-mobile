@@ -89,7 +89,9 @@ group 3 已把 `buildAssistantChunkEvent / expandSnapshotStream` 搬回流式状
 - 每步 `node --check` → 热重载 → 冒烟 → commit → push → `cd E:/desk/dsh-mobile && git pull --ff-only`
 - `assets/mobile.bundle.js(.map)` 不提交（由 lead 统一重建）
 - 热重载：备份 `~/.dsh/profiles/desktop/cordis.patch.yml` → 末尾加注释 → 等 12s → 原字节还原（sha256 前后一致）
-- 冒烟口径不要写死条目数：命令面板行数随技能目录变化（当前 36 行），用「搬前搬后一致」或从 RPC 取真实条数
+- 冒烟口径不要写死条目数：命令面板行数 = 2 local + 6 host + **技能源条数**，**会漂移**
+  （同一台机实测 20 → 30 → 34，随 skill 目录扩容；历史上的 36 是另一时刻的观测值）。
+  搬前搬后一致的是**分类与行结构**（3 行首页 / 7 个工具栏按钮 / 面板行分类），不是固定行数
 
 ### 本轮新增的保命操作
 
@@ -104,6 +106,11 @@ group 3 已把 `buildAssistantChunkEvent / expandSnapshotStream` 搬回流式状
    与代码改动无关。恢复文件后重新触发热重载即可。
 3. **大段搬迁用脚本抽取**（`.dsh-scratch/apply-g4.mjs`）：openMux 185 行是先按 marker 切片、
    正则改写 `host.*`、再拼回 `sse.js`，避免手抄漏标识符。这类脚本可直接复用。
+4. **外部 actor 会掐宿主**：本轮 22:34–22:40 观察到 `~/.dsh/profiles/desktop/cordis.patch.yml`
+   的 mtime 每隔 1–2 分钟被**外部**改动并触发 reload（不是本会话操作；同一时期还两次出现
+   「13 个 tracked 文件被删」）。后果：SSE 长连接被掐、40s 心跳窗口测不完整。
+   所以「长窗口」验证要挑安静窗口单独跑（`.dsh-scratch/hb-forensics.mjs` 是取证脚本），
+   全量回归里被掐断的那条按**环境事件**记，别判成搬迁回归。
 
 ## 进度记录
 
@@ -117,3 +124,18 @@ group 3 已把 `buildAssistantChunkEvent / expandSnapshotStream` 搬回流式状
 - 2026-10-19 `7bbfd3f` **group 4 完成**：`openMux` 整块搬入（含心跳 / 同步节拍 / 寿命定时器）；
   实测 events.mux 200、`: ping`、381 帧、queue 形状正确，live-follow 全 PASS。
 - **下一步**：RPC 注册表（`src/host/rpc/`，7 个域文件），先对账 63 vs 64 的方法名差异。
+
+## 本轮验收结果（独立复核：sse-verifier 用自建脚本，不采信 lead 数据）
+
+| 判据 | g2 `952345f` | g3 `834acf2` | g4 `7bbfd3f` |
+| --- | --- | --- | --- |
+| `assistant/chunk` | **0**（bug 现场） | 157 | 163 / 350 / 363（三次） |
+| follow 重启信号 `session/subscribed` | 1 | 0 | 0 |
+| `assistant/message` / `step/end` / `turn/end` | 2 / 2 / 2 | 2 / 2 / 2 | 2 / 2 / 2 |
+| `session/queue` 帧 + 形状 | 3 条，合规 | 2 条，合规 | 3 条，合规（非空 items=1，126ms） |
+| 心跳 `: ping` | 4 次 / 40s，10.0s 间隔 | 被 reload 打断 | **4 次 / 45s，精确 10.0s 间隔** |
+| 8 次加载 `pageerror` | 0 | 0 | 0 |
+| UI | 首页 3 行 / 工具栏 7 按钮 | 同 | 同；命令面板 2+6+技能源（漂移） |
+
+`node --check` 双绿、`npm run smoke` 6/6 在每一组都跑过；`core.js` 5,759 → **5,228** 行，
+`sse.js` 81 → **677** 行。RPC 方法名集合 `c178c9e` vs `HEAD` 逐字 diff 为空（63 vs 63）。
