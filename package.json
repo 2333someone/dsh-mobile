@@ -25,7 +25,8 @@
     "assets/whale.png",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "src/host"
   ],
   "license": "MIT",
   "private": true,
@@ -42,7 +43,9 @@
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-settings"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   }
 }
