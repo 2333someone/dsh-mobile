@@ -20,6 +20,7 @@ import { homedir, networkInterfaces } from 'node:os'
 import { join, basename, resolve as resolvePath, relative as relativePath, isAbsolute as isAbsolutePath, extname } from 'node:path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 
 export const name = 'dsh-mobile'
 // workspace.* 走 ctx.workspaceController，subagent.list 走 ctx.subagents，
@@ -258,9 +259,65 @@ function defaultDevicesFile() {
 }
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
+// 文本类响应按 Accept-Encoding 压缩。
+// 实测（本机直连 19387，未经过反代）：/m/ 404KB、bundle 646KB、theme.css 129KB，
+// 合计 1.18MB 且无 Content-Encoding —— 弱网（Slow-4G 节流）首屏 8.6s，
+// 压缩后约 0.3MB，首屏降到 2.5～3.5s 量级。压缩只对文本生效，图片/字体原样。
+const COMPRESSIBLE_TYPE = /^(?:text\/|application\/(?:json|javascript|xml)|image\/svg\+xml)/i
+const MIN_COMPRESS_BYTES = 2048
+// bundle/theme 这类 Buffer 会被 asset() 按 mtime 缓存复用，这里也按对象缓存压缩结果，
+// 避免每次请求重复压缩 646KB。字符串响应（HTML）本身每请求重建，只能现压。
+const compressCache = new WeakMap()
+
+function compressFor(req, headers, body) {
+  const type = String(headers['Content-Type'] || '')
+  if (!COMPRESSIBLE_TYPE.test(type)) return null
+  const ae = String((req && req.headers && req.headers['accept-encoding']) || '')
+  const wantBr = /\bbr\b/.test(ae)
+  const wantGzip = /\bgzip\b/.test(ae)
+  if (!wantBr && !wantGzip) return null
+  const isBuf = Buffer.isBuffer(body)
+  const buf = isBuf ? body : Buffer.from(body, 'utf8')
+  if (buf.length < MIN_COMPRESS_BYTES) return null
+  let entry = null
+  if (isBuf) {
+    entry = compressCache.get(body)
+    if (!entry) { entry = {}; compressCache.set(body, entry) }
+  }
+  try {
+    if (wantBr) {
+      if (!entry || !entry.br) {
+        const br = brotliCompressSync(buf, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } })
+        if (entry) entry.br = br
+        return { buf: br, enc: 'br' }
+      }
+      return { buf: entry.br, enc: 'br' }
+    }
+    if (!entry || !entry.gz) {
+      const gz = gzipSync(buf, { level: 6 })
+      if (entry) entry.gz = gz
+      return { buf: gz, enc: 'gzip' }
+    }
+    return { buf: entry.gz, enc: 'gzip' }
+  } catch (e) {
+    return null
+  }
+}
+
 function send(res, status, headers, body) {
   res.statusCode = status
-  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
+  const outHeaders = { ...headers }
+  const packed = compressFor(res.req, outHeaders, body)
+  if (packed) {
+    outHeaders['Content-Encoding'] = packed.enc
+    outHeaders['Vary'] = 'Accept-Encoding'
+    outHeaders['Content-Length'] = String(packed.buf.length)
+    body = packed.buf
+  } else if (typeof body === 'string' || Buffer.isBuffer(body)) {
+    const len = Buffer.isBuffer(body) ? body.length : Buffer.byteLength(body)
+    if (!outHeaders['Content-Length']) outHeaders['Content-Length'] = String(len)
+  }
+  for (const [k, v] of Object.entries(outHeaders)) res.setHeader(k, v)
   res.end(body)
 }
 
