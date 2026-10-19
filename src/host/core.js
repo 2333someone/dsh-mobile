@@ -21,6 +21,7 @@ import { join, basename, resolve as resolvePath, relative as relativePath, isAbs
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
+import { textOfEventData, muxLineOf, queueItemView } from './sse.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
@@ -195,15 +196,7 @@ async function transcribeAudio(base64Audio, services) {
 }
 
 // ── message text extraction (fallback simple API) ───────────────────────────
-function textOfEventData(data) {
-  if (!data || typeof data !== 'object') return ''
-  const msg = 'message' in data ? data.message : data
-  if (!msg || !Array.isArray(msg.content)) return ''
-  return msg.content
-    .filter((b) => b && b.type === 'text')
-    .map((b) => String(b.text || ''))
-    .join('')
-}
+
 
 // ── 用量页：DeepSeek 官方余额（宿主代理查询） ──────────────────────────────
 //
@@ -5479,19 +5472,7 @@ export function createHost(ctx, config) {
   const muxStreams = new Set()
 
   /** 一帧 → 一条 SSE data 行；不可序列化时返回 undefined。 */
-  function muxLineOf(frame, rpcId) {
-    try {
-      const wire = {
-        type: 'server-request',
-        rpcId: rpcId || `mux-${randomBytes(8).toString('hex')}`,
-        method: 'events.mux',
-        payload: frame,
-      }
-      return `data: ${JSON.stringify(wire)}\n\n`
-    } catch {
-      return undefined // 不可序列化的帧宁可不推，也不能拖垮整条流
-    }
-  }
+
 
   /** 向所有 SSE 连接推一帧。frame 必须是 bundle 认识的 mux 帧形。 */
   function emitMux(frame, rpcId) {
@@ -5519,27 +5500,7 @@ export function createHost(ctx, config) {
   // 于是断流期间变化的队列永远补不回来。
 
   /** 把一个 inbox 消息（UserMessage）翻成 bundle 的 le() 认得的行。 */
-  function queueItemView(message, placement) {
-    if (!message || typeof message !== 'object') return undefined
-    const id = typeof message.id === 'string' ? message.id : (message.id === undefined ? '' : String(message.id))
-    if (id === '') return undefined
-    // content 两种形态都要兜住：数组（常规）与字符串（历史上的简化形态）。
-    const raw = Array.isArray(message.content)
-      ? message.content
-      : typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : []
-    const content = []
-    for (const b of raw) {
-      if (!b || typeof b !== 'object') continue
-      if (typeof b.text === 'string') {
-        content.push({ type: 'text', text: b.text })
-        continue
-      }
-      // 非文本块（图片等）原样保留：bundle 的 le() 会把它们渲染成 `[类型]`
-      // 并把 editable 判为 false（dock 就不给编辑框）—— 比丢掉或伪造 text 诚实。
-      content.push({ type: typeof b.type === 'string' ? b.type : 'text' })
-    }
-    return { id, placement, message: { content } }
-  }
+
 
   /**
    * 读某会话当前的排队项，推一帧 session/queue。
