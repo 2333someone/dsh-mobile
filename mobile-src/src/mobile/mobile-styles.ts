@@ -3202,7 +3202,7 @@ button.settings-row:focus-visible {
   gap: var(--space-1);
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   background: var(--card-bg);
 }
 
@@ -3260,6 +3260,8 @@ button.settings-row:focus-visible {
   overflow-y: auto;
 }
 
+/* 卡片圆角统一：过程卡 / 宿主唤醒卡（收到任务消息）/ 工具卡 / 回合尾卡 / 队列条
+   全部走 --radius-card（tokens.ts 的 radii.card），不再各自写 10/12/16px。 */
 /*
  * 过程组（桌面端 turn-process 的对应物）：一轮的思考与工具调用藏在同一个折叠头
  * 后面，头两行只有状态词/用时/报错信号、此刻到哪一步与改动量；步数在展开体首行
@@ -3282,7 +3284,7 @@ button.settings-row:focus-visible {
   /* 右边留给绝对定位的展开箭头 */
   padding: 6px 26px 6px 8px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-card);
   background: var(--card-bg);
   color: var(--text-muted);
   font: inherit;
@@ -3415,7 +3417,7 @@ button.settings-row:focus-visible {
 .chat-trigger {
   margin: 14px 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 16px;
+  border-radius: var(--radius-card);
   background: var(--code-bg);
   overflow: hidden;
 }
@@ -3554,7 +3556,7 @@ button.settings-row:focus-visible {
   margin-top: var(--space-2);
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   background: var(--card-bg);
 }
 
@@ -6249,7 +6251,7 @@ button.settings-row:focus-visible {
   margin: 0 12px 8px;
   padding: 8px 10px;
   border: 1px solid var(--border-default);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--bg-elevated);
 }
 .queue-dockHead {
