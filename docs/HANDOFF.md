@@ -45,8 +45,19 @@ ensureFollow / stopFollow / emitQueue / forgetQueue / openMux`（含内部 `clos
 
 ## 三、纪律（沿用）
 
+
 - 纯搬迁，行为零变化；某一步对不上就回退该步并如实报告
 - 每步 `node --check` → 热重载 → 冒烟 → commit → push → `cd E:/desk/dsh-mobile && git pull --ff-only`
 - `assets/mobile.bundle.js(.map)` 不提交（由 lead 统一重建）
 - 热重载：备份 `~/.dsh/profiles/desktop/cordis.patch.yml` → 末尾加注释 → 等 12s → 原字节还原（sha256 前后一致）
 - 冒烟口径不要写死条目数：命令面板行数随技能目录变化（当前 36 行），用「搬前搬后一致」或从 RPC 取真实条数
+
+## 进度记录
+
+- 2026-10-19 `2abbc66` **group 1 完成**：`forgetQueue / streamStateFor / noteStepEvent /
+  assistantStreamEvent` 已进 `createSseRuntime({ state })`（无 host 回调依赖）。
+  `sse.js` 81 → 204 行，`core.js` 5,759 → 5,659 行；RPC md5 未变；真 SSE 连接可收到帧。
+- 下一组从 **group 2 = `emitQueue`** 开始；需注入 host 回调 `getQueueItems(sessionId)`，
+  回归要真跑「临时会话排队一条消息 → 观察 emitQueue 路径」。
+- group 3（`ensureFollow/stopFollow`）开始必须加
+  「prompt → 收 `user/message` → stopFollow 后不推」断言。
