@@ -254,7 +254,6 @@ body:has(> #dm-preset-btn) #dm-preset-btn {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
 }
 #dm-tools .dm-tool-btn,
 #dm-model-btn {
@@ -262,18 +261,11 @@ body:has(> #dm-preset-btn) #dm-preset-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
   padding: 0;
   border: none;
-  border-radius: 10px;
   background: transparent;
   color: var(--text-secondary, #6b6e78);
   cursor: pointer;
-}
-#dm-tools .dm-tool-btn:active,
-#dm-model-btn:active {
-  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
 }
 /* 上下文用量：与 + / 模型 完全同款的图标按钮（环心无数字） */
 .chat-context {
@@ -2270,16 +2262,6 @@ body:has(> #dm-cmd-btn) #dm-cmd-btn {
 .dm-page-rowMeta {
   margin-top: 4px;
   font-size: 12px;
-  color: var(--text-secondary, #4a4a5a);
-}
-.dm-page-rowDesc {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.5;
   color: var(--text-secondary, #4a4a5a);
 }
 .dm-page-state {
