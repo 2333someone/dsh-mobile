@@ -21,6 +21,7 @@ import { join, basename, resolve as resolvePath, relative as relativePath, isAbs
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
+import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
 import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuffer, readBody, readJsonBody, parseCookies, isLoopback, lanIPv4Addresses } from './http.js'
@@ -29,69 +30,16 @@ import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuf
 
 // bundle/theme 这类 Buffer 会被 asset() 按 mtime 缓存复用，这里也按对象缓存压缩结果，
 // 避免每次请求重复压缩 646KB。字符串响应（HTML）本身每请求重建，只能现压。
-function normalizePublicBase(value) {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  if (raw === '') return ''
-  try {
-    const url = new URL(raw)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
-    if (url.hostname === '') return null
-    url.hash = ''
-    url.search = ''
-    return url.toString().replace(/\/+$/, '')
-  } catch {
-    return null
-  }
-}
 
-function loadPublicBase(file) {
-  try {
-    if (!existsSync(file)) return ''
-    const saved = JSON.parse(readFileSync(file, 'utf8'))
-    const raw = saved && typeof saved === 'object' ? saved.publicBaseUrl : saved
-    const normalized = normalizePublicBase(raw)
-    return normalized === null ? '' : normalized
-  } catch {
-    return ''
-  }
-}
 
-function savePublicBase(file, value) {
-  try {
-    const dir = join(file, '..')
-    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(file, JSON.stringify({ publicBaseUrl: value }, null, 2))
-  } catch (err) {
-    console.warn('[dsh-mobile] failed to save public domain:', err && err.message)
-  }
-}
+
+
+
 
 // ── device store ────────────────────────────────────────────────────────────
-function loadDevices(file) {
-  const out = new Map()
-  try {
-    if (!existsSync(file)) return out
-    const saved = JSON.parse(readFileSync(file, 'utf8'))
-    if (saved && typeof saved === 'object') {
-      for (const [id, d] of Object.entries(saved)) {
-        if (d && typeof d === 'object' && typeof d.token === 'string') out.set(id, d)
-      }
-    }
-  } catch {}
-  return out
-}
 
-function persistDevices(file, devices) {
-  try {
-    const dir = join(file, '..')
-    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
-    const obj = {}
-    for (const [id, d] of devices) obj[id] = d
-    writeFileSync(file, JSON.stringify(obj, null, 2))
-  } catch (err) {
-    console.error('[dsh-mobile] failed to persist device store:', err && err.message)
-  }
-}
+
+
 
 // ── notify config (persisted) ───────────────────────────────────────────────
 function loadNotifyConfig(file) {
@@ -1050,20 +998,9 @@ function manifestJson() {
 // 记录在 ~/.dsh/dsh-mobile-protected.json（{ "sessionIds": [...] }）。
 // 手机端不允许归档这些会话；插件加载/热重载时还会把它们从归档集合里恢复，
 // 防止滑动删除、清理脚本之类的操作把用户主会话误归档（列表里「消失」）。
-function protectedSessionsFile() {
-  return join(homedir(), '.dsh', 'dsh-mobile-protected.json')
-}
 
-function loadProtectedSessionIds() {
-  try {
-    const raw = readFileSync(protectedSessionsFile(), 'utf8')
-    const parsed = JSON.parse(raw)
-    const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed.sessionIds) ? parsed.sessionIds : []
-    return new Set(list.filter((id) => typeof id === 'string' && id !== ''))
-  } catch {
-    return new Set()
-  }
-}
+
+
 
 /**
  * 宿主实现：HTTP 两个 face、设备/配对、SSE、RPC、页面渲染。
