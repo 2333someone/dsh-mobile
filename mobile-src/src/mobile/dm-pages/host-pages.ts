@@ -1,3 +1,5 @@
+import { iconMarkup } from '../design/icons.tsx'
+
 /**
  * 迁移 A：1:1 搬自宿主 index.js 的 `HOST_PAGES_HTML` 注入字符串。
  * 工作区页顶栏的「插件」「自动化」两个入口及其页面。
@@ -24,7 +26,20 @@
 //
 // 两个入口图标取自宿主自己的图标定义（web shell 的 IconPluginPinwheelOutlineRegular /
 // IconClockOutlineRegular，16×16、stroke 1px 描边风格），path d 原样照搬。
-export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="插件" title="插件"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M7.84457 5.06199C11.6605 4.93876 14.7962 6.14848 14.8484 7.76397C14.8875 8.97461 13.1838 10.0696 10.7215 10.5942"/><path d="M5.12742 8.07731C5.00419 4.26138 6.21391 1.12568 7.8294 1.07351C9.04004 1.03441 10.135 2.73808 10.6596 5.20037"/><path d="M8.02457 10.6802C4.20865 10.8034 1.07294 9.5937 1.02077 7.97821C0.981678 6.76758 2.68535 5.67262 5.14763 5.14798"/><path d="M10.7476 7.89535C10.8708 11.7113 9.66109 14.847 8.0456 14.8991C6.83496 14.9382 5.74 13.2346 5.21536 10.7723"/></svg></button><button id="dm-automation-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="自动化" title="自动化"><svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><path d="M8 14C11.3137 14 14 11.3137 14 8C14 4.68629 11.3137 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14Z"/><path d="M8 4.31V8.46L11 10.08"/></svg></button>
+/**
+ * 页面入口与内置配置四行的图标：全部来自 design/icons.tsx（桌面端同一份 svg）。
+ * 组 2（页面入口）跟桌面端规格；组 1（聊天工具栏）不在这里，保持原样。
+ */
+const ENTRY_PLUGINS_ICON = iconMarkup('pagePlugins', { size: 20 })
+const ENTRY_AUTOMATIONS_ICON = iconMarkup('pageAutomations', { size: 20 })
+const CONFIG_ART_SVG: Readonly<Record<string, string>> = {
+  subagent: iconMarkup('pageBuiltinSubagent', { size: 36 }),
+  'web-search': iconMarkup('pageBuiltinWebSearch', { size: 36 }),
+  'agent-loop': iconMarkup('pageBuiltinAgentLoop', { size: 36 }),
+  shell: iconMarkup('pageBuiltinTerminal', { size: 36 }),
+}
+
+export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="插件" title="插件">${ENTRY_PLUGINS_ICON}</button><button id="dm-automation-btn" class="mobile-iconbtn dm-header-btn" type="button" aria-label="自动化" title="自动化">${ENTRY_AUTOMATIONS_ICON}</button>
 <div id="dm-host-pages">
 <section id="dm-page-plugins" class="dm-page" hidden aria-label="插件">
 <header class="dm-page-header"><button class="dm-page-iconbtn" type="button" aria-label="返回" data-dm-back="plugins"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h1 class="dm-page-title">插件</h1><button class="dm-page-iconbtn" type="button" aria-label="刷新插件" data-dm-refresh="plugins"><svg class="dm-page-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.49 8.66A8.2 8.2 0 1 1 11.71 3.80"/><path d="M16.31 3.64L11.64 1.56L11.79 6.05Z" fill="currentColor" stroke="currentColor" stroke-width="0.55" stroke-linejoin="round"/></svg></button></header>
@@ -73,13 +88,7 @@ export const HOST_PAGES_HTML = `<button id="dm-plugins-btn" class="mobile-iconbt
   //   web-search= PluginArtworkSearch    (彩色放大镜)
   //   agent-loop= PluginArtworkLoop      (紫色循环)
   //   shell     = PluginArtworkTerminal  (蓝色 >_)
-  var CONFIG_ART = {
-    'subagent': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="14.9893" y="15.1877" width="12.2365" height="12.2365" rx="2" fill="url(#dsh_plugin_art_CU_0a)" fill-opacity="0.8"></rect><rect x="8.87109" y="9.0697" width="12.2365" height="12.2365" rx="2" fill="url(#dsh_plugin_art_CU_0b)" fill-opacity="0.8"></rect><defs><linearGradient id="dsh_plugin_art_CU_0a" x1="21.1075" y1="15.1877" x2="21.1075" y2="27.4243" gradientUnits="userSpaceOnUse"><stop stop-color="#45E7A4"></stop><stop offset="1" stop-color="#05909D"></stop></linearGradient><linearGradient id="dsh_plugin_art_CU_0b" x1="14.9894" y1="9.0697" x2="14.9894" y2="21.3063" gradientUnits="userSpaceOnUse"><stop stop-color="#69B9FF"></stop><stop offset="1" stop-color="#324DE2"></stop></linearGradient></defs></svg>',
-    'web-search': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M26.5362 26.9865L22.3813 22.8317" stroke="#658EFF" stroke-width="3"></path><g clip-path="url(#dsh_plugin_art_$U_0ring)"><g transform="matrix(0.0119394 -0.00173904 0.00173904 0.0119394 15.7661 16.2159)"><foreignObject x="-958.94" y="-958.94" width="1917.88" height="1917.88"><div style="background:conic-gradient(from 90deg, rgb(65, 225, 172) 0deg, rgb(101, 142, 255) 62.0619deg, rgb(65, 225, 172) 360deg);height:100%;width:100%"></div></foreignObject></g></g><defs><clipPath id="dsh_plugin_art_$U_0ring"><path d="M21.9717 16.2159H19.9717C19.9717 18.5386 18.0888 20.4215 15.7661 20.4215V22.4215V24.4215C20.2979 24.4215 23.9717 20.7478 23.9717 16.2159H21.9717ZM15.7661 22.4215V20.4215C13.4434 20.4215 11.5605 18.5386 11.5605 16.2159H9.56055H7.56055C7.56055 20.7478 11.2343 24.4215 15.7661 24.4215V22.4215ZM9.56055 16.2159H11.5605C11.5605 13.8933 13.4434 12.0104 15.7661 12.0104V10.0104V8.01038C11.2343 8.01038 7.56055 11.6841 7.56055 16.2159H9.56055ZM15.7661 10.0104V12.0104C18.0888 12.0104 19.9717 13.8933 19.9717 16.2159H21.9717H23.9717C23.9717 11.6841 20.2979 8.01038 15.7661 8.01038V10.0104Z"></path></clipPath></defs></svg>',
-    'agent-loop': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18.0486 28.4901C12.0858 28.4901 7.25195 23.6562 7.25195 17.6934C13.2148 17.6934 18.0486 22.5272 18.0486 28.4901Z" fill="#A797FC"></path><path d="M18.0486 6.89667C12.0858 6.89667 7.25195 11.7305 7.25195 17.6934C13.2148 17.6934 18.0486 12.8595 18.0486 6.89667Z" fill="url(#dsh_plugin_art_bU_0a)"></path><path d="M18.0485 28.4901C24.0114 28.4901 28.8452 23.6562 28.8452 17.6934C22.8824 17.6934 18.0485 22.5272 18.0485 28.4901Z" fill="#4561EE"></path><path d="M18.0485 6.89667C24.0114 6.89667 28.8452 11.7305 28.8452 17.6934C22.8824 17.6934 18.0485 12.8595 18.0485 6.89667Z" fill="#658EFF"></path><defs><linearGradient id="dsh_plugin_art_bU_0a" x1="16.7911" y1="16.1655" x2="8.98192" y2="8.74289" gradientUnits="userSpaceOnUse"><stop stop-color="#A23AE7"></stop><stop offset="1" stop-color="#E2E2E2"></stop></linearGradient></defs></svg>',
-    'shell': '<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M10 11L16.606 17.606C16.6841 17.6841 16.6841 17.8107 16.606 17.8888L10 24.4948" stroke="#679EFE" stroke-width="3.5"></path><path d="M20.1211 24.4946H26.8685" stroke="#679EFE" stroke-width="3.5"></path></svg>'
-  };
-
+  var CONFIG_ART = ${JSON.stringify(CONFIG_ART_SVG)};
   var current = null;      // { kind, el } —— 当前打开的信息页（列表层）
   var detailName = null;   // 当前打开的插件详情（bundle name 或 entry:entryId）
   var seq = 0;             // 每次 load 递增，晚到的响应不许覆盖新页面

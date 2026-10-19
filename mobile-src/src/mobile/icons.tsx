@@ -1,10 +1,13 @@
 /**
- * Inline SVG icon set (stroke = currentColor, aria-hidden by default): the
- * handful of glyphs the surface needs — quick-bar actions, workspace type
- * icons, disclosure arrows, empty states, composer send.
+ * Inline SVG icon set for the vendored surface. Icons with a desktop counterpart
+ * render the SAME svg as the desktop apps (re-exported through ./design/icons.tsx,
+ * the single icon source); the rest are the upstream dsh-palm glyphs kept as-is
+ * and listed in the design report as "no desktop equivalent".
  */
 
 import type { SVGProps } from 'react'
+
+import { Icon } from './design/icons.tsx'
 
 /** Base props for every glyph: 24×24 stroke path, sized by CSS. */
 function base(props: SVGProps<SVGSVGElement>): SVGProps<SVGSVGElement> {
@@ -23,12 +26,7 @@ function base(props: SVGProps<SVGSVGElement>): SVGProps<SVGSVGElement> {
 
 /** Magnifier (search chip / reasoning disclosure). */
 export function SearchIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.8-3.8" />
-    </svg>
-  )
+  return <Icon name="actionSearch" {...props} />
 }
 
 /** Bell (completion notifications). */
@@ -53,12 +51,7 @@ export function PinIcon(props: SVGProps<SVGSVGElement>) {
 
 /** Clock (recent-access chip). */
 export function ClockIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3.5 2" />
-    </svg>
-  )
+  return <Icon name="pageAutomations" {...props} />
 }
 
 /** Folder (workspace icon, tinted per project kind by the wrapper). */
@@ -91,38 +84,22 @@ export function ChatBubbleIcon(props: SVGProps<SVGSVGElement>) {
 
 /** Plus (FAB / dashed create card). */
 export function PlusIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={2.2}>
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  )
+  return <Icon name="actionAdd" {...props} />
 }
 
 /** Up chevron for accordion disclosures (rotates 180° when open). */
 export function ChevronUpIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <path d="m6 14 6-6 6 6" />
-    </svg>
-  )
+  return <Icon name="actionCollapse" {...props} />
 }
 
 /** Down chevron (jump-to-latest button). */
 export function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <path d="m6 10 6 6 6-6" />
-    </svg>
-  )
+  return <Icon name="actionExpand" {...props} />
 }
 
 /** Right arrow (send). */
 export function SendIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={2}>
-      <path d="M5 12h13M13 6.5 18.5 12 13 17.5" />
-    </svg>
-  )
+  return <Icon name="actionSend" {...props} />
 }
 
 /** Inbox / tray (generic empty state). */
@@ -169,12 +146,7 @@ export function HelpIcon(props: SVGProps<SVGSVGElement>) {
 
 /** Trash (clear cache). */
 export function TrashIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <path d="M4 7h16M9 7V5h6v2M6.5 7l1 12.2a1.5 1.5 0 0 0 1.5 1.3h6a1.5 1.5 0 0 0 1.5-1.3l1-12.2" />
-      <path d="M10 11v5M14 11v5" />
-    </svg>
-  )
+  return <Icon name="actionDelete" {...props} />
 }
 
 /** Type letters (font size). */
@@ -228,31 +200,17 @@ export function VibrateIcon(props: SVGProps<SVGSVGElement>) {
 
 /** Info circle (about). */
 export function InfoIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 11v5M12 8h.01" />
-    </svg>
-  )
+  return <Icon name="actionInfo" {...props} />
 }
 
 /** Three dots (more menu). */
 export function MoreIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={2.4}>
-      <path d="M5.5 12h.01M12 12h.01M18.5 12h.01" />
-    </svg>
-  )
+  return <Icon name="actionMore" {...props} />
 }
 
 /** Copy (context menu / code copy). */
 export function CopyIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <rect x="9" y="9" width="11" height="11" rx="2" />
-      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
-    </svg>
-  )
+  return <Icon name="actionCopy" {...props} />
 }
 
 /** Quote mark (quote into composer). */
@@ -267,40 +225,22 @@ export function QuoteIcon(props: SVGProps<SVGSVGElement>) {
 
 /** Pencil (rename). */
 export function PencilIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <path d="m14.5 5.5 4 4L8 20l-4.6 1L4.5 16Z" />
-      <path d="m12.5 7.5 4 4" />
-    </svg>
-  )
+  return <Icon name="actionEdit" {...props} />
 }
 
 /** Check mark (completed sessions / copied state). */
 export function CheckIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={2}>
-      <path d="m5 12.5 4.5 4.5L19 7.5" />
-    </svg>
-  )
+  return <Icon name="actionCheck" {...props} />
 }
 
 /** Microphone (voice input). */
 export function MicIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)}>
-      <rect x="9" y="3" width="6" height="11" rx="3" />
-      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
-    </svg>
-  )
+  return <Icon name="pageVoice" {...props} />
 }
 
 /** Close × (dismiss quote bar / search). */
 export function CloseIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={2}>
-      <path d="m6 6 12 12M18 6 6 18" />
-    </svg>
-  )
+  return <Icon name="actionClose" {...props} />
 }
 
 /** Enter / insert: arrow down into a line (code-block insert button). */
@@ -336,32 +276,15 @@ export function PlayIcon(props: SVGProps<SVGSVGElement>) {
 
 /** CPU chip (model selector pill). */
 export function ModelIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={1.7}>
-      <rect x="6" y="6" width="12" height="12" rx="2" />
-      <rect x="10" y="10" width="4" height="4" rx="0.5" />
-      <path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3" />
-    </svg>
-  )
+  return <Icon name="commandModel" {...props} />
 }
 
 /** Shield (permission pill; tone applied by the wrapper color). */
 export function ShieldIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={1.7}>
-      <path d="M12 3 5 5.5v5.2c0 4.3 2.9 7.6 7 9.3 4.1-1.7 7-5 7-9.3V5.5Z" />
-      <path d="m9 11.5 2.2 2.2L15.5 9" />
-    </svg>
-  )
+  return <Icon name="commandPermission" {...props} />
 }
 
 /** Gauge (per-provider usage/quota display icon). */
 export function GaugeIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...base(props)} strokeWidth={1.7}>
-      <path d="M4.5 19a8.5 8.5 0 1 1 15 0" />
-      <path d="m12 16 2.6-3" />
-      <path d="M12 16v-3" />
-    </svg>
-  )
+  return <Icon name="pageUsage" {...props} />
 }

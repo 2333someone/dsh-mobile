@@ -685,3 +685,54 @@ export const MISSING_DESKTOP_ICONS = [
   { what: "待处理指示（点/条）", why: "桌面端用纯色状态点（primitives 的 StateDot，CSS 圆点），不是 svg 图标；本模块不提供伪图标。" },
   { what: "/orchestrate 命令图标", why: "该命令由本机插件注册，桌面端命令表（ui-commands 的 HOST_FACES）只有 goal/plan/feedback/compact/permission/export 六个 faces，没有 orchestrate 的图标；桌面端对这种命令不显示图标，因此本模块也不给。" },
 ] as const
+
+/* ── 给非 React 的旧模块（页面型注入字符串）用 ───────────────────────────
+   迁移进来的 dm-pages/dm-toolbar 模块是「HTML 字符串 + 内联脚本」，不能直接
+   `import { Icon }`；它们统一改用下面两个纯字符串 helper 取同一份桌面 svg，
+   这样图标仍然只有 design/icons.tsx 一个来源。 */
+
+/** 渲染一个图标需要的原始片段。 */
+export interface IconParts {
+  /** svg viewBox（桌面端原值） */
+  readonly viewBox: string
+  /** 根上的原始属性（fill / stroke / stroke-width 等，kebab-case） */
+  readonly rootAttrs: Readonly<Record<string, string | number>>
+  /** svg 内部标记（path / g / defs，原样） */
+  readonly inner: string
+  /** 桌面端默认尺寸 */
+  readonly size: number
+}
+
+/** 取一个图标的原始片段（不渲染，供字符串模板拼接）。 */
+export function iconParts(name: IconName): IconParts {
+  const def = ICONS[name]
+  return {
+    viewBox: def.viewBox,
+    rootAttrs: def.rootProps,
+    inner: def.inner,
+    size: def.size,
+  }
+}
+
+export interface IconMarkupOptions {
+  /** 覆盖默认尺寸（px） */
+  readonly size?: number
+  /** 追加到 svg 上的额外属性串（例如 `class="dm-cmd-icon" aria-hidden="true"`） */
+  readonly attrs?: string
+}
+
+/**
+ * 生成一个图标的 svg 字符串（给旧模块的模板字符串用）。
+ *
+ * 与 `<Icon>` 输出同一份 viewBox / 根属性 / path，只是序列化成文本；
+ * 尺寸默认取桌面端 default size，可显式覆盖。
+ */
+export function iconMarkup(name: IconName, options: IconMarkupOptions = {}): string {
+  const def = ICONS[name]
+  const dimension = options.size ?? def.size
+  const attrs = Object.entries(def.rootProps)
+    .map(([key, value]) => `${key}="${String(value)}"`)
+    .join(' ')
+  const extra = options.attrs ? ` ${options.attrs}` : ''
+  return `<svg width="${dimension}" height="${dimension}" ${attrs}${extra}>${def.inner}</svg>`
+}
