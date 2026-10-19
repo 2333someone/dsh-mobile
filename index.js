@@ -1095,7 +1095,7 @@ const MODEL_BUTTON_HTML = `<button id="dm-model-btn" type="button" aria-label="�
     openCtxPanel();
   }, true);
 
-  setInterval(ensureTools, 120);
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensureTools, 240, function () { return !!document.querySelector('.chat-composer'); }); else setInterval(ensureTools, 240);
   ensureTools();
 })();
 </script>`
@@ -1516,12 +1516,13 @@ const EMOJI_ICON_HTML = `<script>
       else window.setTimeout(flush, 0);
     }
 
-    var mo = new MutationObserver(function (records) {
-      // 文本节点不再打标记（会被 splitText 切掉）；槽位状态存在 slot 元素上，
-      // 这里只负责触发一次 flush。
-      schedule();
-    });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 文本节点不再打标记（会被 splitText 切掉）；槽位状态存在 slot 元素上，
+    // 这里只负责触发一次 flush。
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
     schedule();
   } catch (e) {}
 })();
@@ -1654,13 +1655,16 @@ const TURN_PILL_HTML = `<script>
     window.setTimeout(function () { pending = false; scan(); }, 60);
   }
   try {
-    var mo = new MutationObserver(schedule);
-    mo.observe(document.documentElement || document.body, {
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, {
       childList: true,
       subtree: true
     });
+    }
   } catch (e) {}
-  setInterval(scan, 400);
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(scan, 800, function () { return !!document.querySelector('.chat-jump-turns'); }); else setInterval(scan, 800);
   scan();
 })();
 </script>`
@@ -2600,10 +2604,13 @@ const SUBAGENT_BTN_HTML = `<button id="dm-subagent-btn" class="mobile-iconbtn" t
     window.setTimeout(function () { pending = false; ensure(); }, 60);
   }
   try {
-    var mo = new MutationObserver(schedule);
-    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
   } catch (e) {}
-  setInterval(ensure, 400);
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensure, 800, function () { return !!document.querySelector('.chat-composer'); }); else setInterval(ensure, 800);
   ensure();
 })();
 </script>`
@@ -3012,10 +3019,13 @@ const APPROVAL_BTN_HTML = `<button id="dm-approval-btn" class="dm-tool-btn" type
     window.setTimeout(function () { pending = false; ensure(); }, 60);
   }
   try {
-    var mo = new MutationObserver(schedule);
-    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
   } catch (e) {}
-  setInterval(ensure, 400);
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensure, 800, function () { return !!document.querySelector('.chat-composer'); }); else setInterval(ensure, 800);
   ensure();
 })();
 </script>`
@@ -3108,10 +3118,13 @@ const SUBAGENT_STATUS_BTN_HTML = `<button id="dm-subagent-status-btn" class="dm-
     window.setTimeout(function () { pending = false; ensure(); }, 60);
   }
   try {
-    var mo = new MutationObserver(schedule);
-    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
   } catch (e) {}
-  setInterval(ensure, 400);
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensure, 800, function () { return !!document.querySelector('#dm-tools, .chat-tools'); }); else setInterval(ensure, 800);
   setInterval(sync, SYNC_MS);
   hide();
   ensure();
@@ -3382,10 +3395,13 @@ const PERMISSION_BTN_HTML = `<button id="dm-perm-btn" class="dm-tool-btn" type="
     window.setTimeout(function () { pending = false; ensure(); }, 60);
   }
   try {
-    var mo = new MutationObserver(schedule);
-    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
   } catch (e) {}
-  setInterval(ensure, 400);
+  if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensure, 800, function () { return !!document.querySelector('.chat-composer'); }); else setInterval(ensure, 800);
   ensure();
 })();
 </script>`
@@ -3735,8 +3751,11 @@ const PRESET_BTN_HTML = `<button id="dm-preset-btn" class="dm-tool-btn" type="bu
     window.setTimeout(function () { pending = false; ensure(); }, 60);
   }
   try {
-    var mo = new MutationObserver(schedule);
-    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
   } catch (e) {}
   setInterval(ensure, 300);
   ensure();
@@ -4093,13 +4112,16 @@ const QUEUE_DOCK_PLACE_HTML = `<script>
     // 队列出现/消失、状态条出现、键盘压缩工具栏……都会动到高度：Observer 覆盖结构变化，
     // resize 覆盖视口变化。rAF 合并，同一帧里只量一次。
     try {
-      var mo = new MutationObserver(schedule);
-      mo.observe(document.documentElement, {
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+      else {
+        var mo = new MutationObserver(schedule);
+        mo.observe(document.documentElement, {
         childList: true,
         subtree: true,
         attributes: true,
         attributeFilter: ['style', 'hidden']
       });
+      }
     } catch (e) {}
     window.addEventListener('resize', schedule);
     // 兜底：字体加载 / 工具栏内部换行等不产生上述变化的情况；低频，开销可忽略。
@@ -4515,16 +4537,19 @@ const CHAT_STATUS_HTML = `<script>
       else window.setTimeout(flush, 0);
     }
 
-    var mo = new MutationObserver(schedule);
     // characterData 覆盖状态词变化（React 只改 nodeValue），childList 覆盖
     // 行/折叠块的挂载与卸载，aria-label 覆盖状态行自身的状态切换。
-    mo.observe(document.body, {
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule, { attributes: true });
+    else {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.body, {
       childList: true,
       subtree: true,
       characterData: true,
       attributes: true,
       attributeFilter: ['aria-label']
     });
+    }
     // 必须在 bundle 的模块脚本执行前装上（本脚本是内联 classic，早于 deferred
     // module），这样 mux 的 new EventSource 才会经过我们的包装。
     watchTurnEnd();
@@ -5004,10 +5029,13 @@ const PRESET_STATUS_HTML = `<script>
     }
 
     try {
-      var mo = new MutationObserver(function () { ensure(); });
-      mo.observe(document.documentElement || document.body, {
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(ensure, { attributes: true });
+      else {
+        var mo = new MutationObserver(function () { ensure(); });
+        mo.observe(document.documentElement || document.body, {
         childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-label', 'title', 'aria-hidden']
       });
+      }
     } catch (e) {}
     setInterval(ensure, 300);
     setInterval(refresh, 4000);
@@ -5180,8 +5208,11 @@ const CHAT_AUTOSCROLL_HTML = `<script>
 
     // 新内容进来 → 若在跟随就贴底。
     try {
-      var mo = new MutationObserver(schedule);
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule, { frame: true });
+      else {
+        var mo = new MutationObserver(schedule);
+        mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
+      }
     } catch (e) {}
 
     // 旁听 SSE 判定「正在生成」：不改 onmessage/onerror，只加 addEventListener。
@@ -5511,8 +5542,11 @@ const ICON_OPTICAL_ALIGN_HTML = `<script>
     }
 
     try {
-      var mo = new MutationObserver(schedule);
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+      else {
+        var mo = new MutationObserver(schedule);
+        mo.observe(document.documentElement || document.body, { childList: true, subtree: true, characterData: true });
+      }
     } catch (e) {}
     window.addEventListener('resize', schedule);
     // 字体晚到（自定义字体/系统字体异步加载）时重新算一次
@@ -6422,10 +6456,13 @@ const COMMAND_PANEL_HTML = `<button id="dm-cmd-btn" class="dm-tool-btn" type="bu
       window.setTimeout(function () { pending = false; ensure(); }, 60);
     }
     try {
-      var mo = new MutationObserver(schedule);
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+      else {
+        var mo = new MutationObserver(schedule);
+        mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+      }
     } catch (e) {}
-    setInterval(ensure, 400);
+    if (window.__dmEnsureTick) window.__dmEnsureTick.add(ensure, 800, function () { return !!document.querySelector('.chat-composer'); }); else setInterval(ensure, 800);
     ensure();
   } catch (e) {}
 })();
@@ -8023,7 +8060,7 @@ const MODELS_CENTER_HTML = `<script>
     }, 60);
   }
   try {
-    new MutationObserver(scheduleSettingsFilter).observe(document.documentElement, { childList: true, subtree: true });
+    if (window.__dmMutationBus) window.__dmMutationBus.subscribe(scheduleSettingsFilter); else new MutationObserver(scheduleSettingsFilter).observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {}
   window.setInterval(function () { try { applySettingsFilter(); } catch (e) {} }, 1000);
   applySettingsFilter();
@@ -9483,8 +9520,11 @@ const SETTINGS_SCOPE_HTML = `<script>
       window.setTimeout(function () { queued = false; ensure(); }, 60);
     }
     try {
-      var mo = new MutationObserver(schedule);
-      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule);
+      else {
+        var mo = new MutationObserver(schedule);
+        mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+      }
     } catch (e) {}
     setInterval(ensure, 500);
     ensure();
@@ -9544,7 +9584,7 @@ const ADD_SHEET_FILTER_HTML = `
       }, 60);
     }
     try {
-      new MutationObserver(schedule).observe(document.documentElement || document.body, { childList: true, subtree: true });
+      if (window.__dmMutationBus) window.__dmMutationBus.subscribe(schedule); else new MutationObserver(schedule).observe(document.documentElement || document.body, { childList: true, subtree: true });
     } catch (e) {}
     window.setInterval(function () { try { apply(); } catch (e) {} }, 500);
     apply();
@@ -9928,6 +9968,113 @@ const PENDING_ALERTS_HTML = `<script>
 })();
 </script>`
 
+// ── 共享 MutationObserver + 统一 ensure tick（性能）──────────────────────
+// 聊天页空闲时 16 个脚本各自 observe 整个 documentElement，DOM 每秒变几百次；
+// 另外 7 条 120/400ms ensure 定时器在任何页面都空跑。实测长会话空闲 30s 主线程
+// 14.9%、MO 回调 13,000。这里做两件事（行为不变，只收敛触发频率）：
+//   ① 合并成 1 个结构化 observer（childList/characterData）+ 1 个属性 observer
+//      （只有真正依赖属性变化的 PRESET_STATUS / CHAT_STATUS 订阅）；结构化变化
+//      按 200ms 时间片分发给普通订阅者，自动滚动/图标光学对齐用 {frame:true}
+//      走 rAF，保持低延迟。
+//   ② 6 条 400ms ensure + 1 条 120ms ensureTools 共用一条 120ms tick；任务带
+//      ready() 谓词，目标元素不在时直接跳过，连续 3 个 tick 无事可做就停表；
+//      DOM 一有变化（bus 通知）就重新唤醒，进入目标页面后立即恢复。
+// 兜底：若本脚本未执行/失败，调用方保留旧的独立 observer / setInterval 分支。
+const MUTATION_BUS_HTML = `<script>
+(function () {
+  if (window.__dmMutationBus) return;
+  var frameListeners = [];
+  var normalListeners = [];
+  var attrListeners = [];
+  var frameQueued = false;
+  var normalTimer = 0;
+  var attrTimer = 0;
+  function notify(list) {
+    var snapshot = list.slice();
+    for (var i = 0; i < snapshot.length; i++) {
+      try { snapshot[i](); } catch (e) {}
+    }
+  }
+  function scheduleFrame() {
+    if (frameQueued) return;
+    frameQueued = true;
+    if (window.requestAnimationFrame) window.requestAnimationFrame(function () { frameQueued = false; notify(frameListeners); });
+    else window.setTimeout(function () { frameQueued = false; notify(frameListeners); }, 0);
+  }
+  function scheduleNormal() {
+    if (normalTimer !== 0) return;
+    normalTimer = window.setTimeout(function () { normalTimer = 0; notify(normalListeners); }, 600);
+  }
+  function scheduleAttr() {
+    if (attrTimer !== 0) return;
+    attrTimer = window.setTimeout(function () { attrTimer = 0; notify(attrListeners); }, 400);
+  }
+  try {
+    var structural = new MutationObserver(function () {
+      if (frameListeners.length > 0) scheduleFrame();
+      if (normalListeners.length > 0) scheduleNormal();
+    });
+    structural.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    var attributes = new MutationObserver(function () {
+      if (attrListeners.length > 0) scheduleAttr();
+    });
+    attributes.observe(document.documentElement, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['class', 'aria-label', 'title', 'aria-hidden', 'style', 'hidden']
+    });
+  } catch (e) { return; }
+
+  // ── 统一 ensure tick：120ms 一条表，任务按各自 period 到期才跑；全都不 ready 就停表。
+  var tasks = [];
+  var tickTimer = 0;
+  var idleTicks = 0;
+  function tick() {
+    var now = Date.now();
+    var ran = false;
+    for (var i = 0; i < tasks.length; i++) {
+      var task = tasks[i];
+      if (now < task.next) continue;
+      if (task.ready && !task.ready()) continue;
+      task.next = now + task.period;
+      ran = true;
+      try { task.fn(); } catch (e) {}
+    }
+    if (ran) { idleTicks = 0; return; }
+    idleTicks++;
+    if (idleTicks >= 3) {
+      idleTicks = 0;
+      window.clearInterval(tickTimer);
+      tickTimer = 0;
+    }
+  }
+  function startTick() {
+    if (tickTimer !== 0) return;
+    idleTicks = 0;
+    tickTimer = window.setInterval(tick, 120);
+  }
+  var ensureTick = {
+    add: function (fn, period, ready) {
+      tasks.push({ fn: fn, period: typeof period === 'number' && period > 0 ? period : 120, ready: typeof ready === 'function' ? ready : null, next: 0 });
+      startTick();
+    },
+    wake: startTick
+  };
+  normalListeners.push(ensureTick.wake);
+
+  window.__dmMutationBus = {
+    subscribe: function (listener, options) {
+      if (typeof listener !== 'function') return;
+      if (options && options.frame === true) frameListeners.push(listener);
+      else if (options && options.attributes === true) attrListeners.push(listener);
+      else normalListeners.push(listener);
+    }
+  };
+  window.__dmEnsureTick = ensureTick;
+  startTick();
+})();
+</script>`
+
 function mobilePageHtml() {
   return [
     '<!doctype html>',
@@ -9936,6 +10083,7 @@ function mobilePageHtml() {
     '<meta charset="utf-8">',
     // 必须最早：先把 navigator.onLine 的误报按住，bundle 才不会在发送时丢掉图片。
     ONLINE_GUARD_HTML,
+    MUTATION_BUS_HTML,
     '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">',
     '<meta name="theme-color" content="#f5f5f7">',
     '<meta name="referrer" content="no-referrer">',
@@ -10886,19 +11034,6 @@ export function apply(ctx, config) {
       ...(entry.callId === undefined ? {} : { callId: entry.callId }),
       ...(entry.reason === undefined ? {} : { reason: mobileReason(entry) }),
     }, rpcId)
-    // 系统通知面：页面在后台/锁屏时 events.notify 会弹通知 + 震动。
-    // 「隐藏详情」开关走服务端 notifyConfig.hideDetails（与第三方推送同一份配置）。
-    const hideNotificationDetail = !!(notifyConfig && notifyConfig.hideDetails === true)
-    const approvalTitle = `需要审批 · ${typeof entry.toolName === 'string' ? entry.toolName : '工具'}`
-    const approvalBody = hideNotificationDetail ? '有一个审批正等着你处理' : (mobileReason(entry) || '有一个审批正等着你处理')
-    emitNotify({
-      title: approvalTitle,
-      body: approvalBody,
-      id: `approval-${approvalId}`,
-      sessionId,
-    })
-    // 浏览器通知不可用（页面已关/权限没给）时，已配置的第三方通道仍能提醒。
-    deliverNotify(notifyConfig, { title: approvalTitle, body: approvalBody }).catch(() => {})
     return entry
   }
 
@@ -10935,18 +11070,6 @@ export function apply(ctx, config) {
       sessionId,
       questions: entry.questions,
     }, rpcId)
-    // 系统通知面：提问也要提醒（否则手机在后台时同样静默）。
-    const firstQuestion = entry.questions[0] && typeof entry.questions[0].question === 'string'
-      ? entry.questions[0].question
-      : ''
-    const questionBody = notifyConfig && notifyConfig.hideDetails === true ? '有一个提问正等着你' : (firstQuestion || '有一个提问正等着你')
-    emitNotify({
-      title: '需要你回答',
-      body: questionBody,
-      id: `question-${rpcId}`,
-      sessionId,
-    })
-    deliverNotify(notifyConfig, { title: '需要你回答', body: questionBody }).catch(() => {})
     return entry
   }
 
@@ -15067,94 +15190,6 @@ export function apply(ctx, config) {
     // follow 单例不随它回收 —— 回收的是这条 socket，不是会话跟随。
     lifetimeTimer = setTimeout(closeStream, SSE_MAX_LIFETIME_MS)
   }
-
-  // ── 浏览器通知流：GET /m/api/events.notify ────────────────────────────────
-  // 手机 bundle 在页面切到后台时会订阅这条 SSE（bundle 的 mr() / _r()）：
-  // 收到 {type:'notify', payload:{title, body, id, sessionId}} 就弹系统通知，
-  // 并按「震动」开关 navigator.vibrate(15)。以前这里固定 404，于是
-  // 「dsh 端审批出现了，手机没有任何提醒」——只剩前台铃铛角标。
-  // 现在审批/提问登记时各推一帧；没有手机连着时零开销。
-  const notifyStreams = new Set()
-
-  function emitNotify(event) {
-    if (notifyStreams.size === 0) return
-    const json = JSON.stringify({ type: 'notify', payload: event })
-    for (const stream of [...notifyStreams]) stream.write(json)
-  }
-
-  function openNotify(req, res) {
-    if ((req.method || 'GET').toUpperCase() !== 'GET') {
-      res.statusCode = 405
-      res.end()
-      return
-    }
-    // 与 events.mux 同一套鉴权：未配对设备 403（bundle 会走降级路径）。
-    const device = authenticatedDevice(req)
-    if (!device) {
-      req.resume()
-      sendJson(res, 403, { ok: false, error: { code: 'unpaired', message: 'mobile session is not paired' } })
-      return
-    }
-    if (notifyStreams.size >= MAX_SSE_SUBSCRIBERS) {
-      sendJson(res, 429, { ok: false, error: { code: 'too-many-events', message: 'too many live streams' } })
-      return
-    }
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    })
-    try {
-      if (res.socket && typeof res.socket.setNoDelay === 'function') res.socket.setNoDelay(true)
-    } catch {}
-    try {
-      if (typeof res.flushHeaders === 'function') res.flushHeaders()
-    } catch {}
-
-    let heartbeat
-    const stream = {
-      deviceId: device.deviceId,
-      closed: false,
-      write(json) {
-        if (this.closed) return
-        try {
-          res.write(`data: ${json}\n\n`)
-        } catch {
-          closeStream()
-        }
-      },
-    }
-    function closeStream() {
-      if (stream.closed) return
-      stream.closed = true
-      notifyStreams.delete(stream)
-      clearInterval(heartbeat)
-      try {
-        res.end()
-      } catch {}
-    }
-    notifyStreams.add(stream)
-    try {
-      res.write(': notify\n\n')
-    } catch {}
-    heartbeat = setInterval(() => {
-      if (stream.closed) return
-      // 设备被撤销/停用后立即断流（与 mux 一致）。
-      if (devices.get(stream.deviceId) === undefined) {
-        closeStream()
-        return
-      }
-      try {
-        res.write(': ping\n\n')
-      } catch {
-        closeStream()
-      }
-    }, SSE_HEARTBEAT_MS)
-    req.on('close', closeStream)
-    res.on('close', closeStream)
-  }
-
   // ── API dispatch ──────────────────────────────────────────────────────────
   async function handleApi(req, res, url) {
     const sub = url.pathname.slice(API_PREFIX.length)
@@ -15186,8 +15221,12 @@ export function apply(ctx, config) {
 
     // SSE：实时 mux 流。手机用它取代轮询；拿不到就退化为轮询（与 404 时同一结果）。
     if (sub === '/events.mux') return openMux(req, res)
-    // SSE：浏览器通知流（页面在后台时 bundle 用它弹系统通知 + 震动）。
-    if (sub === '/events.notify') return openNotify(req, res)
+    // events.notify 未实现：保持 404，bundle 会降级（通知走轮询/Web Push）。
+    if (sub === '/events.notify') {
+      res.statusCode = 404
+      res.end()
+      return
+    }
 
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
