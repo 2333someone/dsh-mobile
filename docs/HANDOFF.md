@@ -165,6 +165,13 @@ src/host/rpc/push.js     push.config / push.subscribe / push.unsubscribe       �
   方法集合 57(switch) + 7(注册表) = 64，md5 `ae0e06a3…` 与基线一致。
 - **下一步**：继续搬 57 个方法（mobile 36 / session 10 / workspace 6 / pair 4 / agentPreset 1），
   照「二、标准动作」五步做，每搬一个域跑一次 `rpc-diff.mjs` + 前后探针 diff。
+- 2026-10-19 **手机端过程卡头行修复**（`mobile-src/.../dm-patches/chat-status.ts`）：
+  bundle 会把「最新一段思考原文/工具参数」塞进 `.chat-proc-think-run` 跑马灯和
+  `.chat-proc-current-text`，钉在卡片顶部 → 看起来是「工具调用顶掉思考、最新内容在上面」。
+  dm-patch 现在按阶段归一成状态词（思考 → 思考中/深度思考 N 行；工具 → 执行命令中等），
+  并清空跑马灯的 `aria-hidden` 副本（否则会出现「思考中 思考中」）。
+  重建：`cd mobile-src && npm run build`；验证脚本 `.dsh-scratch/mobile-head-verify.mjs`
+  （断言头行只出现状态词、无长碎片）。
 
 ## 本轮验收结果（独立复核：sse-verifier 用自建脚本，不采信 lead 数据）
 

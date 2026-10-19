@@ -362,6 +362,41 @@ export const CHAT_STATUS_HTML = `<script>
       return text;
     }
 
+    // ── 4d) 头行只显示状态词，不显示正文/参数碎片 ──────────────────────────
+    // bundle 会把「当前这一步的最新一段文本」塞进 .chat-proc-current-text：
+    // 思考阶段是推理正文的尾部，工具阶段是工具参数。于是这一行（钉在卡片顶部）
+    // 一会儿是思考碎片、一会儿是工具参数，看起来就是「工具调用把思考顶掉、
+    // 最新内容显示在上面」。这里按**阶段**归一，绝不原样显示：
+    //   · 思考阶段（.chat-step-icon 带 chat-step-icon-thinking）→ 有思考段就
+    //     镜像「深度思考 · N 行」，否则「思考中」；
+    //   · 工具阶段 → 动作名映射成进行时；未知动作/碎片按图标变体归一
+    //    （chat-step-icon-bash → 执行命令中），兜底「调用工具中」。
+    function isThinkingStep(el) {
+      var cur = el;
+      while (cur && cur.nodeType === 1 && !cur.classList.contains('chat-proc-current')) cur = cur.parentNode;
+      if (!cur || cur.nodeType !== 1) return true;
+      var icon = cur.querySelector('.chat-step-icon');
+      if (!icon) return true;
+      return icon.classList.contains('chat-step-icon-thinking');
+    }
+
+    var VARIANT_LABELS = {
+      bash: '执行命令中', code: '运行代码中', read: '读取文件中', write: '写入文件中',
+      edit: '编辑文件中', search: '搜索中', fetch: '抓取网页中', web: '联网搜索中',
+      image: '查看图片中', tool: '调用工具中'
+    };
+
+    function toolLabelOf(el) {
+      var cur = el;
+      while (cur && cur.nodeType === 1 && !cur.classList.contains('chat-proc-current')) cur = cur.parentNode;
+      var icon = cur && cur.nodeType === 1 ? cur.querySelector('.chat-step-icon') : null;
+      if (icon) {
+        var m = /chat-step-icon-([a-z]+)/.exec(String(icon.className || ''));
+        if (m && VARIANT_LABELS[m[1]]) return VARIANT_LABELS[m[1]];
+      }
+      return '调用工具中';
+    }
+
     function progressiveStep() {
       var nodes = document.querySelectorAll(STEP_TEXT);
       for (var i = 0; i < nodes.length; i++) {
@@ -372,17 +407,19 @@ export const CHAT_STATUS_HTML = `<script>
           if (n.nodeType !== 3) continue;
           var raw = trim(n.nodeValue || '');
           if (raw === '') continue;
-          // 思考阶段：显示和下面那一行一样的「深度思考 · N 行」。
-          if (raw === '思考中' || THINK_TEXT_RE.test(raw)) {
+          // 思考阶段：固定状态词（有思考段时镜像它的行数文案）。
+          if (isThinkingStep(el)) {
             var thinkText = thinkingLabelOf(el);
             var nextThink = thinkText === '' ? '思考中' : thinkText;
             if (n.nodeValue !== nextThink) n.nodeValue = nextThink;
             continue;
           }
-          // 已经是进行时（以「中」结尾）就不用再改，避免「执行命令中中」。
-          if (/中$/.test(raw)) continue;
-          var next = STEP_LABELS[raw];
-          if (next === undefined) next = raw + '中';   // 未知动作：兜底加「中」
+          // 工具阶段：先按已知动作名映射；碎片（长文本/带空白）一律按图标变体归一。
+          var looksFragment = raw.length > 14 || /\\s/.test(raw);
+          var next;
+          if (!looksFragment && STEP_LABELS[raw] !== undefined) next = STEP_LABELS[raw];
+          else if (!looksFragment && /中$/.test(raw)) next = raw;   // 已映射过，避免「执行命令中中」
+          else next = toolLabelOf(el);
           if (n.nodeValue !== next) n.nodeValue = next;
         }
       }
@@ -433,11 +470,48 @@ export const CHAT_STATUS_HTML = `<script>
       } catch (e) {}
     }
 
+    // ── 4e) 滚动字幕（.chat-proc-think）也只显示状态词 ─────────────────────
+    // bundle 在头行渲染 .chat-proc-think > .chat-proc-think-run，内容是
+    // **最新一段思考的原文**（滚动宽度超过就做跑马灯）。它和 §4d 是同一处症状：
+    // 思考原文被钉在卡片顶部，工具一来又换成别的 —— 看起来就是「工具调用把
+    // 思考顶掉、最新内容显示在上面」。
+    // 这里把字幕文本节点改成当前阶段的状态词：文本变短后 scrollWidth 不再溢出，
+    // bundle 自己会把跑马灯停掉（它每次渲染都重新量宽度）。
+    function phaseLabelOf(el) {
+      var head = el;
+      while (head && head.nodeType === 1 && !head.classList.contains('chat-proc-head')) head = head.parentNode;
+      var icon = head && head.nodeType === 1 ? head.querySelector('.chat-step-icon') : null;
+      if (icon && !icon.classList.contains('chat-step-icon-thinking')) {
+        var m = /chat-step-icon-([a-z]+)/.exec(String(icon.className || ''));
+        if (m && VARIANT_LABELS[m[1]]) return VARIANT_LABELS[m[1]];
+        return '调用工具中';
+      }
+      return '思考中';
+    }
+
+    function normalizeProcThink() {
+      var runs = document.querySelectorAll('.chat-proc-think-run');
+      for (var i = 0; i < runs.length; i++) {
+        var el = runs[i];
+        // 跑马灯是「首尾两份」实现无缝循环：aria-hidden 那份是副本。文本缩成状态词后
+        // 本来就不会溢出、不需要滚动，副本留着会变成「思考中 思考中」——清空它。
+        var dup = el.getAttribute && el.getAttribute('aria-hidden') === 'true';
+        var label = dup ? '' : phaseLabelOf(el);
+        var kids = el.childNodes;
+        for (var k = 0; k < kids.length; k++) {
+          var n = kids[k];
+          if (n.nodeType !== 3) continue;
+          if (n.nodeValue !== label) n.nodeValue = label;
+        }
+      }
+    }
+
     function flush() {
       queued = false;
       try { renameProcState(); } catch (e) {}
       try { dedupeProcCurrent(); } catch (e) {}
       try { progressiveStep(); } catch (e) {}
+      try { normalizeProcThink(); } catch (e) {}
       try { renameTurnText(); } catch (e) {}
       try { syncElapsed(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
