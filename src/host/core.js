@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { textOfEventData, muxLineOf, queueItemView } from './sse.js'
 import { createHostState } from './state.js'
-import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds } from './devices.js'
+import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
 import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuffer, readBody, readJsonBody, parseCookies, isLoopback, lanIPv4Addresses } from './http.js'
@@ -1036,6 +1036,10 @@ export function createHost(ctx, config) {
 
   const state = createHostState({ devices: loadDevices(cfg.devicesFile) })
   const devices = state.devices
+  const {
+    deviceTokensOf, authenticatedDevice, describeDeviceUA, createDevice,
+    fixedPairCode, issuePairToken, acceptPairCode,
+  } = createDeviceAuth({ state, cfg })
   let notifyConfig = loadNotifyConfig(cfg.pushConfigFile)
   // 发送模式：手机端唯一一处真值；下发 mobile.preferences，写回 session.prompt。
   let sendMode = loadSendMode(cfg.sendModeFile)
@@ -1045,35 +1049,11 @@ export function createHost(ctx, config) {
   // 用量页缓存：60 秒 TTL，只缓存查询成功的视图（含数据采集时刻 fetchedAt）。
   let usageCache = { at: 0, view: null }
 
-  function deviceTokensOf(req) {
-    const header = req.headers.cookie
-    if (!header) return []
-    const out = []
-    for (const part of String(header).split(';')) {
-      const i = part.indexOf('=')
-      if (i < 0) continue
-      if (part.slice(0, i).trim() !== cookieName) continue
-      out.push(decodeURIComponent(part.slice(i + 1).trim()))
-    }
-    return out
-  }
 
-  function authenticatedDevice(req) {
-    // 容忍历史遗留：Path=/ 与 Path=/m 可能同时存在同名 cookie，任一有效即通过。
-    for (const token of deviceTokensOf(req)) {
-      for (const [deviceId, d] of devices) {
-        if (d.token === token) {
-          d.lastSeenAt = Date.now()
-          return { deviceId, ...d }
-        }
-      }
-    }
-    return null
-  }
 
-  function fixedPairCode() {
-    return String(cfg.pairCode == null ? '' : cfg.pairCode).trim()
-  }
+
+
+
 
   /**
    * 从 UA 里尽量认出「平台 · 浏览器」，顺带给出能拿到的型号。
@@ -1085,102 +1065,13 @@ export function createHost(ctx, config) {
    * 拿不到真实型号 —— 这种就只能显示「HarmonyOS x · 华为浏览器 y」，
    * 精确型号靠手机端上报的 Client Hints（navigator.userAgentData.model）。
    */
-  function describeDeviceUA(userAgent) {
-    const ua = String(userAgent || '')
-    const grab = (re) => {
-      const hit = re.exec(ua)
-      return hit && typeof hit[1] === 'string' ? hit[1] : ''
-    }
-    let platform = ''
-    if (/OpenHarmony|HarmonyOS/i.test(ua)) {
-      const v = grab(/OpenHarmony\s+([\d.]+)/i) || grab(/HarmonyOS\s+([\d.]+)/i)
-      platform = v === '' ? 'HarmonyOS' : 'HarmonyOS ' + v
-    } else if (/Android/i.test(ua)) {
-      const v = grab(/Android\s+([\d.]+)/i)
-      platform = v === '' ? 'Android' : 'Android ' + v
-    } else if (/iPhone|iPad|iPod/i.test(ua)) {
-      platform = 'iOS'
-    } else if (/Windows NT 10/i.test(ua)) {
-      platform = 'Windows'
-    } else if (/Macintosh|Mac OS X/i.test(ua)) {
-      platform = 'macOS'
-    } else if (/Linux/i.test(ua)) {
-      platform = 'Linux'
-    }
-    let browser = ''
-    const browsers = [
-      [/HuaweiBrowser\/([\d.]+)/i, '华为浏览器'],
-      [/Quark\/([\d.]+)/i, '夸克'],
-      [/MicroMessenger\/([\d.]+)/i, '微信'],
-      [/Edg\/([\d.]+)/i, 'Edge'],
-      [/Firefox\/([\d.]+)/i, 'Firefox'],
-      [/Chrome\/([\d.]+)/i, 'Chrome'],
-      [/Version\/([\d.]+)[\s\S]*Safari/i, 'Safari'],
-    ]
-    for (const [re, name] of browsers) {
-      const v = grab(re)
-      if (v !== '') {
-        browser = name + ' ' + v.split('.')[0]
-        break
-      }
-    }
-    let model = ''
-    if (!/OpenHarmony|HarmonyOS/i.test(ua)) {
-      if (/iPhone/i.test(ua)) model = 'iPhone'
-      else if (/iPad/i.test(ua)) model = 'iPad'
-      else if (/Android/i.test(ua)) {
-        const hit = /Android[^;)]*;\s*(?:[A-Za-z]{2}-[A-Za-z]{2};\s*)?([^;)]+?)\s*(?:Build\/|\))/i.exec(ua)
-        const token = hit && typeof hit[1] === 'string' ? hit[1].replace(/^U;\s*/i, '').trim() : ''
-        if (token.length >= 2 && !/^wv$/i.test(token) && !/^Android$/i.test(token)) model = token.slice(0, 40)
-      }
-    }
-    const label = [platform, browser].filter((s) => s !== '').join(' · ')
-    return { model, platform, browser, label }
-  }
 
-  function createDevice(userAgent) {
-    if (devices.size >= MAX_DEVICES) return null
-    const now = Date.now()
-    const token = randomBytes(24).toString('hex')
-    const deviceId = randomBytes(8).toString('hex')
-    devices.set(deviceId, {
-      token,
-      name: '手机设备',
-      createdAt: now,
-      lastSeenAt: now,
-      userAgent: String(userAgent || '').slice(0, 180),
-    })
-    persistDevices(cfg.devicesFile, devices)
-    return { deviceId, token }
-  }
 
-  function issuePairToken() {
-    const fixed = fixedPairCode()
-    if (fixed !== '') {
-      // 固定码：永不过期，随时可配（不再随机、不再 5 分钟失效）。
-      state.pairToken = { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
-      return state.pairToken
-    }
-    state.pairToken = { code: String(randomInt(0, 1e6)).padStart(6, '0'), expiresAt: Date.now() + TOKEN_TTL_MS, fixed: false }
-    return state.pairToken
-  }
 
-  function acceptPairCode(code, userAgent) {
-    const input = String(code == null ? '' : code).trim()
-    const fixed = fixedPairCode()
-    if (fixed !== '') {
-      if (input !== fixed) return null
-      return createDevice(userAgent)
-    }
-    const now = Date.now()
-    if (!state.pairToken || state.pairToken.code !== input || now > state.pairToken.expiresAt) {
-      if (state.pairToken && now > state.pairToken.expiresAt) state.pairToken = null
-      return null
-    }
-    const created = createDevice(userAgent)
-    if (created) state.pairToken = null
-    return created
-  }
+
+
+
+
 
   function accessAddresses() {
     const port = Number(cfg.mobilePort) || DEFAULT_MOBILE_PORT
