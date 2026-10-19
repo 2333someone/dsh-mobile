@@ -351,6 +351,36 @@ function useLiveClock(active: boolean): number {
   return now
 }
 
+/** 折叠过程卡标题行的思考跑马灯：数据是当前 turn 最新一段 reasoning 的尾部。
+ *  只在真的溢出时才滚（挂载后用 ResizeObserver 量一次，短文本保持静态省略号）；
+ *  滚动是 transform 动画（合成层），时长按字数算；reduced-motion 由 CSS 降级。 */
+function ThinkMarquee({ text }: { readonly text: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [overflow, setOverflow] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (el === null) return undefined
+    const measure = (): void => { setOverflow(el.scrollWidth > el.clientWidth + 1) }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => { ro.disconnect() }
+  }, [text])
+  const duration = Math.max(8, Math.min(28, Math.round(text.length * 0.18)))
+  return (
+    <span ref={ref} className={'chat-proc-think' + (overflow ? ' chat-proc-think-scroll' : '')} title={text}>
+      <span
+        className="chat-proc-think-track"
+        style={overflow ? { animationDuration: `${duration}s` } : undefined}
+      >
+        <span className="chat-proc-think-run">{text}</span>
+        {overflow && <span className="chat-proc-think-run" aria-hidden>{text}</span>}
+      </span>
+    </span>
+  )
+}
+
 function ProcessGroup({ message, model, showToolCalls, focusedQuery, sessionId, clockOffsetMs, liveTurnStartAt, liveTurn }: {
   message: RenderMessage
   model: ProcessModel
@@ -365,6 +395,24 @@ function ProcessGroup({ message, model, showToolCalls, focusedQuery, sessionId, 
   // 与 processOutcome / currentStepOf 共用同一个"还在跑"判据：只认 pending 会让
   // 运行中的卡片读成"已完成"，秒表也会消失；按步定格的行只有活跃轮次能救它。
   const running = isRowRunning(message, liveTurn)
+  // 折叠头跑马灯的文本：当前 turn 最新一段 reasoning 的尾部（≤200 字）。数据就在
+  // 过程行里（reasoning 段已折叠进 model.rows），不需要新的数据通道；没有 reasoning
+  // 时为空串，标题行回退到原来的动作名，绝不留空。
+  const liveThinking = useMemo(() => {
+    for (let i = model.rows.length - 1; i >= 0; i--) {
+      const row = model.rows[i]
+      if (row.kind !== 'reasoning') continue
+      const flat = row.text.replace(/\s+/gu, ' ').trim()
+      if (flat !== '') return flat.slice(-200)
+    }
+    return ''
+  }, [model.rows])
+  // turn 结束后保留最后一次文本（不闪回「思考中」）：只在观察到运行中时冻结。
+  const [frozenThinking, setFrozenThinking] = useState('')
+  useEffect(() => {
+    if (running && liveThinking !== '') setFrozenThinking(liveThinking)
+  }, [running, liveThinking])
+  const thinkingText = running ? liveThinking : frozenThinking
   // 秒表走宿主时间：偏移量来自 frameEvent.time 与本地时间的差，
   // 否则手机 NTP 与宿主差几秒，秒表就和桌面端对不上。
   const now = useLiveClock(running)
@@ -461,9 +509,9 @@ function ProcessGroup({ message, model, showToolCalls, focusedQuery, sessionId, 
                 此前只有工具族才渲染，折叠卡第二行因此比展开后的每一行都少一个符号。
                 运行命令时齿轮加转：只有在跑的那一步才转，结算后必须停。 */}
             <span className={`chat-step-icon${current.variant === undefined ? ' chat-step-icon-thinking' : ''}${running && current.variant === 'bash' ? ' chat-step-icon-spin' : ''}`} aria-hidden>
-              {current.variant === undefined ? '💭' : stepIcon(current.variant)}
+              {current.variant === undefined ? <CardGlyph shape="thinking" /> : stepIcon(current.variant)}
             </span>
-            <span className="chat-proc-current-text">{current.text}</span>
+            {thinkingText !== '' ? <ThinkMarquee text={thinkingText} /> : <span className="chat-proc-current-text">{current.text}</span>}
             {filesText !== '' && <span className="chat-proc-meta">{filesText}</span>}
           </span>
         )}

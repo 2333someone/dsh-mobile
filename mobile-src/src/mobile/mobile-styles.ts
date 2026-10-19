@@ -3371,6 +3371,46 @@ button.settings-row:focus-visible {
   white-space: nowrap;
 }
 
+/* 折叠过程卡标题行的「思考文本」跑马灯：数据 = 当前 turn 最新一段 reasoning 的尾部
+   （message-row.tsx 的 ThinkMarquee）。短文本不滚 —— JS 量到没有溢出就不加
+   -scroll 类，保持静态 ellipsis；溢出时两段文本 + 32px 间隔，translateX(-50%-16px)
+   正好无缝回卷。动画只碰 transform（合成层），时长按字数在行内给；reduced-motion
+   降级成静态截断（隐藏第二段）。 */
+.chat-proc-think {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
+.chat-proc-think-track {
+  display: inline-flex;
+  gap: 32px;
+  will-change: transform;
+}
+.chat-proc-think-scroll .chat-proc-think-track {
+  animation: dm-think-marquee 12s linear infinite;
+}
+.chat-proc-think-run {
+  flex: none;
+}
+@keyframes dm-think-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-50% - 16px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-proc-think-scroll .chat-proc-think-track { animation: none; }
+  .chat-proc-think-scroll .chat-proc-think-run + .chat-proc-think-run { display: none; }
+  .chat-proc-think-scroll .chat-proc-think-run { overflow: hidden; text-overflow: ellipsis; }
+}
+/* 标题行的思考图标与两张卡片统一成 18px（theme.css 的 1.15em 盒在 15px 字号下只有
+   17.25px），并沿用 CardGlyph 的 1.75 描边。 */
+.chat-proc-current .chat-step-icon {
+  width: 18px;
+  height: 18px;
+}
+
 /* 右侧补充信息（「改了 3 个文件」），第三档灰。 */
 .chat-proc-meta {
   flex: none;
