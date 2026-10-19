@@ -541,7 +541,7 @@ export const CHAT_STATUS_HTML = `<script>
       }
     }
 
-    function normalizeProcThink(skipCapture) {
+    function normalizeProcThink() {
       var runs = document.querySelectorAll('.chat-proc-think-run');
       for (var i = 0; i < runs.length; i++) {
         var el = runs[i];
@@ -553,19 +553,8 @@ export const CHAT_STATUS_HTML = `<script>
           continue;
         }
         var thinking = isThinkingStep(el);
-        var card = procCardOf(el);
-        // 改写前先读走 bundle 写的原文（见 §6）：跑马灯正文是当前一段 reasoning
-        // 的尾部，只有思考阶段才算；工具阶段的文本节点一律不取。
-        // el.__dmWrote 是我们上一次写进去的文本（状态词 / 工具描述）。阶段切换时
-        // React 若没有重写这个文本节点，里面还是我们写的内容，不能当思考原文收。
-        if (!skipCapture && thinking && card) {
-          var raw = flatText(el);
-          if (raw !== '' && trim(raw) !== el.__dmWrote && !isStateLabel(trim(raw))) {
-            if (card.__dmAccum || card.classList.contains('chat-proc-running')) {
-              noteSnapshot(card, raw);
-            }
-          }
-        }
+        // 上一版这里还会把原文累计到卡片下方（§6），已按用户要求回退，只保留归一。
+        var card = el.closest ? el.closest('.chat-proc') : null;
         var label;
         if (thinking) {
           label = '思考中';
@@ -604,223 +593,10 @@ export const CHAT_STATUS_HTML = `<script>
       }
     }
 
-    // ── 6) 思考阶段总结：把中途吐出的文字累计到卡头下方 ────────────────────
-    // 需求：思考阶段中途产生的文字不能只留最新一段（卡头跑马灯已被 §4e 换成状态
-    // 词），要按时间累计成一份「思考阶段总结」，追加在卡头下方、展开体上方。
-    //
-    // 文本来源（都先看 .chat-step-icon 是否 chat-step-icon-thinking；工具阶段一律
-    // 不取，所以工具参数不会混进来）：
-    //   ① .chat-proc-think-run —— bundle 跑马灯正文 = 当前 turn 最新一段
-    //      reasoning 的尾部（≤200 字，空白已合并）。React 每次重渲染把原文写进
-    //      文本节点，我们在 §4e 改写它**之前**读走原文；相邻快照是同一段文字的
-    //      前后窗口，用「旧段后缀 = 新快照前缀」的最长重叠把增量接起来。
-    //   ② .chat-think-body —— 用户展开某段思考后的全文。若它包含我们已经累计的
-    //      某一段，说明那段当时只看到尾部，就用全文替换那一段（同顺序，不重排）。
-    //
-    // 幂等 / 性能：
-    //   · 原文只记到每张过程卡自己的 __dmAccum.pending；DOM 写入统一在一次
-    //     requestAnimationFrame 里做。我们写出的节点不匹配任何文本来源，不会被
-    //     再次捕获，因此不会自激。
-    //   · 单卡最多 8KB / 40 段，超出从头裁掉（接续逻辑只看尾部，裁头不影响）。
-    //   · 追加后 scrollTop = scrollHeight（不做平滑滚动）。
-    //   · 回合结束后保留，不清空 —— 它就是这一回合的思考总结。
-    var ACCUM_CAP = 8000;
-    var ACCUM_MAX_SEGS = 40;
-    var ACCUM_ATTR = 'data-dm-proc-accum';
-    var accumStates = [];
-    var accumRaf = 0;
-
-    // §4d/§4e 自己写进头行的状态词。阶段切换的那一瞬，文本节点里可能还是上一阶段
-    // 的状态词（我们写的），不能把它当成一段思考累计进去。
-    function isStateLabel(s) {
-      if (s === '' || s === '思考中' || s === '正在回答' || s === '调用工具中') return true;
-      if (/^深度思考/.test(s)) return true;
-      for (var key in VARIANT_LABELS) {
-        if (VARIANT_LABELS[key] === s) return true;
-      }
-      return false;
-    }
-
-    function procCardOf(el) {
-      var card = el;
-      while (card && card.nodeType === 1 && !card.classList.contains('chat-proc')) card = card.parentNode;
-      return card && card.nodeType === 1 ? card : null;
-    }
-
-    // 只取元素自己的文本节点：跑马灯里的正文是一个 text 节点，React 重写时
-    // 仍在原位（我们改写 nodeValue 也不会把它摘掉）。
-    function flatText(el) {
-      var out = '';
-      var kids = el.childNodes;
-      for (var i = 0; i < kids.length; i++) {
-        if (kids[i].nodeType === 3) out += kids[i].nodeValue;
-      }
-      return out;
-    }
-
-    // 跑马灯侧已把空白合并过；展开体（chat-think-body）做同样处理，两边才可比，
-    // 也才能用 indexOf / 后缀重叠对齐。
-    function cleanText(s) {
-      return trim((s || '').replace(/\\s+/g, ' '));
-    }
-
-    function accumState(card) {
-      var st = card.__dmAccum;
-      if (!st) {
-        st = {
-          card: card, el: null, box: null,
-          nodes: [], segs: [], snap: '', pending: '',
-          dirty: false, rebuild: false
-        };
-        card.__dmAccum = st;
-        accumStates.push(st);
-      }
-      return st;
-    }
-
-    function scheduleAccum() {
-      if (accumRaf) return;
-      var raf = window.requestAnimationFrame
-        ? function (fn) { return window.requestAnimationFrame(fn); }
-        : function (fn) { return window.setTimeout(fn, 16); };
-      accumRaf = raf(function () {
-        accumRaf = 0;
-        try { renderAccums(); } catch (e) {}
-      });
-    }
-
-    // 快照入口（幂等）：同一份文本重复到达直接丢掉。
-    function noteSnapshot(card, raw) {
-      var text = cleanText(raw);
-      if (text === '') return;
-      var st = accumState(card);
-      if (text === st.pending || text === st.snap) return;
-      st.pending = text;
-      scheduleAccum();
-    }
-
-    function overlapOf(a, b) {
-      var max = a.length < b.length ? a.length : b.length;
-      for (var k = max; k > 0; k--) {
-        if (a.slice(a.length - k) === b.slice(0, k)) return k;
-      }
-      return 0;
-    }
-
-    function trimSegs(st) {
-      var segs = st.segs;
-      var total = 0;
-      var i;
-      for (i = 0; i < segs.length; i++) total += segs[i].length;
-      while (segs.length > 1 && (total > ACCUM_CAP || segs.length > ACCUM_MAX_SEGS)) {
-        total -= segs[0].length;
-        segs.shift();
-        st.rebuild = true;
-      }
-      if (segs.length === 1 && segs[0].length > ACCUM_CAP) {
-        segs[0] = segs[0].slice(segs[0].length - ACCUM_CAP);
-        st.rebuild = true;
-      }
-    }
-
-    // 把一份快照接进累计文本：连续增量接到最后一段，接不上就开新段。
-    function appendSnapshot(st, raw) {
-      var snap = cleanText(raw);
-      if (snap === '') return false;
-      var segs = st.segs;
-      var i;
-      var last = segs.length ? segs[segs.length - 1] : '';
-      if (last !== '') {
-        // 重复，或已包含在段尾：这一段前面都看过了。
-        if (last === snap || (snap.length < last.length && last.slice(last.length - snap.length) === snap)) {
-          st.snap = snap;
-          return false;
-        }
-        // 同一段又长长了（未超过 200 字窗口时，快照以整段旧文字开头）。
-        if (snap.length >= last.length && snap.slice(0, last.length) === last) {
-          segs[segs.length - 1] = snap;
-          st.snap = snap;
-          trimSegs(st);
-          return true;
-        }
-        // 超过窗口后旧快照在滑动：只把重叠之后的新字数接上去。
-        var k = overlapOf(last, snap);
-        if (k >= 8) {
-          segs[segs.length - 1] = last + snap.slice(k);
-          st.snap = snap;
-          trimSegs(st);
-          return true;
-        }
-        if (last.indexOf(snap) >= 0) {
-          st.snap = snap;
-          return false;
-        }
-      }
-      // 和上一段没有重叠：新的一段思考。整段重复的再兜一次底。
-      for (i = 0; i < segs.length; i++) {
-        if (segs[i] === snap) { st.snap = snap; return false; }
-      }
-      segs.push(snap);
-      st.snap = snap;
-      trimSegs(st);
-      return true;
-    }
-
-    // 展开的思考全文是更完整的版本：替换「包含在全文里」的那一段。
-    function upgradeFromBody(st, text) {
-      var segs = st.segs;
-      var i;
-      for (i = 0; i < segs.length; i++) {
-        if (segs[i] === text) return false;
-      }
-      for (i = segs.length - 1; i >= 0; i--) {
-        if (segs[i].length >= 8 && text.indexOf(segs[i]) >= 0) {
-          segs[i] = text;
-          trimSegs(st);
-          return true;
-        }
-      }
-      return false;
-    }
-
-    // 采集跑马灯原文：只在思考阶段取；只服务「运行中的卡」或已有累计的卡
-    // （已结算的历史卡不会突然长出一段只有尾部的总结）。
-    function captureLiveThink() {
-      var runs = document.querySelectorAll('.chat-proc-think-run');
-      for (var i = 0; i < runs.length; i++) {
-        var el = runs[i];
-        if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') continue;
-        if (!isThinkingStep(el)) continue;
-        var raw = flatText(el);
-        if (raw === '' || trim(raw) === el.__dmWrote || isStateLabel(trim(raw))) continue;
-        var card = procCardOf(el);
-        if (!card) continue;
-        if (!card.__dmAccum && !card.classList.contains('chat-proc-running')) continue;
-        noteSnapshot(card, raw);
-      }
-    }
-
-    // 展开体全文：只用来「升级」已经累计过的段，不新增顺序。
-    function captureThinkBodies() {
-      var changed = false;
-      var bodies = document.querySelectorAll('.chat-think-body');
-      for (var i = 0; i < bodies.length; i++) {
-        var card = procCardOf(bodies[i]);
-        if (!card || !card.__dmAccum) continue;
-        var text = cleanText(bodies[i].textContent || '');
-        if (text === '') continue;
-        if (upgradeFromBody(card.__dmAccum, text)) {
-          card.__dmAccum.dirty = true;
-          changed = true;
-        }
-      }
-      return changed;
-    }
-
-    function installAccumStyle() {
-      if (document.getElementById('dm-proc-accum-style')) return;
+    function installHeadStyle() {
+      if (document.getElementById('dm-proc-head-style')) return;
       var style = document.createElement('style');
-      style.id = 'dm-proc-accum-style';
+      style.id = 'dm-proc-head-style';
       // 颜色全走主题 token（tokens.ts 的三段调色板），深浅色自动可读；
       // 只在 token 缺失时用后面的浅色兜底。
       style.textContent = [
@@ -834,115 +610,8 @@ export const CHAT_STATUS_HTML = `<script>
         '.chat-proc-think-run{display:block!important;max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
         '.chat-proc-think-scroll .chat-proc-think-run+.chat-proc-think-run{display:none!important;}',
         '.chat-proc-current-text{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
-        // ── 思考阶段总结（§6）──────────────────────────────────────────────
-        '.dm-proc-accum{display:flex;flex-direction:column;gap:2px;margin-top:6px;padding:6px 8px 6px 10px;border:1px solid var(--border-subtle,#edeef5);border-left:2px solid var(--border-default,#e4e5ef);border-radius:10px;background:var(--fill,rgba(24,24,40,.04));color:var(--text-secondary,#4b4b63);font-size:var(--text-sm,12px);line-height:1.55;}',
-        '.dm-proc-accum-label{flex:none;color:var(--text-tertiary,#6f6f8a);font-size:var(--text-xs,11px);font-weight:600;letter-spacing:.02em;}',
-        '.dm-proc-accum-label::before{content:"✦";margin-right:4px;color:var(--accent,#6d5efc);font-weight:400;}',
-        '.dm-proc-accum-scroll{max-height:150px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin;overflow-anchor:none;word-break:break-word;overflow-wrap:anywhere;}',
-        '.dm-proc-accum-seg{white-space:pre-wrap;}',
-        '.dm-proc-accum-seg+.dm-proc-accum-seg{margin-top:4px;}'
       ].join('');
       (document.head || document.documentElement).appendChild(style);
-    }
-
-    // 容器插在 .chat-proc-head 之后、.chat-proc-body 之前；每次写入前都校验
-    // 位置（React 插入展开体时可能把我们挤到别处，幂等地挪回来）。
-    function ensureAccumBox(st) {
-      var card = st.card;
-      if (!card || !card.parentNode) return false;
-      var head = null;
-      var kids = card.children;
-      for (var i = 0; i < kids.length; i++) {
-        if (kids[i].classList && kids[i].classList.contains('chat-proc-head')) { head = kids[i]; break; }
-      }
-      if (!head) return false;
-      if (!st.el) {
-        try { installAccumStyle(); } catch (e) {}
-        var wrap = document.createElement('div');
-        wrap.className = 'dm-proc-accum';
-        wrap.setAttribute(ACCUM_ATTR, '1');
-        var label = document.createElement('div');
-        label.className = 'dm-proc-accum-label';
-        label.textContent = '思考阶段总结';
-        var box = document.createElement('div');
-        box.className = 'dm-proc-accum-scroll';
-        wrap.appendChild(label);
-        wrap.appendChild(box);
-        st.el = wrap;
-        st.box = box;
-      }
-      if (st.el.parentNode !== card || st.el.previousElementSibling !== head) {
-        card.insertBefore(st.el, head.nextSibling);
-      }
-      return true;
-    }
-
-    function renderAccum(st) {
-      var pending = st.pending;
-      st.pending = '';
-      if (pending !== '' && appendSnapshot(st, pending)) st.dirty = true;
-      if (!st.dirty) return;
-      if (!ensureAccumBox(st)) return;
-      var box = st.box;
-      var nodes = st.nodes;
-      var segs = st.segs;
-      var i;
-      if (st.rebuild) {
-        for (i = 0; i < nodes.length; i++) {
-          if (nodes[i].parentNode) nodes[i].parentNode.removeChild(nodes[i]);
-        }
-        nodes.length = 0;
-        st.rebuild = false;
-      } else if (nodes.length > segs.length) {
-        for (i = segs.length; i < nodes.length; i++) {
-          if (nodes[i].parentNode) nodes[i].parentNode.removeChild(nodes[i]);
-        }
-        nodes.length = segs.length;
-      }
-      for (i = 0; i < segs.length; i++) {
-        var d = nodes[i];
-        if (!d) {
-          d = document.createElement('div');
-          d.className = 'dm-proc-accum-seg';
-          box.appendChild(d);
-          nodes[i] = d;
-        }
-        if (d.textContent !== segs[i]) d.textContent = segs[i];
-      }
-      st.dirty = false;
-      // 追加在底部：直接跳到底（需求不要平滑滚动）。
-      try { box.scrollTop = box.scrollHeight; } catch (e) {}
-    }
-
-    function renderAccums() {
-      try { captureThinkBodies(); } catch (e) {}
-      for (var i = accumStates.length - 1; i >= 0; i--) {
-        var st = accumStates[i];
-        if (!st.card || !st.card.parentNode) {
-          accumStates.splice(i, 1);
-          continue;
-        }
-        try { renderAccum(st); } catch (e) {}
-      }
-    }
-
-    // 兜底：React 若把我们的容器挪走 / 摘掉（它不认识这个兄弟节点），下一次
-    // flush 把它放回去；内容还在 st 里，不用重算。
-    function remountAccums() {
-      for (var i = 0; i < accumStates.length; i++) {
-        var st = accumStates[i];
-        if (st.segs.length === 0 || !st.card || !st.card.parentNode) continue;
-        try { ensureAccumBox(st); } catch (e) {}
-      }
-    }
-
-    // frame 通道回调：只读原文 + 展开体；真正的累计写入走 scheduleAccum 的 rAF，
-    // 不额外触发一次全量 flush。头行本身每帧就地归一（跑马灯原文当帧就换回状态词 /
-    // 工具描述，滞后不超过一帧），这是空药丸与「显示最新一段」的兜底。
-    function captureFrame() {
-      try { captureLiveThink(); } catch (e) {}
-      try { normalizeProcThink(true); } catch (e) {}
-      try { if (captureThinkBodies()) scheduleAccum(); } catch (e) {}
     }
 
     function flush() {
@@ -955,8 +624,6 @@ export const CHAT_STATUS_HTML = `<script>
       try { syncElapsed(); } catch (e) {}
       try { syncTurn(); } catch (e) {}
       try { syncStatusText(); } catch (e) {}
-      try { if (captureThinkBodies()) scheduleAccum(); } catch (e) {}
-      try { remountAccums(); } catch (e) {}
     }
 
     var queued = false;
@@ -970,16 +637,10 @@ export const CHAT_STATUS_HTML = `<script>
     // characterData 覆盖状态词变化（React 只改 nodeValue），childList 覆盖
     // 行/折叠块的挂载与卸载，aria-label 覆盖状态行自身的状态切换。
     //
-    // 另加 §6 的采集通道：跑马灯正文是 characterData 变化，attributes 通道
-    // （400ms 切片）等不到它；走 bus 的 frame 通道（结构变化合并到一帧，只读
-    // 原文，不写 DOM），真正的写入仍由 scheduleAccum 的 rAF 负责。
-    // 没有 bus 时（老页面 / 单测）退回自己的 observer，在 schedule 之前采集。
     if (window.__dmMutationBus) {
       window.__dmMutationBus.subscribe(schedule, { attributes: true });
-      window.__dmMutationBus.subscribe(captureFrame, { frame: true });
     } else {
       var mo = new MutationObserver(function () {
-        captureFrame();
         schedule();
       });
       mo.observe(document.body, {
@@ -996,7 +657,7 @@ export const CHAT_STATUS_HTML = `<script>
 
     // 头行静态单行（关掉跑马灯）/ 空行兜底所需的样式：一启动就装上，
     // 不等第一段思考出现（否则起手那一下还是空药丸）。
-    try { installAccumStyle(); } catch (e) {}
+    try { installHeadStyle(); } catch (e) {}
 
     // 必须在 bundle 的模块脚本执行前装上（本脚本是内联 classic，早于 deferred
     // module），这样 mux 的 new EventSource 才会经过我们的包装。
