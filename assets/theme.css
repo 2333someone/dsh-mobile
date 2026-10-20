@@ -183,11 +183,9 @@
   padding-top: 12px !important;
 }
 
-/* ── 输入框：文字垂直居中（上 padding 加大、下 padding 减小）───────── */
-.chat-input {
-  padding-top: 13px !important;
-  padding-bottom: 5px !important;
-}
+/* ── 输入框：见文件后面的「聊天输入框：占位文字垂直居中」一处集中定义 ──
+   （这里曾有一条 padding-top:13 / padding-bottom:5 的历史规则，已删除：
+     它把文字整体上移，是「placeholder 偏上」的源头之一。） */
 
 /* ── 输入栏里的原始「+」「麦克风」隐藏：改用上方工具行图标 ────────── */
 .chat-attach-btn[aria-label="添加内容"],
@@ -3033,7 +3031,14 @@ html.dm-host-page-open body {
    单行时内容区高 26px、文字只占约 19px，导致 placeholder 看起来偏上。
    这里把上下内边距固定为 11px、行高 22px：11+22+11 = 44，正好等于最小高度，
    单行文字（含 placeholder）垂直居中；多行输入时行高也保持一致。
-   注意只覆盖 padding/line-height，不改字体、圆角、边框与配色。 */
+   注意只覆盖 padding/line-height，不改字体、圆角、边框与配色。
+
+   ⚠️ 这块被改过好几轮，结论固定为「上下对称」：
+     · 曾经用 13/5、后又用 9/13 的**不对称**内边距想把文字往上顶，结果就是
+       placeholder 看着偏上（上 9 下 13 = 整体高 3px）；
+     · 行高固定 22px、上下各 11px，文本块中心与胶囊中心重合，单行多行都不跳；
+     · 输入框高度由 field-sizing 按内容算（22 + 11*2 + 边框 2 = 46），
+       不要再通过 padding 去凑高度。 */
 .chat-input {
   padding-top: 11px !important;
   padding-bottom: 11px !important;
@@ -3387,14 +3392,9 @@ img.chat-msg-image {
 
 /* 迁移 C 内化：输入框单行居中（原 INPUT_TEXT_CENTER 的 canvas 反解已删除）。
    默认单行 = 9/13（整体上移 2px，总高不变）；显式换行/折行时切回 11/11。 */
-.chat-input:not(.dm-input-multiline) {
-  padding-top: 9px !important;
-  padding-bottom: 13px !important;
-}
-.chat-input.dm-input-multiline {
-  padding-top: 11px !important;
-  padding-bottom: 11px !important;
-}
+/* 曾按「单行 9/13、多行 11/11」切换，试图用不对称内边距把文字往上顶 2px；
+   实测那正是 placeholder 偏上的原因（上 9 下 13 = 整体高 3px）。
+   现在单行/多行统一 11/11（见前文），这条不再需要。 */
 
 /* 迁移 C 内化：聊天步骤/触发器图标与文字的光学对齐。
    原 ICON_OPTICAL_ALIGN 用 canvas 量墨迹逐图标算 translateY；实测偏差在 ±0.6px，
