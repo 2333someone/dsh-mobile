@@ -52,6 +52,30 @@ import { CollapsibleText, MarkdownText } from './markdown-text.tsx'
 import { diffTallyOf, formatDuration, isRowRunning, processErrorsText, processFilesText, processHeadText, processModel, processStateText, processStepsText, processTimeText, toolDiffLines, visibleRowCount, type ProcessModel, type ProcessOutcome, type ProcessReasoningRow } from './process-rows.ts'
 import { stepModel, type StepVariant } from './step-view.ts'
 
+/**
+ * 用户消息里的「已上传文件」块：发送时我们把工作区路径写进 prompt（见 ChatView.send），
+ * 回显出来的 user/message 是一段纯文本。这里把那段拎出来渲染成可点的文件胶囊，
+ * 正文只保留用户自己写的话 —— 否则一串 `.dsh-uploads/…` 只能看着，没法预览/下载。
+ */
+const UPLOAD_BLOCK_RE = /\n*已上传文件（可直接用文件工具读取）：\n((?:- [^\n]+\n?)+)/
+
+function splitUploadedFiles(text: string): { body: string; files: string[] } {
+  const match = UPLOAD_BLOCK_RE.exec(text)
+  if (match === null) return { body: text, files: [] }
+  const files = match[1]!
+    .split('\n')
+    .map(line => line.replace(/^-\s*/, '').trim())
+    .filter(line => line !== '')
+  return { body: text.replace(UPLOAD_BLOCK_RE, '').trimEnd(), files }
+}
+
+function fileNameOf(path: string): string {
+  const parts = path.split(/[\/]/).filter(part => part !== '')
+  const last = parts[parts.length - 1] ?? path
+  // 上传时加了 `<时间戳>-` 前缀，展示时去掉，回到用户选的原文件名。
+  return last.replace(/^\d{10,}-/, '')
+}
+
 export const MessageRow = memo(function MessageRow({ message, sessionId, showToolCalls, showSystemMessages, showTime = true, focused = false, focusedQuery, style, onRegenerate, onOpenFile, clockOffsetMs, liveTurnStartAt, liveTurn }: {
   message: RenderMessage
   /**
@@ -205,6 +229,7 @@ export const MessageRow = memo(function MessageRow({ message, sessionId, showToo
       </div>
     )
   }
+  const uploaded = message.kind === 'user' ? splitUploadedFiles(message.text) : { body: message.text, files: [] }
   const hasReasoning = message.kind === 'assistant' && message.reasoning !== undefined && message.reasoning !== ''
   const hasTools = showToolCalls && message.kind === 'assistant' && message.tools !== undefined && message.tools.length > 0
   const hasText = message.text !== ''
@@ -233,7 +258,30 @@ export const MessageRow = memo(function MessageRow({ message, sessionId, showToo
         <AssistantBody message={message} showToolCalls={showToolCalls} forceOpen={focused} focusedQuery={focused ? focusedQuery : undefined} sessionId={sessionId} clockOffsetMs={clockOffsetMs} liveTurnStartAt={liveTurnStartAt} liveTurn={liveTurn} />
       ) : (
         <>
-          <CollapsibleText text={message.text} forceOpen={focused} highlightQuery={focused ? focusedQuery : undefined} />
+          {uploaded.files.length === 0 ? (
+            <CollapsibleText text={message.text} forceOpen={focused} highlightQuery={focused ? focusedQuery : undefined} />
+          ) : (
+            <>
+              {uploaded.body !== '' && (
+                <CollapsibleText text={uploaded.body} forceOpen={focused} highlightQuery={focused ? focusedQuery : undefined} />
+              )}
+              <div className="chat-msg-files" role="list" aria-label="已上传文件">
+                {uploaded.files.map((file, index) => (
+                  <a
+                    key={`${file}-${String(index)}`}
+                    className="chat-msg-file file-link"
+                    data-path={file}
+                    role="listitem"
+                    href="#"
+                    onClick={(event) => { event.preventDefault() }}
+                  >
+                    <span className="chat-msg-file-name">{fileNameOf(file)}</span>
+                    <span className="chat-msg-file-hint">查看 / 下载</span>
+                  </a>
+                ))}
+              </div>
+            </>
+          )}
           {images !== undefined && sessionId !== undefined && (
             <MessageImages sessionId={sessionId} images={images} />
           )}

@@ -252,6 +252,10 @@ export const PUSH_CHECK_URL = '/m/push-check'
 //   https://<公网域名>:45632/m/shot/<file>.png
 // 安全取舍见 serveShot() 的注释（匿名只读 + 单层文件名白名单 + 扩展名白名单）。
 export const SHOT_PREFIX = '/m/shot'
+/** 文件下载路由前缀：GET /m/file/<token> → 会话工作区里的文件（带 Content-Disposition）。 */
+export const FILE_PREFIX = '/m/file'
+/** 下载令牌有效期（毫秒）。 */
+export const FILE_TOKEN_TTL_MS = 10 * 60 * 1000
 // 只允许单层文件名：不含 / \ : % 与空白，天然挡住目录穿越（.. 另做显式检查）。
 export const SHOT_NAME = /^[A-Za-z0-9._-]+$/
 export const SHOT_TYPES = {

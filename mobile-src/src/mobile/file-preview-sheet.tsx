@@ -10,8 +10,8 @@
  * language, otherwise plain escaped text; a copy button grabs the content.
  */
 
-import { useEffect, useMemo, useState } from 'react'
-import { readFile, type FilePreview } from './api.ts'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { fileUrl, readFile, type FilePreview } from './api.ts'
 import { Sheet } from './sheet.tsx'
 import { copyText } from './code-actions.ts'
 import { highlightCodeSync } from './shiki.ts'
@@ -94,7 +94,12 @@ export function FilePreviewSheet({ path, sessionId, onClose }: FilePreviewSheetP
         <div className="fp-loading">正在读取文件…</div>
       )}
       {state.status === 'error' && (
-        <div className="fp-error">{state.message}</div>
+        <div className="fp-error">
+          {state.message}
+          <div className="fp-error-actions">
+            <DownloadButton sessionId={sessionId} path={path} label="下载文件" />
+          </div>
+        </div>
       )}
       {ready !== null && (
         <>
@@ -106,6 +111,7 @@ export function FilePreviewSheet({ path, sessionId, onClose }: FilePreviewSheetP
                 复制原文
               </button>
             )}
+            <DownloadButton sessionId={sessionId} path={ready.path} />
           </div>
           {isImage ? (
             <div className="fp-image-wrap">
@@ -117,6 +123,49 @@ export function FilePreviewSheet({ path, sessionId, onClose }: FilePreviewSheetP
         </>
       )}
     </Sheet>
+  )
+}
+
+/**
+ * 「下载」：向宿主换一个短时地址（/m/file/<token>），用 <a download> 交给浏览器存盘。
+ * 手机浏览器对 Content-Disposition 的支持不一致，所以两者都带：先建 <a download>，
+ * 失败再直接跳转。
+ */
+function DownloadButton({ sessionId, path, label = '下载' }: { sessionId: string; path: string; label?: string }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const start = useCallback(() => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    void fileUrl(sessionId, path).then(
+      ({ url, name }) => {
+        setBusy(false)
+        try {
+          const anchor = document.createElement('a')
+          anchor.href = url
+          anchor.download = name
+          anchor.rel = 'noopener'
+          document.body.appendChild(anchor)
+          anchor.click()
+          anchor.remove()
+        } catch {
+          window.location.href = url
+        }
+      },
+      (reason: unknown) => {
+        setBusy(false)
+        setError(reason instanceof Error ? reason.message : '下载失败')
+      },
+    )
+  }, [busy, sessionId, path])
+  return (
+    <span className="fp-download-wrap">
+      <button type="button" className="fp-copy" onClick={start} disabled={busy}>
+        {busy ? '准备中…' : label}
+      </button>
+      {error !== null && <span className="fp-download-error">{error}</span>}
+    </span>
   )
 }
 

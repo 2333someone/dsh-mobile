@@ -5014,7 +5014,8 @@ button.settings-row:focus-visible {
 .chat-attach-bar {
   display: flex;
   gap: var(--space-2);
-  padding: 8px 12px 0;
+  /* 底部留白：待发送的图片/文件与下面的输入框白底要分开，否则看着糊在一起。 */
+  padding: 8px 12px 10px;
   overflow-x: auto;
 }
 
@@ -5054,11 +5055,62 @@ button.settings-row:focus-visible {
   justify-content: center;
 }
 
+/* 用户消息里的「已上传文件」胶囊：点击走 .file-link → 预览/下载。 */
+.chat-msg-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-msg-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-chip);
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+  text-decoration: none;
+  font-size: var(--text-sm);
+}
+
+.chat-msg-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.chat-msg-file-hint {
+  flex: none;
+  margin-left: auto;
+  opacity: 0.75;
+  font-size: var(--text-xs);
+}
+
+/* 预览面板里的「下载」按钮与错误提示 */
+.fp-download-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fp-download-error {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.fp-error-actions {
+  margin-top: 10px;
+}
+
 /* 待发送的「文件」胶囊（+ → 文件）：一行可横向滚动，名称超长省略。 */
 .chat-attach-files {
   display: flex;
   gap: 8px;
-  padding: 8px 12px 0;
+  padding: 8px 12px 10px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }

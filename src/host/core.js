@@ -29,7 +29,7 @@ import { createPushRpc } from './rpc/push.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
-import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, MOBILE_FILE_MAX_BYTES, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
+import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, MOBILE_FILE_MAX_BYTES, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, FILE_PREFIX, FILE_TOKEN_TTL_MS, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
 import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuffer, readBody, readJsonBody, parseCookies, isLoopback, lanIPv4Addresses } from './http.js'
 
@@ -1283,6 +1283,8 @@ export function createHost(ctx, config) {
   }
   // base64 会再胖 1/3：8MB 原图 ≈ 11MB JSON，手机上再大就卡了。
   const PREVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+  // 文本预览上限（与源码 FilePreviewSheet 的约定一致：256KiB）。
+  const PREVIEW_TEXT_MAX_BYTES = 256 * 1024
 
   /**
    * 四个 Agent 预设的中文名与一句话说明。
@@ -4050,6 +4052,29 @@ export function createHost(ctx, config) {
           return { ok: false, error: { code: 'write-failed', message: String(err && err.message ? err.message : err) } }
         }
       }
+      /**
+       * 手机端「下载/预览」一个工作区文件：返回短时下载地址。
+       * 只接受会话工作区内的路径（realpath 校验，挡 ../ 与符号链接逃逸）。
+       */
+      case 'mobile.fileUrl': {
+        const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+        const requested = typeof payload?.path === 'string' ? payload.path.trim() : ''
+        const resolved = resolveInWorkspace(sessionId, requested)
+        if (resolved === null) {
+          return { ok: false, error: { code: 'forbidden', message: '只能下载工作区内的文件' } }
+        }
+        const token = randomBytes(16).toString('hex')
+        fileTokens.set(token, { realPath: resolved.realPath, expiresAt: Date.now() + FILE_TOKEN_TTL_MS })
+        // 顺手清掉过期令牌，避免长驻内存。
+        for (const [key, value] of fileTokens) if (value.expiresAt < Date.now()) fileTokens.delete(key)
+        return {
+          ok: true,
+          value: {
+            url: `${FILE_PREFIX}/${token}`,
+            name: basename(resolved.realPath),
+          },
+        }
+      }
       case 'mobile.readFile': {
         // 手机端 markdown 里的本地图片（`![](相对路径)`）走这里：
         // bundle 只把路径写进 <img data-local-src>，随后用 mobile.readFile
@@ -4087,9 +4112,6 @@ export function createHost(ctx, config) {
           return { ok: false, error: { code: 'forbidden', message: '只能读取工作区内的文件' } }
         }
         const mediaType = PREVIEW_IMAGE_MIME[extname(realPath).toLowerCase()]
-        if (mediaType === undefined) {
-          return { ok: false, error: { code: 'unsupported', message: '只支持图片预览' } }
-        }
         let stat
         try {
           stat = statSync(realPath)
@@ -4099,21 +4121,49 @@ export function createHost(ctx, config) {
         if (!stat.isFile()) {
           return { ok: false, error: { code: 'invalid-request', message: '不是文件' } }
         }
-        if (stat.size > PREVIEW_IMAGE_MAX_BYTES) {
-          return { ok: false, error: { code: 'too-large', message: '图片太大（上限 8MB）' } }
+        // 图片：直接给 data URL（聊天里的本地图片也走这条）。
+        if (mediaType !== undefined) {
+          if (stat.size > PREVIEW_IMAGE_MAX_BYTES) {
+            return { ok: false, error: { code: 'too-large', message: '图片太大（上限 8MB）' } }
+          }
+          let base64
+          try {
+            base64 = readFileSync(realPath).toString('base64')
+          } catch {
+            return { ok: false, error: { code: 'internal', message: '图片读取失败' } }
+          }
+          return {
+            ok: true,
+            value: {
+              kind: 'image',
+              mediaType,
+              dataUrl: `data:${mediaType};base64,${base64}`,
+              name: basename(realPath),
+              path: realPath,
+            },
+          }
         }
-        let base64
+        // 非图片：给**文本预览**（源码里的 FilePreviewSheet 早就支持 {kind:'text'}，
+        // 之前宿主这里只放行图片，于是 txt/md/json 全被判成「只支持图片预览」）。
+        // 判据：≤256KiB 且前 4KB 里没有 NUL（二进制直接拒绝，客户端会改给「下载」）。
+        if (stat.size > PREVIEW_TEXT_MAX_BYTES) {
+          return { ok: false, error: { code: 'too-large', message: '文件太大，无法预览，可下载查看' } }
+        }
+        let raw
         try {
-          base64 = readFileSync(realPath).toString('base64')
+          raw = readFileSync(realPath)
         } catch {
-          return { ok: false, error: { code: 'internal', message: '图片读取失败' } }
+          return { ok: false, error: { code: 'internal', message: '文件读取失败' } }
+        }
+        const head = raw.subarray(0, 4096)
+        if (head.includes(0)) {
+          return { ok: false, error: { code: 'unsupported', message: '该文件是二进制，无法预览，可下载查看' } }
         }
         return {
           ok: true,
           value: {
-            kind: 'image',
-            mediaType,
-            dataUrl: `data:${mediaType};base64,${base64}`,
+            kind: 'text',
+            text: raw.toString('utf8'),
             name: basename(realPath),
             path: realPath,
           },
@@ -4759,6 +4809,56 @@ export function createHost(ctx, config) {
   //   3. 显式拒绝 "."、".."；
   //   4. resolve(join(SHOT_DIR, name)) 后再用 relative(SHOT_DIR, full) 复核，
   //      落点不在目录内（以 .. 开头或成绝对路径）再 400。
+  // ── 文件下载：GET /m/file/<token> ──────────────────────────────────────────
+  // 手机端点击聊天里的文件路径时，先调 mobile.fileUrl 换一个短时令牌，再用它下载。
+  // 为什么不是直接把路径放 URL：路径里可能有中文/空格，更重要的是不想给出一个
+  // 「任意读工作区文件」的稳定地址；令牌 10 分钟后失效，且只映射一个已校验的绝对路径。
+  const fileTokens = new Map()
+
+  /** 校验一个路径必须落在会话工作区内，返回 realpath 或 null。 */
+  function resolveInWorkspace(sessionId, requested) {
+    const cwd = sessionCwd(sessionId)
+    if (cwd === '' || requested === '') return null
+    try {
+      const realRoot = realpathSync(cwd)
+      const realPath = realpathSync(resolvePath(realRoot, requested))
+      const rel = relativePath(realRoot, realPath)
+      const inside = rel === '' || (!isAbsolutePath(rel) && rel.split(/[\/]/)[0] !== '..')
+      return inside ? { realRoot, realPath } : null
+    } catch {
+      return null
+    }
+  }
+
+  function serveFileToken(req, res, path) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(res, 405, { ok: false, error: 'method not allowed' })
+    }
+    const token = path.length > FILE_PREFIX.length ? path.slice(FILE_PREFIX.length + 1) : ''
+    const hit = fileTokens.get(token)
+    if (hit === undefined || hit.expiresAt < Date.now()) {
+      fileTokens.delete(token)
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    let data
+    try {
+      data = readFileSync(hit.realPath)
+    } catch {
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    const name = basename(hit.realPath)
+    const ascii = name.replace(/[^ -~]/g, '_').replace(/[\\"]/g, '_')
+    try {
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(data.length),
+        'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        'Cache-Control': 'no-store',
+      })
+      res.end(req.method === 'HEAD' ? undefined : data)
+    } catch {}
+  }
+
   function serveShot(req, res, path) {
     const method = (req.method || 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'HEAD') {
@@ -4872,6 +4972,7 @@ export function createHost(ctx, config) {
     // 只读截图：/m/shot/<file>。放在 /m/api 之后是因为前缀互不重叠，放哪都一样；
     // 单独一个分支，绝不影响上面任何既有路由的行为。
     if (path === SHOT_PREFIX || path.startsWith(SHOT_PREFIX + '/')) return serveShot(req, res, path)
+    if (path === FILE_PREFIX || path.startsWith(FILE_PREFIX + '/')) return serveFileToken(req, res, path)
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
@@ -4894,6 +4995,7 @@ export function createHost(ctx, config) {
       // 截图路由也挂到 GUI 上：桌面聊天里内嵌图片必须与页面同源，否则会被
       // CSP（img-src 'self'）/跨源策略拦掉，浏览器里就是一张裂图。
       { kind: 'prefix', path: SHOT_PREFIX, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'prefix', path: FILE_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))
     return () => {

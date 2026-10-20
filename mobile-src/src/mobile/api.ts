@@ -216,6 +216,14 @@ export async function checkUpdate(): Promise<UpdateCheckView> {
  * 为什么是「上传+路径」而不是附件：DSH 的消息协议只有文本/图片块，没有通用附件；
  * agent 读文件是靠工具按路径读，所以把文件落到工作区、把路径写进 prompt 最稳。
  */
+/**
+ * 换一个短时下载地址（GET /m/file/<token>）：聊天里的文件路径点开后用它下载。
+ * 只接受工作区内的文件，令牌 10 分钟过期。
+ */
+export async function fileUrl(sessionId: string, path: string): Promise<{ url: string; name: string }> {
+  return await callUnary<{ url: string; name: string }>('mobile.fileUrl', { sessionId, path })
+}
+
 export async function saveFile(
   sessionId: string,
   name: string,
