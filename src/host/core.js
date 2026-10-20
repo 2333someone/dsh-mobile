@@ -4833,6 +4833,9 @@ export function createHost(ctx, config) {
       { kind: 'exact', path: WHALE_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: THEME_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'prefix', path: API_PREFIX, handler: (req, res) => routeRequest(req, res) },
+      // 截图路由也挂到 GUI 上：桌面聊天里内嵌图片必须与页面同源，否则会被
+      // CSP（img-src 'self'）/跨源策略拦掉，浏览器里就是一张裂图。
+      { kind: 'prefix', path: SHOT_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))
     return () => {
