@@ -17,9 +17,12 @@
 # `publicBaseUrl` is informational: the settings panel displays it so the phone
 # knows the public address. It may be left empty (LAN-only) or set to your own
 # reverse-proxy origin; it is never contacted at startup.
+# 注意：`name` 必须是**npm 包名**（dsh-mobile-web），不是仓库目录名。
+# 用 'dsh-mobile' 会在按名字安装时触发 ERR_MODULE_NOT_FOUND（profile 里没有这个包），
+# 插件行激活失败 → 设置里的「掌上 dsh」页不出现。
 - insert:
     - id: dsh-mobile
-      name: 'dsh-mobile'
+      name: 'dsh-mobile-web'
       config:
         enabled: true
         mobilePort: 19387
