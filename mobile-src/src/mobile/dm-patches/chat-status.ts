@@ -307,6 +307,9 @@ export const CHAT_STATUS_HTML = `<script>
         }
         if (!line || line.nodeType !== 1) line = null;
         var target = line || state;
+        // 回合已结束（状态词是「已完成 / 失败 / 中断」）却还留着当前步骤行时，
+        // 藏掉那条动态行、把「✓ 已完成 · 用时 N 秒」露出来。
+        // 否则删掉工具行之后（例如只有一次提问的一轮）会停在「思考中」，看着像还在跑。
         if (cur && !target.classList.contains(DUP)) target.classList.add(DUP);
         else if (!cur && target.classList.contains(DUP)) target.classList.remove(DUP);
       }
@@ -424,6 +427,21 @@ export const CHAT_STATUS_HTML = `<script>
           }
         }
         raw = trim(raw);
+        // 回合已结束（head 里有「用时 N 秒」）：这一轮可能已经没有工具行可显示
+        // （唯一的工具被「提问」卡片取代），动态行会停在「思考中」。这里直接写
+        // 「已完成 · 用时 N 秒」，与折叠头那句一致。
+        var headEl = el;
+        while (headEl && headEl.nodeType === 1 && !headEl.classList.contains('chat-proc-head')) headEl = headEl.parentNode;
+        var timeEl = headEl && headEl.nodeType === 1 ? headEl.querySelector('.chat-proc-time') : null;
+        if (timeEl) {
+          var doneText = '已完成 · ' + trim(timeEl.textContent || '');
+          if (textNode !== null) {
+            if (textNode.nodeValue !== doneText) textNode.nodeValue = doneText;
+          } else {
+            el.appendChild(document.createTextNode(doneText));
+          }
+          continue;
+        }
         // 思考阶段：固定状态词（有思考段时镜像它的行数文案）。
         if (isThinkingStep(el)) {
           var thinkText = thinkingLabelOf(el);

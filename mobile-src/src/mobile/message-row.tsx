@@ -805,39 +805,55 @@ function AssistantBody({ message, showToolCalls, forceOpen, focusedQuery, sessio
  * 展开才逐条列出「问了什么 / 选了什么」。
  */
 function QuestionRecords({ tools }: { tools: ToolCallInfo[] }) {
-  const [open, setOpen] = useState(false)
-  const total = tools.reduce((sum, tool) => sum + (tool.question?.total ?? 0), 0)
-  const answered = tools.reduce((sum, tool) => sum + (tool.question?.answered ?? 0), 0)
+  const items = tools.flatMap(tool => tool.question?.items ?? [])
+  const total = items.length
+  const answered = items.filter(item => item.selected.length > 0 || item.custom !== undefined).length
+  // 条目多时才折叠，常用的 1~2 条直接铺开：用户要的是"一眼看到问题和我选了什么"，
+  // 而不是点开才知道。（桌面的那张卡也是把问题与答案直接列出来的。）
+  const [open, setOpen] = useState(items.length <= 2)
   if (total === 0) return null
   const pending = total - answered
-  const items = tools.flatMap(tool => tool.question?.items ?? [])
   return (
     <div className="chat-qa">
-      <button
-        type="button"
-        className={`chat-qa-head${pending > 0 ? ' chat-qa-head-pending' : ''}`}
-        onClick={() => setOpen(value => !value)}
-        aria-expanded={open}
-        aria-label={`提问 · ${answered}/${total} ${pending > 0 ? '待回答' : '已回答'}`}
-      >
+      <div className="chat-qa-head">
         <span className="chat-qa-icon" aria-hidden>?</span>
-        <span className="chat-qa-text">
-          提问 · {answered}/{total} {pending > 0 ? '待回答' : '已回答'}
+        <span className="chat-qa-title">提问</span>
+        <span className={`chat-qa-count${pending > 0 ? ' chat-qa-count-pending' : ''}`}>
+          {answered}/{total} {pending > 0 ? '待回答' : '已回答'}
         </span>
-        <span className={`chat-qa-chevron${open ? ' chat-qa-chevron-open' : ''}`} aria-hidden>›</span>
-      </button>
+        {items.length > 2 && (
+          <button
+            type="button"
+            className="chat-qa-toggle"
+            onClick={() => setOpen(value => !value)}
+            aria-expanded={open}
+          >
+            {open ? '收起' : `展开 ${String(items.length)} 条`}
+          </button>
+        )}
+      </div>
       {open && (
         <ul className="chat-qa-list">
-          {items.map((item, index) => (
-            <li key={`${item.id}-${String(index)}`} className="chat-qa-item">
-              <div className="chat-qa-q">{item.header === undefined ? item.question : `${item.header}：${item.question}`}</div>
-              <div className="chat-qa-a">
-                {item.selected.length > 0
-                  ? item.selected.join('、')
-                  : (item.custom !== undefined ? item.custom : '未回答')}
-              </div>
-            </li>
-          ))}
+          {items.map((item, index) => {
+            const answeredText = item.selected.length > 0
+              ? item.selected.join('、')
+              : (item.custom !== undefined ? item.custom : '')
+            return (
+              <li key={`${item.id}-${String(index)}`} className="chat-qa-item">
+                <div className="chat-qa-q">
+                  {item.header === undefined ? item.question : <><span className="chat-qa-header">{item.header}</span>{item.question}</>}
+                </div>
+                {answeredText === ''
+                  ? <div className="chat-qa-a chat-qa-a-empty">未回答</div>
+                  : (
+                    <div className="chat-qa-a">
+                      <span className="chat-qa-a-label">选</span>
+                      <span className="chat-qa-a-value">{answeredText}</span>
+                    </div>
+                  )}
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

@@ -4506,9 +4506,9 @@ button.settings-row:focus-visible {
   transform: none;
 }
 
-/* ── 提问记录（聊天历史里的「提问 · N/M 已回答」）─────────────────────
-   桌面端那张卡的手机版：折叠时一条计数，展开逐条列问答。
-   不跟「显示工具调用」开关走 —— 它是对话内容，不是过程噪音。 */
+/* ── 提问记录（聊天历史里的「提问」卡片）─────────────────────────────
+   用户要的是：卡片里直接看到「问了什么 + 我选了什么/填了什么」，
+   所以问题与答案默认就展开，只有超过 2 条时才折叠。 */
 
 .chat-qa {
   margin: 8px 0 2px;
@@ -4522,19 +4522,9 @@ button.settings-row:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
   padding: 8px 12px;
-  border: none;
-  background: transparent;
   color: var(--text-secondary);
-  font: inherit;
   font-size: var(--text-sm);
-  text-align: left;
-  cursor: pointer;
-}
-
-.chat-qa-head-pending {
-  color: var(--accent);
 }
 
 .chat-qa-icon {
@@ -4551,22 +4541,35 @@ button.settings-row:focus-visible {
   line-height: 1;
 }
 
-.chat-qa-text {
+.chat-qa-title {
+  flex: none;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.chat-qa-count {
   flex: 1;
   min-width: 0;
+  color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-qa-chevron {
-  flex: none;
-  color: var(--text-tertiary);
-  transition: transform 0.15s ease;
+.chat-qa-count-pending {
+  color: var(--accent);
 }
 
-.chat-qa-chevron-open {
-  transform: rotate(90deg);
+.chat-qa-toggle {
+  flex: none;
+  padding: 2px 6px;
+  border: none;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
 }
 
 .chat-qa-list {
@@ -4575,38 +4578,57 @@ button.settings-row:focus-visible {
   list-style: none;
 }
 
+.chat-qa-item {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .chat-qa-item + .chat-qa-item {
   margin-top: 8px;
 }
 
 .chat-qa-q {
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font-size: var(--text-sm);
   line-height: 1.45;
+}
+
+.chat-qa-header {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.chat-qa-header::after {
+  content: '：';
 }
 
 .chat-qa-a {
-  margin-top: 2px;
-  color: var(--text-tertiary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
   font-size: var(--text-sm);
   line-height: 1.45;
 }
 
-/* ── composer toolbar pills ──────────────────────────────────────────── */
-
-/* One row, two zones: the icon pills (model/permission) on the left, the
-   context ring pinned on the right (flex: none) so the session's
-   occupancy never scrolls out of view. The row never scrolls: the model
-   pill (the only elastic one) shrinks with an ellipsis while the
-   permission pill and the ring stay fixed and always visible. */
-.chat-tools {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* 底部留 8px：工具行去掉容器后图标直接落在页面底色上，需要与输入框之间
-     保留一点呼吸间距（原来胶囊自带的 3px 内边距 + 玻璃底给了同样的视觉间隔）。 */
-  padding: 8px 16px var(--space-2);
+.chat-qa-a-label {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-chip);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--text-xs);
 }
+
+.chat-qa-a-value {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.chat-qa-a-empty {
+  color: var(--text-tertiary);
+}
+
 
 .chat-tools-actions {
   display: flex;
