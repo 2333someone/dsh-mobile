@@ -140,18 +140,31 @@ window.__ModuleLoader__.load({
 .dm-netList { list-style: none; margin: 0; padding: 0; }
 .dm-netItem + .dm-netItem { border-top: 1px solid var(--dsw-alias-border-l1); }
 .dm-netRow {
-  display: flex; align-items: center; gap: 8px;
+  /* 网格列：radio | 固定宽标签列 | 地址(1fr) | 右侧动作，保证各行左右都对齐 */
+  display: grid; grid-template-columns: auto 4.6em minmax(0, 1fr) auto;
+  align-items: center; column-gap: 8px;
   padding: 8px 2px; cursor: pointer;
   font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-primary);
 }
 .dm-netRowUnset { color: var(--dsw-alias-label-secondary); }
 .dm-netRadio { flex: none; margin: 0; }
-.dm-netLabel { flex: none; font-weight: 500; }
+/* 标签列固定宽度：局域网(3 字)与公网(2 字)必须让地址列从同一 x 开始 */
+.dm-netLabel { flex: none; width: 4.6em; white-space: nowrap; font-weight: 500; }
+/* 地址用 DSH 默认字体（不设 font-family，继承面板），只降字号与颜色 */
 .dm-netAddr {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: inherit; /* <code> 自带 monospace，必须显式 inherit 才与 DSH 字体一致 */
   font-size: 11.5px; color: var(--dsw-alias-label-secondary);
 }
+/* 公网域名区：放在最上方（先设域名，再出码） */
+.dm-domainBlock { margin: 0 0 4px; padding-bottom: 6px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.dm-domainHead { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.dm-domainLabel { flex: none; width: 4.6em; white-space: nowrap; font-size: 12.5px; font-weight: 500; color: var(--dsw-alias-label-primary); }
+.dm-domainValue {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; color: var(--dsw-alias-label-secondary);
+}
+.dm-domainValueUnset { color: var(--dsw-alias-label-tertiary); }
 .dm-netUnsetText { flex: 1; min-width: 0; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
 .dm-netEdit, .dm-netOpen {
   flex: none; border: 0; background: transparent; padding: 0 2px;
@@ -216,8 +229,9 @@ window.__ModuleLoader__.load({
 }
 @media (prefers-reduced-motion: reduce) { .dm-page.dm-inner { animation: none; } }
 .dm-netList { margin: 0; }
-.dm-netItem + .dm-netItem { margin: 0 6px; }
-.dm-netRow { min-height: 44px; padding: 0 2px; }
+/* 不给行加左右 margin：否则第一行与后续行起点差 6px，标签/地址会错位；hairline 用内缩伪元素实现 */
+.dm-netItem + .dm-netItem { border-top: 1px solid var(--dsw-alias-border-l1); margin: 0; }
+.dm-netRow { min-height: 44px; padding: 0 2px; } /* 行内基础 padding 由上方 grid 规则统一 */
 .dm-qrStage { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .dm-qrWrap { flex: 1; display: flex; justify-content: center; padding: 4px 0; }
 .dm-qrCard { padding: 8px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1); background: #ffffff; }
@@ -633,7 +647,7 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'dm-netEdit',
                   onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
-                }, '编辑')
+                }, '修改')
               : null,
             option.configured
               ? null
@@ -680,42 +694,41 @@ window.__ModuleLoader__.load({
           )
         : null
 
-      const step1Node = h('div', { key: 'connect-page-1', className: 'dm-page dm-inner' },
-        h('div', { className: 'dm-connectHead' },
-          h('p', { className: 'dm-pageTitle' }, '选择手机连接的网络'),
-          h('span', { className: 'dm-headRight' },
-            h('span', { className: 'dm-stepTag' }, '1/2'),
-            h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
-          ),
+      // 单页布局（用户要求取消分页）：先设公网域名 → 选连接地址 → 二维码
+      const domainBlockNode = h('div', { className: 'dm-domainBlock' },
+        h('div', { className: 'dm-domainHead' },
+          h('span', { className: 'dm-domainLabel' }, '公网域名'),
+          publicBase
+            ? h('span', { className: 'dm-domainValue' }, displayAddr(publicBase))
+            : h('span', { className: 'dm-domainValue dm-domainValueUnset' }, '未配置'),
+          h('button', {
+            type: 'button',
+            className: 'dm-netEdit',
+            onClick: (event) => { event.preventDefault(); setRemoteOpen((open) => !open) },
+          }, remoteOpen || publicBase === '' ? '收起' : '修改'),
         ),
-        h('ul', { className: 'dm-netList' }, netNodes),
-        remoteFormNode,
-        h('div', { className: 'dm-navRow' },
-          navArrow('right', '下一步', '›', () => setWizardStep(2), activeBase === ''),
-        ),
+        remoteOpen || publicBase === '' ? remoteFormNode : null,
       )
 
-      // ── 第 2 页：扫码连接（160px 二维码，1px hairline，无投影）──
       const qrCardNode = h('div', { className: 'dm-qrCard', 'data-qr-url': qrText },
         h('div', { dangerouslySetInnerHTML: { __html: qrSvg(qrText, 124) } }),
       )
 
-      const step2Node = h('div', { key: 'connect-page-2', className: 'dm-page dm-inner' },
+      const connectNode = h('div', { key: 'connect-page', className: 'dm-page dm-inner' },
         h('div', { className: 'dm-connectHead' },
-          h('p', { className: 'dm-pageTitle' }, '用手机扫描二维码'),
+          h('p', { className: 'dm-pageTitle' }, '连接手机'),
           h('span', { className: 'dm-headRight' },
-            h('span', { className: 'dm-stepTag' }, '2/2'),
             h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
           ),
         ),
+        domainBlockNode,
+        h('ul', { className: 'dm-netList' }, netNodes),
         h('div', { className: 'dm-qrStage' },
-          navArrow('left', '上一步', '‹', () => setWizardStep(1)),
           h('div', { className: 'dm-qrWrap' },
             pairingCode && activeBase
               ? qrCardNode
-              : h('p', { className: 'dm-muted' }, '正在生成二维码…'),
+              : h('p', { className: 'dm-muted' }, activeBase ? '正在生成二维码…' : '先设置公网域名，或连接局域网后自动生成二维码'),
           ),
-          navArrow('right', '完成', '›', () => setWizardStep(0)),
         ),
         h('p', { className: 'dm-scanHint' }, '扫码后自动配对，无需输入配对码'),
         h('div', { className: 'dm-pageTools' },
@@ -736,22 +749,7 @@ window.__ModuleLoader__.load({
         ),
       )
 
-      // 完成后：摘要态（可重新进入向导）
-      const summaryNode = h('div', { key: 'connect-page-0', className: 'dm-page dm-inner' },
-        h('div', { className: 'dm-connectHead' },
-          h('p', { className: 'dm-pageTitle' }, '连接手机'),
-          h('span', { className: 'dm-headRight' },
-            h('span', { className: 'dm-stepTag' }, '完成'),
-            h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
-          ),
-        ),
-        h('p', { className: 'dm-summaryLine' }, activeBase ? ('已选择 ' + displayAddr(activeBase)) : '未选择网络'),
-        h('div', { className: 'dm-pageActions' },
-          h('button', { type: 'button', className: 'dm-stepBtn dm-stepBtnGhost', onClick: () => setWizardStep(1) }, '重新设置'),
-        ),
-      )
-
-      const wizardNode = wizardStep === 1 ? step1Node : wizardStep === 2 ? step2Node : summaryNode
+      const wizardNode = connectNode
 
       const errNode = err ? h('p', { className: 'dm-err' }, err) : null
 
