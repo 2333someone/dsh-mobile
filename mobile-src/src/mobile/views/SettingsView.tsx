@@ -1445,7 +1445,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           </button>
         </div>
       </header>
-      <div className="mobile-scroll">
+      <div className="mobile-scroll dm-settings-page">
         {error !== undefined && <p className="mobile-error mobile-pad" role="alert">{error}</p>}
 
         <div className="settings-search">

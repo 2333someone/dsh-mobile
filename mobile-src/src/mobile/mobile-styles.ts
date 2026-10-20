@@ -1263,6 +1263,18 @@ button.settings-row:focus-visible {
   color: var(--text-secondary);
 }
 
+/* 设置页「主机配置」分组用的是 .mobile-row（bundle 只给 .settings-row 的
+   .card-icon > * 加了底色），结果「用量 / 模型」等行的图标没有灰色底座，
+   看起来比上下行偏小、偏右。这里在设置页范围内补齐同一块底座，并把行高
+   与 .settings-row 对齐，保证整列图标上下一条线。 */
+.dm-settings-page .mobile-row {
+  min-height: 67px;
+}
+.dm-settings-page .mobile-row .card-icon > * {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
 .settings-rowValue {
   color: var(--text-quaternary);
   font-size: var(--text-md);
