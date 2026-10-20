@@ -18,6 +18,7 @@ import type { MuxFrame } from '../../api-proxy-types'
 import { loadChatPage, prompt, type ChatPageResult, type SessionView } from './App.tsx'
 import { dropSessionFromCaches, loadDraft, loadReadingTurn, removeDraft, removeReadingTurn, saveDraft, saveReadingTurn } from '../list-persist.ts'
 import { usePageVisible } from '../foreground.ts'
+import { buzz } from '../display-prefs.ts'
 import { loadCachedHistory } from '../history-cache.ts'
 import { errorText, staleHostHint } from './App.tsx'
 import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, listSessions, history, type CommandDescriptor } from '../api.ts'
@@ -511,6 +512,10 @@ export function ChatView({
   const [queuedEntries, setQueuedEntries] = useState<OutboxEntry[]>([])
   /** Pinch-zoom state for code blocks (one active gesture at a time). */
   const pinchRef = useRef<{ block: HTMLElement; dist0: number; scale0: number } | undefined>(undefined)
+  /** Approval ids / question batch rpcIds this phone already buzzed for, so
+   * mux replays (re-subscribe, session switch back) never double-buzz. */
+  const buzzedApprovalsRef = useRef<Set<string>>(new Set())
+  const buzzedQuestionsRef = useRef<Set<string>>(new Set())
   /**
    * Composer preference from the plugin's host settings (default true keeps
    * the legacy Enter-to-send behavior until the preference loads).
@@ -912,6 +917,9 @@ export function ChatView({
     // The clock anchor is unknown here (turn/start may sit outside the
     // window) — null falls back to mount time, like the desktop TurnStatus.
     setRunning(session.running === true)
+    // 换会话：上一条会话的审批/提问去重表清掉（id 全局唯一，清了也不会重复震）。
+    buzzedApprovalsRef.current.clear()
+    buzzedQuestionsRef.current.clear()
     // 会话切换：上一轮的轮号绝不能留给下一场（名单恢复的 running 会把它当成
     // 活跃轮次，把上一场那一轮的卡片误判成运行中）。
     setRunningTurn(undefined)
@@ -1097,6 +1105,10 @@ export function ChatView({
             setTurnStartAt(null)
             // Mirror the host's turn/end normalization (see normalizeTurnEndTodo).
             normalizeTurnEndTodo()
+            // 震动（前台）：任务完成轻震一下。后台/锁屏时浏览器会忽略
+            // navigator.vibrate（Chrome 只在可见页面允许震动），那条路只能靠
+            // 系统通知（Web Push / 第三方通道）由系统去震。
+            if (document.visibilityState === 'visible') buzz()
           }
           // todo/write is a full-list snapshot (last-write-wins): adopt it
           // into the plan strip. It keeps flowing into the fold below, which
@@ -1174,15 +1186,21 @@ export function ChatView({
       // Approval/question frames for this session (#1025).
       if (!('sessionId' in frame) || frame.sessionId !== session.sessionId) return
       if (frame.type === 'approval/requested') {
+        const approvalId = frame.approvalId as string
+        // 审批到达（前台）轻震一下；按 approvalId 去重，mux 重放不再重复震。
+        if (document.visibilityState === 'visible' && approvalId !== '' && !buzzedApprovalsRef.current.has(approvalId)) {
+          buzzedApprovalsRef.current.add(approvalId)
+          buzz()
+        }
         startTransition(() => {
           setPendingApprovals(previous => {
             // This phone already answered it: the host replays what it still
             // holds, and a replay must never resurrect an answered panel.
-            if (answeredApprovalsFor(session.sessionId).has(frame.approvalId as string)) return previous
-            if (previous.some(a => a.approvalId === frame.approvalId)) return previous
+            if (answeredApprovalsFor(session.sessionId).has(approvalId)) return previous
+            if (previous.some(a => a.approvalId === approvalId)) return previous
             return [...previous, {
               rpcId: frameRpcId ?? '',
-              approvalId: frame.approvalId as string,
+              approvalId,
               toolName: frame.toolName,
               callId: frame.callId as string | undefined,
               reason: frame.reason,
@@ -1198,6 +1216,12 @@ export function ChatView({
         return
       }
       if (frame.type === 'question/requested') {
+        // 提问到达（前台）轻震一下；一批提问用一个 rpcId，去重按批。
+        const questionBatchId = frameRpcId ?? ''
+        if (document.visibilityState === 'visible' && questionBatchId !== '' && !buzzedQuestionsRef.current.has(questionBatchId)) {
+          buzzedQuestionsRef.current.add(questionBatchId)
+          buzz()
+        }
         const items = (frame.questions as Array<{
           id: string; question: string; detail?: string; header?: string
           options?: Array<{ label: string; description?: string }>; multiSelect?: boolean
