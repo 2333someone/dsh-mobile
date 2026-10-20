@@ -34,7 +34,6 @@ import {
   TrashIcon, TypeIcon, UpperRightIcon, VibrateIcon,
 } from '../icons.tsx'
 import { MarketView } from './MarketView.tsx'
-import { TrashSheet } from '../cleanup-sheets.tsx'
 import { SettingsForm, isWritableField, namespaceTitle } from './SettingsForm.tsx'
 
 /** Props for the settings page. */
@@ -576,8 +575,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   // 发送模式：真值在宿主（window.__dmSendMode），这里只镜像出来给行右侧显示。
   const [sendMode, setSendModeState] = useState<SendMode>(() => readSendMode())
   const [sheet, setSheet] = useState<'theme' | 'font' | 'density' | 'sendmode' | 'about' | null>(null)
-  /** 回收站（删除/恢复的入口）。 */
-  const [trashOpen, setTrashOpen] = useState(false)
   /** 右上角「?」的说明面板：解释「本机 / 同步桌面 / 桌面端」三种范围。 */
   const [scopeHelpOpen, setScopeHelpOpen] = useState(false)
   // Full-page sub-view: the unified notification page.
@@ -1676,19 +1673,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         </ul>
 
         <ul className="settings-group">
-          <li className="settings-groupTitle">数据 <span className="settings-groupDesc">删除与恢复</span></li>
-          {hit('回收站', '删除', '恢复', '清理', 'trash', 'delete') && (
-            <SettingsRow
-              icon={<TrashIcon />}
-              title="回收站"
-              desc="恢复误删的会话与文件，或彻底清空"
-              action={<RowChevron />}
-              onClick={() => { setTrashOpen(true) }}
-            />
-          )}
-        </ul>
-
-        <ul className="settings-group">
           <li className="settings-groupTitle">通用</li>
           {hit('反馈', '意见', '建议', 'feedback', 'issue', 'github') && (
             <SettingsRow
@@ -1775,7 +1759,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           onClose={() => { setSheet(null) }}
         />
       )}
-      {trashOpen && <TrashSheet onClose={() => { setTrashOpen(false) }} />}
       {sheet === 'about' && (
         <Sheet title="关于" onClose={() => { setSheet(null) }}>
           <p className="sheet-confirm-desc">

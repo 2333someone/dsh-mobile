@@ -7688,32 +7688,6 @@ details.think-block[open] .chat-disclosure-caret {
 .dm-btn-sm { padding: 7px 12px; font-size: 13px; }
 
 /* 回收站 */
-.dm-trash { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
-.dm-trash-empty { margin: 8px 2px; font-size: 13px; color: var(--text-tertiary); text-align: center; }
-.dm-trash-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--card-bg, #fff);
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-}
-.dm-trash-icon {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.05));
-  color: var(--text-secondary);
-}
-.dm-trash-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.dm-trash-title { font-size: 13.5px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
-.dm-trash-hard { padding: 1px 6px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-tertiary); font-size: 10px; font-weight: 400; }
-.dm-trash-sub { font-size: 11px; color: var(--text-tertiary); }
 .dm-confirm-path { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .dm-confirm-path input {
   width: 100%;

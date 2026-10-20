@@ -28,7 +28,7 @@ import { createSubagentRpc } from './rpc/subagent.js'
 import { createPushRpc } from './rpc/push.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
-import { emptyTrash, findSessionDir, listSessionFiles, listTrash, normalizeSessionId, restoreTrash, sessionIdVariants, trashSessionDir, trashSessionFiles, trashStats, trashWorkspaceDir } from './cleanup.js'
+import { listSessionFiles, normalizeSessionId, purgeSessionDir, purgeSessionFiles, purgeWorkspaceDir, sessionIdVariants } from './cleanup.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, MOBILE_FILE_MAX_BYTES, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, FILE_PREFIX, FILE_TOKEN_TTL_MS, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
@@ -2997,7 +2997,7 @@ export function createHost(ctx, config) {
 
   /**
    * 会话「永久删除」：先归档（所有设备立即从列表消失）→ 会话目录进回收站 →
-   * 清投影缓存/待处理项 → 广播 session/removed。返回 trashId 供撤销。
+   * 清投影缓存/待处理项 → 广播 session/removed。删除不可恢复。
    * 运行中的会话一律拒绝，受保护会话需要明确 allowProtected。
    */
   async function purgeSession(sessionId, options = {}) {
@@ -3028,7 +3028,7 @@ export function createHost(ctx, config) {
         if (reg && typeof reg.archiveSession === 'function') await reg.archiveSession(variant, { stopActivity: true })
       } catch {}
     }
-    const result = trashSessionDir(id, { hard: options.hard === true, title: options.title })
+    const result = purgeSessionDir(id)
     if (!result.ok) return result
     // 待处理审批/提问属于已删会话：放开等待链，避免桌面审批卡死。
     for (const [rpcId, entry] of [...pending.approvals]) {
@@ -3044,15 +3044,7 @@ export function createHost(ctx, config) {
     }
     // 广播：手机端立刻把该行收起（两种 id 写法都发，客户端按自己的写法匹配）。
     for (const variant of sessionIdVariants(id)) emitMux({ type: 'session/removed', sessionId: variant })
-    return {
-      ok: true,
-      value: {
-        sessionId: id,
-        trashId: result.entry.id,
-        hard: options.hard === true,
-        dir: result.entry.items && result.entry.items[0] ? result.entry.items[0].from : undefined,
-      },
-    }
+    return { ok: true, value: { sessionId: id, dir: result.dir, bytes: result.bytes } }
   }
 
   async function dispatchRpc(method, payload, rpcContext) {
@@ -3309,18 +3301,16 @@ export function createHost(ctx, config) {
             failed.push({ sessionId, reason: result.error && result.error.message })
           }
         }
-        let workspaceTrashId
         if (payload.deleteWorkspaceFiles === true) {
           if (String(payload.confirmPath || '') !== String(workspace.path || '')) {
             return { ok: false, error: { code: 'confirm-mismatch', message: '确认路径与工作区路径不一致' }, value: { purged, skipped, failed } }
           }
-          const trashed = trashWorkspaceDir(workspace.path, { pluginDir: __dirname })
-          if (!trashed.ok) return { ok: false, error: trashed.error, value: { purged, skipped, failed } }
-          workspaceTrashId = trashed.entry.id
+          const deleted = purgeWorkspaceDir(workspace.path, { pluginDir: __dirname })
+          if (!deleted.ok) return { ok: false, error: deleted.error, value: { purged, skipped, failed } }
         }
         const controller = wc()
         if (!controller || typeof controller.delete !== 'function') {
-          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' }, value: { purged, skipped, failed, workspaceTrashId } }
+          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' }, value: { purged, skipped, failed } }
         }
         try {
           await controller.delete({ workspaceId })
@@ -3328,10 +3318,10 @@ export function createHost(ctx, config) {
           return {
             ok: false,
             error: { code: 'workspace-delete-failed', message: err && err.message ? err.message : String(err) },
-            value: { purged, skipped, failed, workspaceTrashId },
+            value: { purged, skipped, failed },
           }
         }
-        return { ok: true, value: { purged, skipped, failed, workspaceTrashId } }
+        return { ok: true, value: { purged, skipped, failed } }
       }
       case 'workspace.archiveSession': {
         // 契约（宿主 api-workspace-controller）：archiveSession({ sessionId, stopActivity })
@@ -3376,12 +3366,10 @@ export function createHost(ctx, config) {
         return { ok: true, value: { archivedSessionIds: archived } }
       }
       case 'session.purge': {
-        // 永久删除会话：归档 + 会话目录进回收站（hard=true 时彻底删除）。
+        // 永久删除会话：归档墓碑 + rm -rf 会话目录（不可恢复）。
         return await purgeSession(payload.sessionId, {
-          hard: payload.hard === true,
           allowProtected: payload.allowProtected === true,
           force: payload.force === true,
-          title: payload.title,
         })
       }
       case 'session.files.list': {
@@ -3393,30 +3381,9 @@ export function createHost(ctx, config) {
       case 'session.files.delete': {
         const sessionId = String(payload.sessionId || '')
         if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
-        const result = trashSessionFiles(sessionId, payload.paths, cwdOfSession(sessionId), { hard: payload.hard === true })
+        const result = purgeSessionFiles(sessionId, payload.paths, cwdOfSession(sessionId))
         if (!result.ok) return result
         return { ok: true, value: result }
-      }
-      case 'trash.list': {
-        return { ok: true, value: { items: listTrash(), stats: trashStats() } }
-      }
-      case 'trash.restore': {
-        const result = restoreTrash(String(payload.entryId || ''))
-        if (!result.ok) return result
-        // 会话记录恢复：同时反归档，否则列表仍然看不到它。
-        if (result.entry && result.entry.kind === 'session' && typeof result.entry.sessionId === 'string') {
-          for (const variant of sessionIdVariants(result.entry.sessionId)) {
-            try {
-              const reg = wr()
-              if (reg && typeof reg.unarchiveSession === 'function') await reg.unarchiveSession(variant)
-            } catch {}
-          }
-          for (const variant of sessionIdVariants(result.entry.sessionId)) emitMux({ type: 'session/added', sessionId: variant })
-        }
-        return { ok: true, value: result }
-      }
-      case 'trash.empty': {
-        return { ok: true, value: emptyTrash() }
       }
       case 'mobile.preferences': {
         // 手机 bundle 的启动探针；形态必须匹配 dsh-palm，否则会判定「连不上 host」。

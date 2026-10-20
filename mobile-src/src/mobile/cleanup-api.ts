@@ -1,13 +1,12 @@
 /**
  * 删除/清理相关的手机端 API 与本地状态：
  *   · 会话文件清单（日志 + 本会话写过的文件）
- *   · 文件删除（回收站 / 彻底删除）
- *   · 会话永久删除（归档墓碑 + 会话目录进回收站）
- *   · 回收站列表 / 恢复 / 清空
+ *   · 文件删除（永久）
+ *   · 会话永久删除（归档墓碑 + 宿主会话目录 rm）
  *   · 仅本机隐藏（localStorage；不动宿主）
  *
- * 宿主实现见 src/host/cleanup.js；所有会破坏数据的动作都在宿主执行，
- * 这里只负责发起与本地缓存。
+ * 不做回收站：删除就是删除，宿主侧直接 rm（见 src/host/cleanup.js）。
+ * 所有破坏性动作都在宿主执行，这里只负责发起与本地缓存。
  */
 import { callUnary } from './rpc.ts'
 
@@ -32,23 +31,11 @@ export interface SessionFilesResult {
   bytes: number
 }
 
-/** One trash journal entry (a reversible deletion). */
-export interface TrashEntry {
-  id: string
-  kind: 'session' | 'files' | 'workspace'
-  sessionId?: string
-  title?: string
-  hard: boolean
-  removedAt: number
-  items: Array<{ kind: string; from: string; to?: string }>
-}
-
 /** Result of a permanent session delete. */
 export interface PurgeSessionResult {
   sessionId: string
-  trashId?: string
-  hard: boolean
   dir?: string
+  bytes?: number
 }
 
 /** List the files a session can clean (log + files it wrote). */
@@ -56,22 +43,19 @@ export async function sessionFiles(sessionId: string): Promise<SessionFilesResul
   return await callUnary<SessionFilesResult>('session.files.list', { sessionId })
 }
 
-/** Move (or permanently delete) selected files from the session's list. */
-export async function deleteSessionFiles(sessionId: string, paths: string[], hard = false): Promise<{
-  moved: Array<{ from: string; to?: string; kind: string }>
-  missing: string[]
-  trashId?: string
+/** Permanently delete selected files from the session's list. */
+export async function deleteSessionFiles(sessionId: string, paths: string[]): Promise<{
+  removed: Array<{ path: string }>
+  skipped: string[]
 }> {
-  return await callUnary('session.files.delete', { sessionId, paths, hard })
+  return await callUnary('session.files.delete', { sessionId, paths })
 }
 
-/** Permanently delete a session: archive tombstone + session dir to trash. */
-export async function purgeSession(sessionId: string, options: { hard?: boolean; allowProtected?: boolean; title?: string } = {}): Promise<PurgeSessionResult> {
+/** Permanently delete a session: archive tombstone + host session dir removed. */
+export async function purgeSession(sessionId: string, options: { allowProtected?: boolean } = {}): Promise<PurgeSessionResult> {
   return await callUnary<PurgeSessionResult>('session.purge', {
     sessionId,
-    ...(options.hard === true ? { hard: true } : {}),
     ...(options.allowProtected === true ? { allowProtected: true } : {}),
-    ...(options.title === undefined ? {} : { title: options.title }),
   })
 }
 
@@ -80,22 +64,7 @@ export async function unarchiveSession(sessionId: string): Promise<{ archivedSes
   return await callUnary<{ archivedSessionIds: string[] }>('workspace.unarchiveSession', { sessionId })
 }
 
-/** Read the trash journal + counters. */
-export async function readTrash(): Promise<{ items: TrashEntry[]; stats: { entries: number; sessions: number } }> {
-  return await callUnary('trash.list', {})
-}
-
-/** Restore one trash entry (session records also get unarchived host-side). */
-export async function restoreTrashEntry(entryId: string): Promise<{ restored: Array<{ from: string; to: string }> }> {
-  return await callUnary('trash.restore', { entryId })
-}
-
-/** Permanently drop everything still in the trash. */
-export async function emptyTrash(): Promise<{ removed: number }> {
-  return await callUnary('trash.empty', {})
-}
-
-/** Remove + clean a workspace (sessions first, optional dir move to trash). */
+/** Remove + clean a workspace (sessions first, optional dir delete). */
 export async function purgeWorkspace(workspaceId: string, options: {
   deleteWorkspaceFiles?: boolean
   confirmPath?: string
@@ -103,7 +72,6 @@ export async function purgeWorkspace(workspaceId: string, options: {
   purged: string[]
   skipped: Array<{ sessionId: string; reason: string }>
   failed: Array<{ sessionId: string; reason?: string }>
-  workspaceTrashId?: string
 }> {
   return await callUnary('workspace.purge', {
     workspaceId,

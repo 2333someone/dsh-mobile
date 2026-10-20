@@ -4,9 +4,9 @@
  * 交互模型（对齐「权限全在操作人手里，我们只多做一层提醒」）：
  *   · 归档        —— 可逆，直接执行 + 撤销条；
  *   · 仅本机隐藏  —— 只写本机 localStorage，可逆；
- *   · 管理文件    —— 勾选清单 →「移到回收站」（默认，可撤销）或「彻底删除」；
+ *   · 管理文件    —— 勾选清单 →「永久删除」（删除就是删除，没有回收站）；
  *   · 永久删除会话 —— 红色危险区，必须**按住 1.2 秒**（带进度环 + 轻震）才执行；
- *     宿主侧先归档墓碑再把会话目录搬进回收站，仍可在回收站恢复。
+ *     宿主侧先归档墓碑，再 rm -rf 会话目录，不可恢复。
  *
  * 动效原则：只给「状态变化」做动效（弹层上滑、进度环、行收起、撤销条滑入），
  * 不做装饰性动画；`prefers-reduced-motion` 下全部退化成瞬时切换。
@@ -16,12 +16,11 @@ import { Sheet } from './sheet.tsx'
 import { ConfirmDialog } from './dialog.tsx'
 import { toast } from './toast.tsx'
 import { buzz } from './display-prefs.ts'
-import { CheckIcon, ClockIcon, FolderIcon, InfoIcon, TrashIcon } from './icons.tsx'
+import { CheckIcon, FolderIcon, InfoIcon, TrashIcon } from './icons.tsx'
 import { errorText } from './views/App.tsx'
 import {
-  deleteSessionFiles, emptyTrash, formatBytes, purgeSession, purgeWorkspace, readTrash,
-  restoreTrashEntry, sessionFiles,
-  type PurgeSessionResult, type SessionFileEntry, type SessionFilesResult, type TrashEntry,
+  deleteSessionFiles, formatBytes, purgeSession, purgeWorkspace, sessionFiles,
+  type PurgeSessionResult, type SessionFileEntry, type SessionFilesResult,
 } from './cleanup-api.ts'
 
 /* ── 按住确认按钮 ─────────────────────────────────────────────────────────── */
@@ -183,7 +182,7 @@ export function SessionActionsSheet({ session, pinned = false, onClose, onToggle
         <ActionItem
           icon={<FolderIcon />}
           title="管理会话文件…"
-          desc="清理会话日志、这个会话写过的文件（先移入回收站）"
+          desc="清理会话日志、这个会话写过的文件（永久删除）"
           onClick={onFiles}
           delay={90}
         />
@@ -191,7 +190,7 @@ export function SessionActionsSheet({ session, pinned = false, onClose, onToggle
         <ActionItem
           icon={<TrashIcon />}
           title="永久删除会话…"
-          desc="从磁盘移除会话记录；不可直接恢复，但会在回收站保留一段时间"
+          desc="从磁盘永久删除会话记录，不可恢复"
           danger
           onClick={onPurge}
           delay={120}
@@ -234,7 +233,7 @@ export function PurgeSessionSheet({ session, onClose, onDone }: {
     if (busy) return
     setBusy(true)
     setError(undefined)
-    void purgeSession(session.sessionId, { title: session.title }).then(
+    void purgeSession(session.sessionId).then(
       (result) => { setBusy(false); onDone(result) },
       (reason: unknown) => { setBusy(false); setError(errorText(reason)) },
     )
@@ -259,9 +258,9 @@ export function PurgeSessionSheet({ session, onClose, onDone }: {
           </span>
         </div>
         <p className="dm-purge-note">
-          删除后：所有设备的列表都会立即移除它；会话目录先移入宿主回收站
-          （可在「设置 → 回收站」恢复），确认无误后再清空回收站即可彻底删除。
-          工作区里生成的文件不会自动删除，可在「管理会话文件」里单独清理。
+          删除后：所有设备的列表都会立即移除它，宿主上的会话目录会被直接删除，
+          <b>不可恢复</b>。工作区里生成的文件不会自动删除，可在「管理会话文件」
+          里单独清理。
         </p>
         {session.running === true && (
           <p className="dm-purge-error" role="alert">
@@ -326,15 +325,14 @@ export function SessionFilesSheet({ session, onClose }: {
     })
   }
 
-  const remove = (hard: boolean): void => {
+  const remove = (): void => {
     if (busy || selectedFiles.length === 0) return
     setBusy(true)
     setConfirmHard(false)
-    void deleteSessionFiles(session.sessionId, selectedFiles.map(file => file.path), hard).then(
+    void deleteSessionFiles(session.sessionId, selectedFiles.map(file => file.path)).then(
       (result) => {
         setBusy(false)
-        const count = result.moved.length
-        toast(hard ? `已彻底删除 ${count} 个文件` : `已将 ${count} 个文件移入回收站`)
+        toast(`已永久删除 ${result.removed.length} 个文件`)
         load()
       },
       (reason: unknown) => {
@@ -386,133 +384,29 @@ export function SessionFilesSheet({ session, onClose }: {
         ))}
         {data !== undefined && data.found && (
           <p className="dm-files-note">
-            提示：外部文件指不在会话工作区内的路径（例如临时目录或其他仓库）。默认先移入回收站，
-            可在「设置 → 回收站」恢复。
+            提示：外部文件指不在会话工作区内的路径（例如临时目录或其他仓库）。
+            删除后不可恢复；工作区外的文件默认不勾选。
           </p>
         )}
       </div>
       <div className="dm-files-footer">
         <button
           type="button"
-          className="dm-btn dm-btn-ghost"
+          className="dm-btn dm-btn-danger"
           disabled={busy || selectedFiles.length === 0}
           onClick={() => setConfirmHard(true)}
         >
-          彻底删除
-        </button>
-        <button
-          type="button"
-          className="dm-btn dm-btn-primary"
-          disabled={busy || selectedFiles.length === 0}
-          onClick={() => remove(false)}
-        >
-          {busy ? '处理中…' : `移到回收站${selectedFiles.length > 0 ? `（${formatBytes(selectedBytes)}）` : ''}`}
+          {busy ? '处理中…' : `永久删除${selectedFiles.length > 0 ? `（${formatBytes(selectedBytes)}）` : ''}`}
         </button>
       </div>
       {confirmHard && selectedFiles.length > 0 && (
         <ConfirmDialog
-          title="彻底删除文件"
-          body={<>将永久删除选中的 {selectedFiles.length} 个文件（{formatBytes(selectedBytes)}），不进入回收站，无法恢复。</>}
-          confirmLabel="彻底删除"
+          title="永久删除文件"
+          body={<>将永久删除选中的 {selectedFiles.length} 个文件（{formatBytes(selectedBytes)}），不可恢复。</>}
+          confirmLabel="永久删除"
           tone="danger"
           onCancel={() => setConfirmHard(false)}
-          onConfirm={() => remove(true)}
-        />
-      )}
-    </Sheet>
-  )
-}
-
-/* ── 回收站 ───────────────────────────────────────────────────────────────── */
-
-/** 回收站：恢复误删 + 清空。 */
-export function TrashSheet({ onClose }: { onClose(): void }) {
-  const [items, setItems] = useState<TrashEntry[] | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
-  const [busy, setBusy] = useState(false)
-  const [confirmEmpty, setConfirmEmpty] = useState(false)
-
-  const load = useCallback((): void => {
-    void readTrash().then(
-      (result) => { setItems(result.items); setError(undefined) },
-      (reason: unknown) => setError(errorText(reason)),
-    )
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  const restore = (entry: TrashEntry): void => {
-    if (busy) return
-    setBusy(true)
-    void restoreTrashEntry(entry.id).then(
-      () => { setBusy(false); toast('已恢复'); load() },
-      (reason: unknown) => { setBusy(false); toast(`恢复失败：${errorText(reason)}`) },
-    )
-  }
-
-  const clear = (): void => {
-    if (busy) return
-    setBusy(true)
-    setConfirmEmpty(false)
-    void emptyTrash().then(
-      (result) => { setBusy(false); toast(`已清空回收站（${result.removed} 项）`); load() },
-      (reason: unknown) => { setBusy(false); toast(`清空失败：${errorText(reason)}`) },
-    )
-  }
-
-  return (
-    <Sheet title="回收站" onClose={busy ? () => {} : onClose}>
-      <div className="dm-trash">
-        {error !== undefined && <p className="dm-purge-error">{error}</p>}
-        {items === undefined && error === undefined && <p className="dm-files-loading" role="status">正在读取回收站…</p>}
-        {items !== undefined && items.length === 0 && (
-          <p className="dm-trash-empty">回收站是空的。</p>
-        )}
-        {items !== undefined && items.map((entry) => (
-          <div key={entry.id} className="dm-trash-row">
-            <span className="dm-trash-icon" aria-hidden>
-              {entry.kind === 'session' ? <TrashIcon /> : entry.kind === 'workspace' ? <FolderIcon /> : <FolderIcon />}
-            </span>
-            <span className="dm-trash-main">
-              <span className="dm-trash-title">
-                {entry.kind === 'session'
-                  ? (entry.title || '会话')
-                  : entry.kind === 'workspace'
-                    ? (entry.title || '工作区目录')
-                    : (entry.items[0] ? entry.items[0].from.split(/[\/]/).pop() || '会话文件' : '会话文件')}
-                {entry.hard && <span className="dm-trash-hard">已彻底删除</span>}
-              </span>
-              <span className="dm-trash-sub">
-                {new Date(entry.removedAt).toLocaleString()} · {entry.items.length} 项
-                {entry.kind === 'workspace' ? ' · 恢复后需重新添加工作区' : ''}
-              </span>
-            </span>
-            {!entry.hard && (
-              <button type="button" className="dm-btn dm-btn-sm" disabled={busy} onClick={() => restore(entry)}>
-                恢复
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-      <div className="dm-files-footer">
-        <button
-          type="button"
-          className="dm-btn dm-btn-danger"
-          disabled={busy || items === undefined || items.length === 0}
-          onClick={() => setConfirmEmpty(true)}
-        >
-          清空回收站
-        </button>
-      </div>
-      {confirmEmpty && (
-        <ConfirmDialog
-          title="清空回收站"
-          body="回收站里的会话与文件将被永久删除，无法恢复。确定继续吗？"
-          confirmLabel="清空"
-          tone="danger"
-          onCancel={() => setConfirmEmpty(false)}
-          onConfirm={clear}
+          onConfirm={remove}
         />
       )}
     </Sheet>
@@ -521,7 +415,7 @@ export function TrashSheet({ onClose }: { onClose(): void }) {
 
 /* ── 工作区清理 ───────────────────────────────────────────────────────────── */
 
-/** 工作区级清理：删会话 + 可选把目录移入回收站。 */
+/** 工作区级清理：删会话 + 可选永久删除目录。 */
 export function PurgeWorkspaceSheet({ workspace, onClose, onDone }: {
   workspace: { workspaceId: string; title: string; path: string; sessionCount: number }
   onClose(): void
@@ -547,7 +441,7 @@ export function PurgeWorkspaceSheet({ workspace, onClose, onDone }: {
       (result) => {
         setBusy(false)
         onDone()
-        toast(`已清理 ${result.purged.length} 个会话${moveDir ? '，目录已移入回收站' : ''}`)
+        toast(`已清理 ${result.purged.length} 个会话${moveDir ? '，目录已永久删除' : ''}`)
       },
       (reason: unknown) => { setBusy(false); setError(errorText(reason)) },
     )
@@ -576,8 +470,8 @@ export function PurgeWorkspaceSheet({ workspace, onClose, onDone }: {
         >
           <span className={'dm-check' + (moveDir ? ' dm-check-on' : '')} aria-hidden>{moveDir && <CheckIcon />}</span>
           <span className="dm-file-main">
-            <span className="dm-file-name">把工作区目录移入回收站</span>
-            <span className="dm-file-path">危险：会移动整个目录（可从回收站恢复）</span>
+            <span className="dm-file-name">永久删除工作区目录</span>
+            <span className="dm-file-path">危险：整个目录会被直接删除，不可恢复</span>
           </span>
         </button>
         {moveDir && (
@@ -667,21 +561,3 @@ function EyeOffIcon() {
   )
 }
 
-/** 回收站入口行（设置页用）。 */
-export function TrashEntryRow({ onOpen }: { onOpen(): void }) {
-  return (
-    <button type="button" className="settings-row dm-trash-entry" onClick={onOpen}>
-      <span className="dm-action-icon" aria-hidden><TrashIcon /></span>
-      <span className="settings-rowMain">
-        <span className="settings-rowLabel">回收站</span>
-        <span className="settings-rowDesc">恢复误删的会话与文件，或彻底清空</span>
-      </span>
-      <span className="settings-rowValue">›</span>
-    </button>
-  )
-}
-
-/** 供设置页/列表页复用的小时钟（回收站时间显示）。 */
-export function TrashClock() {
-  return <ClockIcon />
-}
