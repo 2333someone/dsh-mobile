@@ -26,6 +26,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { escapeHtml, parseSegments, parseStreamPrefix, safeUrl, type MarkdownSegment, type StreamBlock } from './markdown.ts'
 import { loadLocalImageUrl } from './local-images.ts'
+
+/**
+ * 图片宽高比缓存（按 data-local-src 记住）。
+ *
+ * 图片是异步读回来的：加载前只能占一个 56px 的占位，加载完高度突变 —— 回滚历史时
+ * 每张图都会让整屏内容跳一下。记住过一次的比例后，重挂载时先按 aspect-ratio 占位，
+ * 高度从第一帧就是对的，滚动不再抖。
+ */
+const imageRatioCache = new Map<string, string>()
 import { CodeBlock } from './code-block.tsx'
 import { DiffView } from './diff-view.tsx'
 import { ChevronUpIcon, SearchIcon } from './icons.tsx'
@@ -270,6 +279,9 @@ export function MarkdownText({ text, pending, forceOpen = false, highlightQuery,
       caption.textContent = '图片'
       const parent = img.parentNode
       if (parent === null) continue
+      const localSrc = img.getAttribute('data-local-src')
+      const knownRatio = localSrc === null ? undefined : imageRatioCache.get(localSrc)
+      if (knownRatio !== undefined) img.style.aspectRatio = knownRatio
       parent.insertBefore(figure, img)
       figure.appendChild(img)
       figure.appendChild(caption)

@@ -234,8 +234,15 @@ export const LOAD_OLDER_TIMEOUT_MS = 15_000
    every scroll re-locates from the scroll position, so errors never
    accumulate into drift. */
 
-/** Message count above which the chat renders windowed instead of in full. */
-export const WINDOW_THRESHOLD = 120
+/**
+ * Message count above which the chat renders windowed instead of in full.
+ *
+ * 300 而不是 120：窗口化（只渲染可视区、用估算高度撑开）是所有滚动跳动的来源，
+ * 而「几百行 DOM」对手机浏览器毫无压力（浏览器还有 content-visibility 兜底）。
+ * 提到 300 后绝大多数会话根本不进窗口化，滚动就是原生平顺的；只有上千条的
+ * 大会话才需要它。
+ */
+export const WINDOW_THRESHOLD = 300
 /**
  * Rows at the tail that always render with real layout (no content-visibility)
  * in the non-windowed path. The auto-follow reads `el.scrollHeight` to pin the
@@ -249,8 +256,8 @@ export const CONTENT_VISIBILITY_KEEP_BOTTOM = 30
 // Search can scan deep history (mobile-api SEARCH_MESSAGES_PAGES). Keep locate
 // paging bounded, but large enough to reach any result that search can return.
 export const FOCUS_MAX_PAGES = 4096
-/** Messages rendered ahead of / behind the located row. */
-export const WINDOW_OVERSCAN = 20
+/** Messages rendered ahead of / behind the located row (40: 抖动更少、窗口搬得更少). */
+export const WINDOW_OVERSCAN = 40
 /** Target visible message rows per window. */
 export const WINDOW_VISIBLE = 24
 
