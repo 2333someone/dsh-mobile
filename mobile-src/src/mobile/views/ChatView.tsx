@@ -3615,13 +3615,8 @@ export function ChatView({
       </div>
       {plusOpen && (
         <PlusSheet
-          commands={commands}
           onPickImage={() => { setPlusOpen(false); fileInputRef.current?.click() }}
           onPickCamera={() => { setPlusOpen(false); cameraInputRef.current?.click() }}
-          onPickCommand={(line) => {
-            setPlusOpen(false)
-            void runCommand(line).catch(() => { /* runCommand already surfaced the error */ })
-          }}
           onClose={() => { setPlusOpen(false) }}
         />
       )}
