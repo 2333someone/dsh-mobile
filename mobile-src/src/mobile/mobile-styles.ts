@@ -4991,6 +4991,41 @@ button.settings-row:focus-visible {
 
 /* ── bottom input bar: capsule field + circular send ─────────────────── */
 
+/* 底部越界提示：已经滚到底、手指还想继续往上拖时，在输入栏上方亮一圈紫色光晕。
+   只做视觉提示 —— 不移动内容、不做回弹（用户明确否掉果冻动效）。 */
+.chat-pull-glow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.chat-pull-glow::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 72px;
+  background: radial-gradient(120% 100% at 50% 100%,
+    color-mix(in srgb, var(--accent) 46%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 45%,
+    transparent 78%);
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+}
+
+.chat-pull-glow-on::after {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pull-glow::after { transition: none; }
+}
+
 .chat-composer {
   display: flex;
   flex-direction: column;
