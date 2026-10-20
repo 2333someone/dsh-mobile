@@ -305,7 +305,32 @@ export function MarkdownText({ text, pending, forceOpen = false, highlightQuery,
           return
         }
         image.dataset['localState'] = 'loaded'
+        // 图片加载会让它所在行突然长高：如果这张图在视口**上方**，整屏内容会被
+        // 顶下去（用户看到的「突然一跳」）。这里记下加载前高度，加载完成后按差值
+        // 补偿 scrollTop，视野保持不动；同时记住宽高比，重挂载时第一帧就占对位置。
+        const heightBefore = image.getBoundingClientRect().height
         image.src = url
+        const settle = (): void => {
+          const w = image.naturalWidth
+          const h = image.naturalHeight
+          if (w > 0 && h > 0) {
+            const ratio = `${String(w)} / ${String(h)}`
+            imageRatioCache.set(path, ratio)
+            image.style.aspectRatio = ratio
+          }
+          try {
+            const scroller = image.closest('.chat-scroll')
+            if (scroller === null) return
+            const delta = image.getBoundingClientRect().height - heightBefore
+            if (delta <= 1) return
+            const imgRect = image.getBoundingClientRect()
+            const scRect = scroller.getBoundingClientRect()
+            // 只在图片整体位于视口上方时补偿；正看着它长高不该抢滚动。
+            if (imgRect.bottom <= scRect.top) scroller.scrollTop += delta
+          } catch {}
+        }
+        if (image.complete && image.naturalWidth > 0) settle()
+        else image.addEventListener('load', settle, { once: true })
       })
     }
   }, [segments, sessionId])

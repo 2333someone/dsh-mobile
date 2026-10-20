@@ -2072,6 +2072,35 @@ button.settings-row:focus-visible {
    the message viewport (sticky inside the scroll container, so it never
    rides the content). Appears once the reader scrolled away from the
    bottom; the badge counts messages that arrived while away. */
+/* 浮层容器：轮次药丸 / 回到最下方改成绝对定位覆盖层（原来它们在滚动内容里，
+   sticky + margin-top:auto 会占一行高度 —— 一出现就撑高内容，往上拖会突然跳一下，
+   底部也永远多一块空白）。 */
+.chat-float-layer {
+  position: absolute;
+  right: 14px;
+  bottom: 100%;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  z-index: 45;
+  pointer-events: none;
+}
+
+.chat-float-layer > * {
+  pointer-events: auto;
+}
+
+.chat-float-layer .chat-jump-turns,
+.chat-float-layer .chat-jump-latest,
+.chat-float-layer .chat-jump-lastread {
+  position: static !important;
+  bottom: auto !important;
+  margin: 0 !important;
+  align-self: auto !important;
+}
+
 .chat-jump-latest {
   position: sticky;
   bottom: 12px;

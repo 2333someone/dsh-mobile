@@ -3416,16 +3416,11 @@ export function ChatView({
           </>
         ) : (
           messages.map((message, index) => {
-            // Non-windowed path: let the browser skip layout/paint of rows far
-            // above the viewport via content-visibility, with the existing
-            // height estimate as the contain-intrinsic-size fallback. The tail
-            // (CONTENT_VISIBILITY_KEEP_BOTTOM rows) stays real so the
-            // auto-follow's scrollHeight read stays exact. `auto` remembers a
-            // row's real size once it has been laid out, so the estimate only
-            // stands in for rows never scrolled into view.
-            const cv = index < messages.length - CONTENT_VISIBILITY_KEEP_BOTTOM
-              ? { contentVisibility: 'auto' as const, containIntrinsicSize: `auto ${estimateMessageHeight(message)}px` }
-              : undefined
+            // 不再用 content-visibility：它会把尚未渲染的行按**估算高度**撑开，
+            // 一旦滚进视口换成真实高度，整页高度就变、内容「突然一跳」。窗口化
+            // 阈值已经提到 300（绝大多数会话根本不进窗口化），普通会话全量真实
+            // 渲染完全扛得住，宁可多渲染也不要跳。
+            const cv = undefined
             return (
               <MessageRow
                 key={messageKey(message)}
@@ -3473,58 +3468,6 @@ export function ChatView({
               setPendingQuestions(prev => prev.filter(q => q.rpcId !== rpcId))
             }}
           />
-        )}
-        {turnsPresence.mounted && (
-          <button
-            type="button"
-            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')
-              + (turnsPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
-            aria-label="轮次导航：轻点开清单，按住拖动刮擦"
-            onPointerDown={startScrub}
-            onPointerMove={moveScrub}
-            onPointerUp={endScrub}
-            onPointerCancel={cancelScrub}
-            onLostPointerCapture={cancelScrub}
-            onClick={(event) => { if (event.detail === 0) setTurnListOpen(true) }}
-          >
-            {/* 直接在 React 里输出「当前 / 横线 / 总数」的结构：
-                以前是 bundle 先渲染 "x/y" 文本、再由 DOM 补丁事后包成竖排，
-                于是从出现到补丁生效之间会「先横后竖」闪一下。这里一次渲染成型，
-                补丁看到 .dm-turn-sep 已存在会直接跳过（幂等）。 */}
-            <span className="chat-jump-turns-label">
-              <span className="dm-turn-cur">{shownTurn}</span>
-              <span className="dm-turn-sep" aria-hidden="true" />
-              <span className="dm-turn-total">{maxTurn}</span>
-            </span>
-          </button>
-        )}
-        {/* 「回到上次」 is ENTRY-TIME intent: it must be offered as soon as an
-            open finds a bookmark, so it is deliberately NOT gated on
-            showJumpToLatest. A bookmark that no longer differs from the newest
-            turn is not a "last read" spot at all — checked against the stable
-            host-outline newest turn AND the locally-merged one, so neither a
-            late-landing projection nor a locally-newer turn can render it. */}
-        {lastReadTurn !== undefined && lastReadTurn !== newestTurn && lastReadTurn !== maxTurn && maxTurn >= 2 && (
-          <button
-            type="button"
-            className="chat-jump-lastread"
-            aria-label="回到上次读到的轮次"
-            onClick={jumpToLastRead}
-          >
-            回到上次 · 第 {lastReadTurn} 轮
-          </button>
-        )}
-        {jumpPresence.mounted && (
-          <button
-            type="button"
-            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')
-              + (jumpPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
-            aria-label="回到最新消息"
-            onClick={jumpToLatest}
-          >
-            <ChevronDownIcon width={20} height={20} />
-            {unreadCount > 0 && <span className="chat-jump-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
-          </button>
         )}
       </div>
       <RunStatusBar
@@ -3744,6 +3687,62 @@ export function ChatView({
       )}
       <div className="chat-composer">
         <div className={'chat-pull-glow' + (bottomGlow ? ' chat-pull-glow-on' : '')} aria-hidden="true" />
+        {/* 浮层（轮次药丸 / 回到最下方）挪出滚动内容：放进去会撑高列表 → 往上拖时
+            内容突然跳一下、底部还会多一块空白。这里是绝对定位覆盖层，不参与布局。 */}
+        <div className="chat-float-layer">
+        {turnsPresence.mounted && (
+          <button
+            type="button"
+            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')
+              + (turnsPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
+            aria-label="轮次导航：轻点开清单，按住拖动刮擦"
+            onPointerDown={startScrub}
+            onPointerMove={moveScrub}
+            onPointerUp={endScrub}
+            onPointerCancel={cancelScrub}
+            onLostPointerCapture={cancelScrub}
+            onClick={(event) => { if (event.detail === 0) setTurnListOpen(true) }}
+          >
+            {/* 直接在 React 里输出「当前 / 横线 / 总数」的结构：
+                以前是 bundle 先渲染 "x/y" 文本、再由 DOM 补丁事后包成竖排，
+                于是从出现到补丁生效之间会「先横后竖」闪一下。这里一次渲染成型，
+                补丁看到 .dm-turn-sep 已存在会直接跳过（幂等）。 */}
+            <span className="chat-jump-turns-label">
+              <span className="dm-turn-cur">{shownTurn}</span>
+              <span className="dm-turn-sep" aria-hidden="true" />
+              <span className="dm-turn-total">{maxTurn}</span>
+            </span>
+          </button>
+        )}
+        {/* 「回到上次」 is ENTRY-TIME intent: it must be offered as soon as an
+            open finds a bookmark, so it is deliberately NOT gated on
+            showJumpToLatest. A bookmark that no longer differs from the newest
+            turn is not a "last read" spot at all — checked against the stable
+            host-outline newest turn AND the locally-merged one, so neither a
+            late-landing projection nor a locally-newer turn can render it. */}
+        {lastReadTurn !== undefined && lastReadTurn !== newestTurn && lastReadTurn !== maxTurn && maxTurn >= 2 && (
+          <button
+            type="button"
+            className="chat-jump-lastread"
+            aria-label="回到上次读到的轮次"
+            onClick={jumpToLastRead}
+          >
+            回到上次 · 第 {lastReadTurn} 轮
+          </button>
+        )}
+        {jumpPresence.mounted && (
+          <button
+            type="button"
+            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')
+              + (jumpPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
+            aria-label="回到最新消息"
+            onClick={jumpToLatest}
+          >
+            <ChevronDownIcon width={20} height={20} />
+            {unreadCount > 0 && <span className="chat-jump-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+          </button>
+        )}
+        </div>
         <QueueDock
           items={queueItems}
           running={running}
