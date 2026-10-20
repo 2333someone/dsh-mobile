@@ -1715,6 +1715,30 @@ export function ChatView({
     scheduleLocate()
   }, [scheduleLocate, setScrollTopProgrammatically])
 
+  /**
+   * 打开会话时把视口对准「最近一条用户气泡」而不是最底部。
+   *
+   * 用户要求：点进聊天页，屏幕顶部先看到自己刚问的那句话，下面是 AI 的思考/回复；
+   * 而不是一进来就停在最底、上面露出半截过程卡。仅当最后一条是**已结束**的
+   * assistant 回复时才这样做（还在流式输出时保持贴底跟着看）。
+   */
+  const pinToLastUserBubble = useCallback((): boolean => {
+    const el = scrollRef.current
+    if (el === undefined) return false
+    const users = el.querySelectorAll('.chat-msg-user')
+    const last = users[users.length - 1]
+    if (!last) return false
+    const maxTop = el.scrollHeight - el.clientHeight
+    if (maxTop <= 0) return false
+    const delta = last.getBoundingClientRect().top - el.getBoundingClientRect().top
+    const target = Math.min(maxTop, Math.max(0, el.scrollTop + delta - 8))
+    // 已经几乎在底部（内容很短）时不折腾。
+    if (target >= maxTop - 4) return false
+    setScrollTopProgrammatically(el, target)
+    return true
+  }, [setScrollTopProgrammatically])
+
+
   /** Pin the viewport to the REAL tail. In windowed mode the DOM scrollHeight
    * is an estimate (the top spacer carries estimated heights + the opening
    * correction), and the true content height is prefix[count] + correction —
@@ -1936,9 +1960,9 @@ export function ChatView({
     const el = scrollRef.current
     if (el === undefined) return
     if (!followedBottomRef.current) {
-      // First tail of this session: always follow (the chat opens at the
-      // newest message, whatever the scroll position left by a previous
-      // session). The opening baseline also seeds the unread tally.
+      // First tail of this session: land on the reader's own last question
+      // (bubble at the top, reply below) when that reply already finished;
+      // while it is still streaming, follow the tail as before.
       followedBottomRef.current = true
       lastSeenTurnRef.current = last.turn ?? 0
       scrollToBottom()
@@ -1968,6 +1992,36 @@ export function ChatView({
     if (locateLockRef.current) return
     scrollToBottom()
   }, [messages, scrollToBottom, autoScroll])
+
+  /**
+   * 首屏对准：会话加载完成后，把视口对到最近一条用户气泡（顶部），而不是最底。
+   * 只做一次（每个会话打开一次），并且只在该轮已结束、内容确实比一屏长时生效；
+   * 同时把 bottomGap 标成「读者已离开底部」，避免自动跟随在同一帧又拉回最底。
+   */
+  const openPinDoneRef = useRef(false)
+  useEffect(() => {
+    if (loading) return
+    if (openPinDoneRef.current) return
+    openPinDoneRef.current = true
+    // 首屏 DOM 可能还没把整页渲染完（窗口化渲染 + 字体度量），maxTop 为 0 时
+    // 直接放弃就再也不会对了 —— 这里最多重试 10 次（约 1 秒）。
+    let tries = 0
+    let timer = 0
+    const attempt = (): void => {
+      tries += 1
+      const list = messagesRef.current
+      const lastMessage = list[list.length - 1]
+      // 还在流式输出：保持贴底跟随，不要抢焦点。
+      if (lastMessage !== undefined && lastMessage.pending === true) return
+      if (pinToLastUserBubble()) {
+        bottomGapAtUserScrollRef.current = BOTTOM_FOLLOW_THRESHOLD_PX + 1
+        return
+      }
+      if (tries < 10) timer = window.setTimeout(attempt, 100)
+    }
+    timer = window.setTimeout(attempt, 120)
+    return () => { window.clearTimeout(timer) }
+  }, [loading, pinToLastUserBubble])
 
   // Silent prepend re-follow, run at COMMIT time: this fires right after
   // React has committed the prepended auto-extend page (before the next
