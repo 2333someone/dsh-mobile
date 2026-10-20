@@ -758,6 +758,13 @@ export async function createWorkspace(path: string): Promise<WorkspaceCreateResu
   return await callUnary<WorkspaceCreateResult>('workspace.create', { path })
 }
 
+/** Create one directory under an existing parent directory (phone-side mkdir).
+ *  The host's workspace.create only accepts existing directories, so the
+ *  new-workspace flow creates the folder first and then registers it. */
+export async function makeDirectory(parent: string, name: string): Promise<{ path: string; name: string }> {
+  return await callUnary<{ path: string; name: string }>('mobile.mkdir', { parent, name })
+}
+
 /** Rename a workspace's display title (host validates trim/conflict). */
 export async function renameWorkspace(workspaceId: string, title: string): Promise<{ workspace: WorkspaceView }> {
   return await callUnary<{ workspace: WorkspaceView }>('workspace.rename', { workspaceId, title })

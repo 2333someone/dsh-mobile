@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 let workspaceRowsCache: WorkspaceRow[] | undefined
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { WorkspaceView as WorkspaceRow } from '../../api-proxy-types'
-import { deleteWorkspace, listWorkspaces, listDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
+import { deleteWorkspace, listWorkspaces, listDirectory, makeDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
 import { errorText } from './App.tsx'
 import { compactPath, dominantPathPrefix } from '../ui-text.ts'
 import { Sheet } from '../sheet.tsx'
@@ -174,6 +174,9 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
   const [creating, setCreating] = useState(false)
   const [path, setPath] = useState<string | undefined>(undefined)
   const [reload, setReload] = useState(0)
+  const [folderPrompt, setFolderPrompt] = useState(false)
+  const [folderBusy, setFolderBusy] = useState(false)
+  const [folderError, setFolderError] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     let cancelled = false
@@ -191,6 +194,23 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
     )
     return () => { cancelled = true }
   }, [path, reload])
+
+  /** 在当前目录下新建一个文件夹（宿主 workspace.create 只接受已存在目录）。 */
+  const handleMakeFolder = async (name: string) => {
+    if (listing === undefined || folderBusy) return
+    setFolderBusy(true)
+    setFolderError(undefined)
+    try {
+      const result = await makeDirectory(listing.path, name)
+      setFolderPrompt(false)
+      // 直接进入新文件夹：目录是空的，确认无误后点「选择此目录」。
+      setPath(result.path)
+    } catch (reason: unknown) {
+      setFolderError(errorText(reason))
+    } finally {
+      setFolderBusy(false)
+    }
+  }
 
   const handleCreate = async () => {
     if (listing === undefined || creating) return
@@ -267,6 +287,15 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
       )}
 
       <div className="dir-select">
+        {folderError !== undefined && <p className="mobile-error" role="alert">{folderError}</p>}
+        <button
+          type="button"
+          className="mobile-button mobile-button-muted"
+          disabled={listing === undefined || creating || folderBusy}
+          onClick={() => { setFolderError(undefined); setFolderPrompt(true) }}
+        >
+          新建文件夹
+        </button>
         <button
           type="button"
           className="mobile-button"
@@ -276,6 +305,16 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
           {creating ? '创建中…' : '选择此目录'}
         </button>
       </div>
+      {folderPrompt && listing !== undefined && (
+        <PromptDialog
+          title="新建文件夹"
+          initial=""
+          confirmLabel={folderBusy ? '创建中…' : '创建'}
+          busy={folderBusy}
+          onCancel={() => { setFolderPrompt(false) }}
+          onConfirm={(value) => { void handleMakeFolder(value) }}
+        />
+      )}
     </div>
   )
 }

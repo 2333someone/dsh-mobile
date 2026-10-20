@@ -18,7 +18,7 @@ import { createServer } from 'node:http'
 import { randomBytes, randomInt } from 'node:crypto'
 import { homedir, networkInterfaces } from 'node:os'
 import { join, basename, resolve as resolvePath, relative as relativePath, isAbsolute as isAbsolutePath, extname } from 'node:path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { textOfEventData, createMuxRuntime, createSseRuntime } from './sse.js'
@@ -3047,6 +3047,68 @@ export function createHost(ctx, config) {
     return { ok: true, value: { sessionId: id, dir: result.dir, bytes: result.bytes } }
   }
 
+  /**
+   * 手机端目录浏览的 fs 兜底：宿主的 directoryPickerController 可能是
+   * native 模式（只有原生对话框，没有 list 能力），此时 picker.list 会抛
+   * 「needs the browse capability」。手机端没有原生对话框，必须自己列目录。
+   * 只列子目录（文件不能当工作区）；入口路径仍由调用方决定（默认 home）。
+   */
+  function listDirectoryWithFs(requested) {
+    const home = (() => {
+      try {
+        return realpathSync(homedir())
+      } catch {
+        return homedir()
+      }
+    })()
+    let dir
+    try {
+      dir = requested !== undefined && requested !== '' ? resolvePath(requested) : home
+      if (!statSync(dir).isDirectory()) {
+        return { ok: false, error: { code: 'bad-request', message: '不是目录' } }
+      }
+      dir = realpathSync(dir)
+    } catch (err) {
+      return { ok: false, error: { code: 'not-found', message: err && err.message ? err.message : '目录不存在' } }
+    }
+    let entries = []
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => {
+          try {
+            return entry.isDirectory() || (entry.isSymbolicLink() && statSync(join(dir, entry.name)).isDirectory())
+          } catch {
+            return false
+          }
+        })
+        .map((entry) => ({
+          name: entry.name,
+          path: join(dir, entry.name),
+          hidden: entry.name.startsWith('.'),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    } catch (err) {
+      return { ok: false, error: { code: 'list-failed', message: err && err.message ? err.message : '读取目录失败' } }
+    }
+    const MAX = 500
+    const truncated = entries.length > MAX
+    if (truncated) entries = entries.slice(0, MAX)
+    // 面包屑：从盘符/根开始逐段列出。
+    const crumbs = []
+    const parsed = resolvePath(dir)
+    const parts = parsed.split(/[\\/]+/).filter(Boolean)
+    if (parts.length > 0) {
+      const root = parsed.startsWith('/') ? '/' : `${parts[0]}\\`
+      crumbs.push({ name: parts[0], path: root })
+      let acc = root
+      for (let index = 1; index < parts.length; index += 1) {
+        acc = join(acc, parts[index])
+        crumbs.push({ name: parts[index], path: acc })
+      }
+    }
+    return { ok: true, value: { path: dir, home, crumbs, entries, truncated } }
+  }
+
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     // 注册表优先：已搬进 src/host/rpc/ 的域在这里命中，还没搬的继续落到下面的 switch。
@@ -4342,10 +4404,10 @@ export function createHost(ctx, config) {
         // home/crumbs/truncated），绝不用裸 fs.readdir 打开任意路径。
         //
         const picker = dp()
-        if (!picker || typeof picker.list !== 'function') {
-          return { ok: false, error: { code: 'unavailable', message: '目录浏览不可用（宿主未提供 directoryPickerController）' } }
-        }
         const requested = typeof payload?.path === 'string' && payload.path !== '' ? payload.path : undefined
+        if (!picker || typeof picker.list !== 'function') {
+          return listDirectoryWithFs(requested)
+        }
         try {
           const listing = await picker.list(requested, new AbortController().signal)
           // 契约（@deepseek-ai/dsh-host-directory-picker/types#DirectoryListing）：
@@ -4365,6 +4427,9 @@ export function createHost(ctx, config) {
             },
           }
         } catch (err) {
+          // native 模式的 picker 没有 list 能力：手机端退回自己的 fs 列目录。
+          const fallback = listDirectoryWithFs(requested)
+          if (fallback.ok === true) return fallback
           return {
             ok: false,
             error: {
@@ -4373,6 +4438,47 @@ export function createHost(ctx, config) {
             },
           }
         }
+      }
+      case 'mobile.mkdir': {
+        // 「新建工作区 → 新建文件夹」：宿主的 workspace.create 只接受**已存在**的
+        // 目录（realpath 必须成功），所以手机端要先在这里建目录，再走创建。
+        // 只允许在已存在的父目录下建**一段**名称，不接受多级路径/盘符。
+        const parent = typeof payload?.parent === 'string' ? payload.parent.trim() : ''
+        const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+        if (parent === '' || !isAbsolutePath(parent)) {
+          return { ok: false, error: { code: 'bad-request', message: '缺少有效的父目录' } }
+        }
+        if (name === '' || name === '.' || name === '..' || /[\\/]/.test(name)) {
+          return { ok: false, error: { code: 'bad-request', message: '文件夹名不能为空、不能包含路径分隔符' } }
+        }
+        if (/[<>:"|?*]/.test(name) || /[. ]$/.test(name)) {
+          return { ok: false, error: { code: 'bad-request', message: '文件夹名含有 Windows 不允许的字符' } }
+        }
+        if (name.length > 80) {
+          return { ok: false, error: { code: 'bad-request', message: '文件夹名太长（最多 80 个字符）' } }
+        }
+        let parentStat
+        try {
+          parentStat = statSync(parent)
+        } catch {
+          return { ok: false, error: { code: 'not-found', message: '父目录不存在' } }
+        }
+        if (!parentStat.isDirectory()) {
+          return { ok: false, error: { code: 'bad-request', message: '父路径不是目录' } }
+        }
+        const target = resolvePath(parent, name)
+        if (basename(target) !== name) {
+          return { ok: false, error: { code: 'bad-request', message: '非法的文件夹名' } }
+        }
+        if (existsSync(target)) {
+          return { ok: false, error: { code: 'exists', message: '同名文件或文件夹已存在' } }
+        }
+        try {
+          mkdirSync(target)
+        } catch (err) {
+          return { ok: false, error: { code: 'mkdir-failed', message: err && err.message ? err.message : String(err) } }
+        }
+        return { ok: true, value: { path: target, name } }
       }
       case 'mobile.previews': {
         // bundle 的调用点是 `(await m('mobile.previews', {sessionIds})).items`，
