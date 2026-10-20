@@ -28,6 +28,7 @@ import { createSubagentRpc } from './rpc/subagent.js'
 import { createPushRpc } from './rpc/push.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
+import { emptyTrash, findSessionDir, listSessionFiles, listTrash, normalizeSessionId, restoreTrash, sessionIdVariants, trashSessionDir, trashSessionFiles, trashStats, trashWorkspaceDir } from './cleanup.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
 import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, MOBILE_FILE_MAX_BYTES, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, FILE_PREFIX, FILE_TOKEN_TTL_MS, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
@@ -897,9 +898,23 @@ export function createHost(ctx, config) {
     }
 
     const toEvents = (records) => records.map((r) => ({ event: r.event }))
+    // 「加载更早」的窗口起点必须是**用户看得见**的那条消息。
+    // 宿主会把 time-context / skill-catalog / 插件注入这类 user/message 写进日志，
+    // 手机端一律隐藏它们；若把这种行当成 turn 起点，窗口就会以 assistant/message
+    // 开头 —— 界面上下拉加载出现的第一行直接是思考/过程卡，自己的提问气泡不见了。
+    const TRIGGER_SOURCE_KINDS = new Set([
+      'agent-message', 'team-message', 'subagent-settled', 'webhook',
+      'schedule', 'tool-jobs', 'cordis-host-runner', 'goal',
+    ])
     const isUserMessage = (record) => {
       const event = record && record.event
-      return event !== null && typeof event === 'object' && event.type === 'user/message'
+      if (event === null || typeof event !== 'object' || event.type !== 'user/message') return false
+      const data = event.data
+      const source = data !== null && typeof data === 'object' ? data.source : undefined
+      const kind = source !== null && typeof source === 'object' && typeof source.kind === 'string' ? source.kind : ''
+      if (kind === '' || kind === 'user') return true
+      // 触发类唤醒消息要独立成卡片，属于可见行，可以作为窗口起点。
+      return TRIGGER_SOURCE_KINDS.has(kind)
     }
     const firstUserIndex = (records) => {
       for (let index = 0; index < records.length; index += 1) {
@@ -2949,6 +2964,77 @@ export function createHost(ctx, config) {
     return await operation()
   }
 
+  /** 会话 cwd（兼容 session- 前缀的两种 id 写法）。 */
+  function cwdOfSession(sessionId) {
+    for (const variant of sessionIdVariants(sessionId)) {
+      const cwd = sessionCwd(variant)
+      if (typeof cwd === 'string' && cwd !== '') return cwd
+    }
+    return ''
+  }
+
+  /**
+   * 会话「永久删除」：先归档（所有设备立即从列表消失）→ 会话目录进回收站 →
+   * 清投影缓存/待处理项 → 广播 session/removed。返回 trashId 供撤销。
+   * 运行中的会话一律拒绝，受保护会话需要明确 allowProtected。
+   */
+  async function purgeSession(sessionId, options = {}) {
+    const rawId = String(sessionId || '')
+    const id = normalizeSessionId(rawId)
+    if (id === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+    const protectedIds = loadProtectedSessionIds()
+    if (options.allowProtected !== true) {
+      const isProtected = protectedIds.has(rawId) || protectedIds.has(`session-${id}`) || protectedIds.has(id)
+      if (isProtected) return { ok: false, error: { code: 'protected', message: '该会话受保护，不能从手机端永久删除' } }
+    }
+    if (options.force !== true) {
+      try {
+        const { items = [] } = await sc().list({}, new AbortController().signal)
+        const item = items.find((it) => normalizeSessionId(it.sessionId) === id)
+        if (item && item.running === true) {
+          return { ok: false, error: { code: 'running', message: '会话正在运行，先停止再删除' } }
+        }
+      } catch {}
+      for (const variant of sessionIdVariants(id)) {
+        if (liveAgentOf(variant) !== undefined) {
+          return { ok: false, error: { code: 'running', message: '会话有活跃 Agent，先停止再删除' } }
+        }
+      }
+    }
+    // 墓碑：先归档，列表立刻不再显示（即使宿主内存里还有这条会话）。
+    for (const variant of sessionIdVariants(id)) {
+      try {
+        const reg = wr()
+        if (reg && typeof reg.archiveSession === 'function') await reg.archiveSession(variant, { stopActivity: true })
+      } catch {}
+    }
+    const result = trashSessionDir(id, { hard: options.hard === true })
+    if (!result.ok) return result
+    // 待处理审批/提问属于已删会话：放开等待链，避免桌面审批卡死。
+    for (const [rpcId, entry] of [...pending.approvals]) {
+      if (normalizeSessionId(entry.sessionId) !== id) continue
+      entry.resolve(undefined)
+      pending.approvals.delete(rpcId)
+      if (entry.approvalId !== undefined) pending.byApprovalId.delete(entry.approvalId)
+    }
+    for (const [rpcId, entry] of [...pending.questions]) {
+      if (normalizeSessionId(entry.sessionId) !== id) continue
+      entry.resolve(undefined)
+      pending.questions.delete(rpcId)
+    }
+    // 广播：手机端立刻把该行收起（两种 id 写法都发，客户端按自己的写法匹配）。
+    for (const variant of sessionIdVariants(id)) emitMux({ type: 'session/removed', sessionId: variant })
+    return {
+      ok: true,
+      value: {
+        sessionId: id,
+        trashId: result.entry.id,
+        hard: options.hard === true,
+        dir: result.entry.items && result.entry.items[0] ? result.entry.items[0].from : undefined,
+      },
+    }
+  }
+
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     // 注册表优先：已搬进 src/host/rpc/ 的域在这里命中，还没搬的继续落到下面的 switch。
@@ -3182,6 +3268,51 @@ export function createHost(ctx, config) {
         await controller.delete({ workspaceId: payload.workspaceId })
         return { ok: true, value: { deleted: true } }
       }
+      case 'workspace.purge': {
+        // 工作区级清理：先逐个删会话（受保护/运行中的跳过），再注销工作区；
+        // deleteWorkspaceFiles=true 时把整个目录搬进回收站（必须精确确认路径）。
+        const workspaceId = String(payload.workspaceId || '')
+        const registry = wr()
+        const workspaces = registry && typeof registry.list === 'function' ? registry.list() : []
+        const workspace = workspaces.find((item) => String(item.id) === workspaceId)
+        if (!workspace) return { ok: false, error: { code: 'not-found', message: '工作区不存在' } }
+        const sessionIds = Array.isArray(workspace.sessionIds) ? [...workspace.sessionIds] : []
+        const purged = []
+        const skipped = []
+        const failed = []
+        for (const sessionId of sessionIds) {
+          const result = await purgeSession(sessionId, { hard: payload.hard === true })
+          if (result.ok) purged.push(sessionId)
+          else if (result.error && (result.error.code === 'protected' || result.error.code === 'running')) {
+            skipped.push({ sessionId, reason: result.error.code })
+          } else {
+            failed.push({ sessionId, reason: result.error && result.error.message })
+          }
+        }
+        let workspaceTrashId
+        if (payload.deleteWorkspaceFiles === true) {
+          if (String(payload.confirmPath || '') !== String(workspace.path || '')) {
+            return { ok: false, error: { code: 'confirm-mismatch', message: '确认路径与工作区路径不一致' }, value: { purged, skipped, failed } }
+          }
+          const trashed = trashWorkspaceDir(workspace.path, { pluginDir: __dirname })
+          if (!trashed.ok) return { ok: false, error: trashed.error, value: { purged, skipped, failed } }
+          workspaceTrashId = trashed.entry.id
+        }
+        const controller = wc()
+        if (!controller || typeof controller.delete !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' }, value: { purged, skipped, failed, workspaceTrashId } }
+        }
+        try {
+          await controller.delete({ workspaceId })
+        } catch (err) {
+          return {
+            ok: false,
+            error: { code: 'workspace-delete-failed', message: err && err.message ? err.message : String(err) },
+            value: { purged, skipped, failed, workspaceTrashId },
+          }
+        }
+        return { ok: true, value: { purged, skipped, failed, workspaceTrashId } }
+      }
       case 'workspace.archiveSession': {
         // 契约（宿主 api-workspace-controller）：archiveSession({ sessionId, stopActivity })
         // → { archivedSessionIds }。registry 上这个方法接收 (sessionId, options)，
@@ -3223,6 +3354,48 @@ export function createHost(ctx, config) {
           return { ok: false, error: { code: 'unarchive-failed', message } }
         }
         return { ok: true, value: { archivedSessionIds: archived } }
+      }
+      case 'session.purge': {
+        // 永久删除会话：归档 + 会话目录进回收站（hard=true 时彻底删除）。
+        return await purgeSession(payload.sessionId, {
+          hard: payload.hard === true,
+          allowProtected: payload.allowProtected === true,
+          force: payload.force === true,
+        })
+      }
+      case 'session.files.list': {
+        const sessionId = String(payload.sessionId || '')
+        if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+        const files = listSessionFiles(sessionId, cwdOfSession(sessionId))
+        return { ok: true, value: files }
+      }
+      case 'session.files.delete': {
+        const sessionId = String(payload.sessionId || '')
+        if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+        const result = trashSessionFiles(sessionId, payload.paths, cwdOfSession(sessionId), { hard: payload.hard === true })
+        if (!result.ok) return result
+        return { ok: true, value: result }
+      }
+      case 'trash.list': {
+        return { ok: true, value: { items: listTrash(), stats: trashStats() } }
+      }
+      case 'trash.restore': {
+        const result = restoreTrash(String(payload.entryId || ''))
+        if (!result.ok) return result
+        // 会话记录恢复：同时反归档，否则列表仍然看不到它。
+        if (result.entry && result.entry.kind === 'session' && typeof result.entry.sessionId === 'string') {
+          for (const variant of sessionIdVariants(result.entry.sessionId)) {
+            try {
+              const reg = wr()
+              if (reg && typeof reg.unarchiveSession === 'function') await reg.unarchiveSession(variant)
+            } catch {}
+          }
+          for (const variant of sessionIdVariants(result.entry.sessionId)) emitMux({ type: 'session/added', sessionId: variant })
+        }
+        return { ok: true, value: result }
+      }
+      case 'trash.empty': {
+        return { ok: true, value: emptyTrash() }
       }
       case 'mobile.preferences': {
         // 手机 bundle 的启动探针；形态必须匹配 dsh-palm，否则会判定「连不上 host」。

@@ -1511,7 +1511,7 @@ export function lastOpenTurnStartTime(events: readonly WireEvent[]): number | un
  * never drift from what is actually on screen; a future injected kind is
  * transparent for free.
  */
-function isHiddenInjectedRow(message: RenderMessage): boolean {
+export function isHiddenInjectedRow(message: RenderMessage): boolean {
   // 只有这四种**纯噪音**注入行是透明的：它们在屏幕上从不渲染（message-row 的守卫）。
   // 触发类唤醒消息（agent-message / subagent-settled / schedule / team-message / …）**不是**
   // 透明的 —— 它们要独立成行才能渲染成卡片；当成透明的话会被并进助手那一轮，正文被折进

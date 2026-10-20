@@ -25,7 +25,9 @@ import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand
 import type { SessionModels } from '../../api-proxy-types'
 import type { PendingApproval, PendingQuestionItem } from '../api.ts'
 import { buildPromptParts, compressImageFile, imageFromClipboard, MAX_ATTACHED_IMAGES, type AttachedImage, type PromptPart } from '../image.ts'
-import { coalesceTurnMessages, EventFolder, foldEvents, parseTodoList, type RenderMessage, type TodoSnapshot, type WireEvent } from '../messages.ts'
+import { coalesceTurnMessages, EventFolder, foldEvents, parseTodoList, type RenderMessage, type TodoSnapshot, type WireEvent,
+  isHiddenInjectedRow,
+} from '../messages.ts'
 import { perfMark } from '../perf.ts'
 import { adoptPolledQuestions, answeredQuestionsFor, noteAnsweredQuestion } from '../question-batches.ts'
 import { adoptPolledApprovals, answeredApprovalsFor, noteAnsweredApproval } from '../approval-batches.ts'
@@ -2328,7 +2330,12 @@ export function ChatView({
         clearTimeout(timeout)
         pendingRef.current = false
         if (!silent) setLoading(false)
-        const older = coalesceTurnMessages(page.rows)
+        // 兜底：窗口开头若仍是「客户端会隐藏的注入行」（time-context / skill-catalog /
+        // 插件注入的 user/message），去掉它们再 prepend —— 否则「加载更早」下方第一行
+        // 会直接是思考/过程卡，用户自己的气泡看不见。宿主侧已按可见用户消息对齐，
+        // 这里再挡一次，历史里任何异常页都不会漏。
+        let older = coalesceTurnMessages(page.rows)
+        while (older.length > 1 && isHiddenInjectedRow(older[0]!)) older = older.slice(1)
         const folder = folderRef.current
         if (folder === undefined) {
           setMessages(previous => coalesceTurnMessages([...older, ...previous]))
