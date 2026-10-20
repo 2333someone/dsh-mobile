@@ -325,8 +325,15 @@ export function MarkdownText({ text, pending, forceOpen = false, highlightQuery,
             if (delta <= 1) return
             const imgRect = image.getBoundingClientRect()
             const scRect = scroller.getBoundingClientRect()
-            // 只在图片整体位于视口上方时补偿；正看着它长高不该抢滚动。
-            if (imgRect.bottom <= scRect.top) scroller.scrollTop += delta
+            const gapAfter = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+            // 情况 A：图片在视口上方长高 → 补 scrollTop，视野保持不动。
+            if (imgRect.bottom <= scRect.top) {
+              scroller.scrollTop += delta
+              return
+            }
+            // 情况 B：读者本来就在最底部（图片长高把底部顶下去）→ 继续贴底，
+            // 否则进入会话后会停在离底部几百像素的地方。
+            if (gapAfter <= delta + 8) scroller.scrollTop = scroller.scrollHeight
           } catch {}
         }
         if (image.complete && image.naturalWidth > 0) settle()

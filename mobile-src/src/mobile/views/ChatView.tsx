@@ -351,6 +351,12 @@ export function ChatView({
   const loadOlderRef = useRef<(silent?: boolean, beforeSeq?: number) => void>(() => {})
   // One silent auto-extend per session open (see the tail-load effect).
   const autoExtendedRef = useRef(false)
+  /**
+   * 首屏「贴底稳定器」：进入会话后的一小段时间里，图片/代码高亮等会把内容撑高，
+   * 底部会往下跑。这里在用户还没自己滚走的前提下，持续把视口钉回最底，
+   * 保证「点进去就在最新消息处」。用户一滚动（gap 变大/手指按下）立刻停。
+   */
+  const settleBottomTimerRef = useRef<number | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | undefined>(undefined)
   const [input, setInput] = useState(() => loadDraft(session.sessionId))
@@ -1003,15 +1009,8 @@ export function ChatView({
         // first screen shows ~50 messages without a manual tap. Best-effort —
         // a failure keeps the loaded tail and the manual button. Skipped on a
         // cache hit (the cached tail already painted; one less page + re-render).
-        // 首屏已完成回复（最后一条是已落定的 assistant）：**不**做静默补页 ——
-        // 窗口本身从最近一条用户消息开始，scrollTop=0 就正对着那条提问气泡；
-        // 补一页会把更早内容塞到上面、把气泡顶下去，用户还得找。想往前翻就点「加载更早」。
-        const lastRow = page.rows[page.rows.length - 1]
-        const openAtBubble = lastRow !== undefined && lastRow.kind === 'assistant' && lastRow.pending !== true
-        if (!openAtBubble && page.hasMore && !autoExtendedRef.current && !cacheHit) {
-          autoExtendedRef.current = true
-          loadOlderRef.current(true)
-        }
+        // 首屏不做静默补页：用户要求「点进去就已经加载好、别再有二次加载」。
+        // 更早的内容通过「加载更早的消息」手动取。
         setLoading(false)
         // Restore the turn-clock anchor from the tail window (desktop
         // parity): the window carries the open turn/start's logged time when
@@ -1725,6 +1724,7 @@ export function ChatView({
   }, [runScrollUpdate])
 
   useEffect(() => () => {
+    if (settleBottomTimerRef.current !== undefined) window.clearInterval(settleBottomTimerRef.current)
     if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
     if (eventFlushRafRef.current !== undefined) cancelAnimationFrame(eventFlushRafRef.current)
   }, [])
@@ -1817,29 +1817,6 @@ export function ChatView({
     }
     scheduleLocate()
   }, [scheduleLocate, setScrollTopProgrammatically])
-
-  /**
-   * 打开会话时把视口对准「最近一条用户气泡」而不是最底部。
-   *
-   * 用户要求：点进会话就停在自己最近那次提问处，不要先贴底再滑上来，也不要动画。
-   * 首屏窗口本身已从那条用户消息开始，所以这里只做一次性落位；滚动动画只留给
-   * 「回到最底部」。
-   */
-  const pinToLastUserBubble = useCallback((): boolean => {
-    const el = scrollRef.current
-    if (el === undefined) return false
-    const users = el.querySelectorAll('.chat-msg-user')
-    const last = users[users.length - 1]
-    if (!last) return false
-    const maxTop = el.scrollHeight - el.clientHeight
-    if (maxTop <= 0) return false
-    const delta = last.getBoundingClientRect().top - el.getBoundingClientRect().top
-    const target = Math.min(maxTop, Math.max(0, el.scrollTop + delta))
-    setScrollTopProgrammatically(el, target)
-    scrollTopRef.current = target
-    return true
-  }, [setScrollTopProgrammatically])
-
 
   /** Pin the viewport to the REAL tail. In windowed mode the DOM scrollHeight
    * is an estimate (the top spacer carries estimated heights + the opening
@@ -2075,9 +2052,27 @@ export function ChatView({
       // while it is still streaming, follow the tail as before.
       followedBottomRef.current = true
       lastSeenTurnRef.current = last.turn ?? 0
-      // 回复已结束：直接停在自己的提问处（无动画、无贴底）。
-      if (last.pending !== true && pinToLastUserBubble()) return
+      // 用户要求：点进会话直接显示最新记录（最底部），不做任何对齐。
       scrollToBottom()
+      if (settleBottomTimerRef.current !== undefined) window.clearInterval(settleBottomTimerRef.current)
+      const settleStart = Date.now()
+      settleBottomTimerRef.current = window.setInterval(() => {
+        const s = scrollRef.current
+        if (s === undefined) return
+        // 用户已经自己滚走 / 手指按着：立刻收手。
+        if (touchActiveRef.current || bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) {
+          window.clearInterval(settleBottomTimerRef.current)
+          settleBottomTimerRef.current = undefined
+          return
+        }
+        if (Date.now() - settleStart > 2500) {
+          window.clearInterval(settleBottomTimerRef.current)
+          settleBottomTimerRef.current = undefined
+          return
+        }
+        const max = s.scrollHeight - s.clientHeight
+        if (Math.abs(s.scrollTop - max) > 2) s.scrollTop = max
+      }, 120)
       return
     }
     // Unread tally: count turns that arrived after the reader's last seen
@@ -2103,7 +2098,7 @@ export function ChatView({
     // scrolls (the locate lock is released by a genuine user scroll).
     if (locateLockRef.current) return
     scrollToBottom()
-  }, [messages, scrollToBottom, autoScroll, pinToLastUserBubble])
+  }, [messages, scrollToBottom, autoScroll])
 
   // Silent prepend re-follow, run at COMMIT time: this fires right after
   // React has committed the prepended auto-extend page (before the next
@@ -3441,7 +3436,16 @@ export function ChatView({
             )
           })
         )}
-        {loading && messages.length === 0 && <p className="chat-typing">加载中…</p>}
+        {loading && messages.length === 0 && (
+          <div className="chat-loading" role="status" aria-live="polite">
+            <div className="chat-loading-rows" aria-hidden="true">
+              <span className="chat-loading-bar" style={{ width: '58%' }} />
+              <span className="chat-loading-bar" style={{ width: '86%' }} />
+              <span className="chat-loading-bar" style={{ width: '44%' }} />
+            </div>
+            <p className="chat-loading-text">正在加载会话…</p>
+          </div>
+        )}
         {!loading && messages.length === 0 && <p className="chat-typing">还没有消息，发一句话开始吧</p>}
         {running && (
           <div className="chat-turn-status" role="status" aria-label={hostLost ? '连接中断' : turnQuiet ? '后台处理中' : '输出中'}>
@@ -3493,19 +3497,20 @@ export function ChatView({
             <span className="chat-pill-name">{currentModel === undefined ? '模型' : compactModelName(currentModel.model)}</span>
             <span className="chat-pill-chevron" aria-hidden>▾</span>
           </button>
-          {permissionLabel !== undefined && permissions !== undefined && (
-            <button
-              type="button"
-              className={'chat-pill chat-pill-perm chat-pill-perm-' + (permissionTone(permissions.currentValue) ?? 'read')}
-              onClick={openPermissionPicker}
-              aria-haspopup="listbox"
-              aria-label={`切换权限：${permissionLabel}`}
-              title={permissionLabel}
-            >
-              <ShieldIcon width={16} height={16} />
-              <span className="chat-pill-name">{permissionLabel}</span>
-            </button>
-          )}
+          {/* 始终渲染：数据还没到时显示「权限」占位，避免进入后图标一个个冒出来。 */}
+          <button
+            type="button"
+            className={'chat-pill chat-pill-perm'
+              + (permissions === undefined ? '' : ' chat-pill-perm-' + (permissionTone(permissions.currentValue) ?? 'read'))}
+            onClick={permissions === undefined ? undefined : openPermissionPicker}
+            disabled={permissions === undefined}
+            aria-haspopup="listbox"
+            aria-label={permissionLabel === undefined ? '切换权限' : `切换权限：${permissionLabel}`}
+            title={permissionLabel}
+          >
+            <ShieldIcon width={16} height={16} />
+            <span className="chat-pill-name">{permissionLabel ?? '权限'}</span>
+          </button>
         </div>
         <div
           className={"chat-context" + (contextUsage !== undefined && contextUsage.pct >= 80 ? " chat-context-warn" : "")}
