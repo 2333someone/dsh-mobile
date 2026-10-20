@@ -1629,7 +1629,10 @@ export function ChatView({
   }
 
 
-  const handleScroll = useCallback(() => {
+  const scrollFrameRef = useRef<number | undefined>(undefined)
+
+  /** 一帧只跑一次滚动处理（下面 handleScroll 只是它的节流壳）。 */
+  const runScrollUpdate = useCallback(() => {
     const el = scrollRef.current
     if (el === undefined) return
     scrollTopRef.current = el.scrollTop
@@ -1685,6 +1688,18 @@ export function ChatView({
     if (gap <= BOTTOM_FOLLOW_THRESHOLD_PX) markSeen()
     scheduleLocate()
   }, [markSeen, scheduleLocate])
+
+  /**
+   * 滚动事件入口：手指甩动时一帧会来好几个 scroll，逐个跑状态更新会让主线程忙到掉帧，
+   * 这里按帧合并成一次。
+   */
+  const handleScroll = useCallback(() => {
+    if (scrollFrameRef.current !== undefined) return
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = undefined
+      runScrollUpdate()
+    })
+  }, [runScrollUpdate])
 
   useEffect(() => () => {
     if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
@@ -1832,7 +1847,8 @@ export function ChatView({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   // 轮次药丸与「回到最下方」都要淡入淡出（用户要求：不要直接闪烁出现）。
   const jumpPresence = useFadePresence(showJumpToLatest)
-  const turnsPresence = useFadePresence(showJumpToLatest && turnEntries.length >= 2)
+  // 轮次药丸进会话就该在（用户反馈「突然出现」）；只有不足 2 轮时没有意义才隐藏。
+  const turnsPresence = useFadePresence(turnEntries.length >= 2)
   /** New turns that arrived while the reader was away (badge count). One
    * agent reply — however many messages and tool calls it spans — counts as
    * one, so the badge grows at reply pace, not message pace. */
@@ -3098,11 +3114,9 @@ export function ChatView({
     if (!followedBottomRef.current) return
     if (!autoScroll) return
     if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
-    const frame = requestAnimationFrame(() => {
-      if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
-      pinToRealBottom()
-    })
-    return () => cancelAnimationFrame(frame)
+    // 同一帧内直接重钉：放到 rAF 里会先让浏览器画一帧「内容被拉起」再回弹。
+    if (bottomGapAtUserScrollRef.current <= BOTTOM_FOLLOW_THRESHOLD_PX) pinToRealBottom()
+    return undefined
   }, [messages, measuredTick, pinToRealBottom, autoScroll, windowed])
   // The top spacer carries the height correction measured on the last full
   // render frame, so the windowed total height equals the real content
@@ -3160,12 +3174,13 @@ export function ChatView({
   // spacer's DOM height is rendered from it — a ref write alone would
   // leave the rendered height stale, so correctionTick forces the
   // re-render. jsdom reports no layout (scrollHeight 0), correction 0.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current
     if (el === undefined) return
     const estimated = prefixRef.current?.[messages.length] ?? 0
     const correction = el.scrollHeight === 0 ? 0 : el.scrollHeight - estimated
-    if (correction === heightCorrectionRef.current) return
+    // 死区：几十毫秒内估算值会抖动 1~2px，每次都重排会让底部内容「被拉一下又弹回」。
+    if (Math.abs(correction - heightCorrectionRef.current) < 4) return
     heightCorrectionRef.current = correction
     setCorrectionTick(tick => tick + 1)
     // The opening scrollToBottom ran BEFORE this measurement (the follower
