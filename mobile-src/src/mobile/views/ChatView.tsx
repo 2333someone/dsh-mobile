@@ -1645,6 +1645,14 @@ export function ChatView({
    * —— 现象就是「往上拖的一瞬间就弹回下面」。手势期间一律不写 scrollTop。
    */
   const touchActiveRef = useRef(false)
+  /**
+   * 底部「下拉越界」状态（QQ 那种果冻手感）。
+   *
+   * Android 的 Chromium 在滚动到尽头时**没有** iOS 那种弹性回弹（只有边缘光晕），
+   * 所以自己实现：到底后继续上拖时，临时增加容器的 padding-bottom 并把 scrollTop
+   * 顶到最大 —— 内容随之被推上去；松手后用阻尼弹簧把 padding 收回去，内容自然弹回。
+   */
+  const pullRef = useRef<{ startY: number; base: number; offset: number } | null>(null)
 
   /** 一帧只跑一次滚动处理（下面 handleScroll 只是它的节流壳）。 */
   const runScrollUpdate = useCallback(() => {
@@ -1785,6 +1793,34 @@ export function ChatView({
     }
     window.requestAnimationFrame(step)
   }, [setScrollTopProgrammatically])
+
+  /** 松手后把下拉越界量弹回 0（阻尼余弦：先回弹、再轻微过冲、最后停住）。 */
+  const settlePullBack = useCallback((el: HTMLDivElement): void => {
+    const pull = pullRef.current
+    pullRef.current = null
+    const from = pull !== null ? pull.offset : 0
+    const base = pull !== null ? pull.base : 0
+    if (from <= 0) {
+      el.style.paddingBottom = ''
+      return
+    }
+    const duration = 520
+    const t0 = performance.now()
+    const step = (now: number): void => {
+      const p = Math.min(1, (now - t0) / duration)
+      // 阻尼弹簧：exp 衰减 × cos 振荡 —— 先快速回收、再轻轻过一下、最后停住。
+      // 下限夹在 base：padding 小于基础值会让内容跑到列表底边之下（看起来像塌下去），
+      // 回弹的「过冲」只保留在正向（再顶起来一点）这一侧。
+      const value = p >= 1 ? 0 : from * Math.exp(-4.6 * p) * Math.cos(6.8 * p)
+      // 允许比基础内边距最多低 8px 的「下过冲」：这才是果冻感（内容略沉一下再回位），
+      // 再多就会让最后一条消息贴到列表底边之外。
+      el.style.paddingBottom = `${String(Math.max(Math.max(0, base - 8), base + value))}px`
+      el.scrollTop = el.scrollHeight
+      if (p < 1) window.requestAnimationFrame(step)
+      else el.style.paddingBottom = ''
+    }
+    window.requestAnimationFrame(step)
+  }, [])
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
@@ -3326,6 +3362,15 @@ export function ChatView({
           pinchRef.current = undefined
           const touch = event.touches[0]
           if (touch === undefined) return
+          // 已经在最底部 → 允许「下拉越界」（内容跟手被推上去）。
+          const scrollEl = scrollRef.current
+          if (scrollEl !== undefined) {
+            const gap = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
+            if (gap <= 1) {
+              const base = parseFloat(window.getComputedStyle(scrollEl).paddingBottom) || 0
+              pullRef.current = { startY: touch.clientY, base, offset: 0 }
+            }
+          }
           const target = event.target instanceof Element ? event.target : null
           if (target === null || target.closest('.chat-msg') === null) return
           // 代码块/图片可选中或可长按：交给系统（文字选择 / 图片菜单），
@@ -3339,6 +3384,21 @@ export function ChatView({
           longPressRef.current = { timer, x: clientX, y: clientY }
         }}
         onTouchMove={(event) => {
+          const pull = pullRef.current
+          if (pull !== null && event.touches.length === 1) {
+            const touch = event.touches[0]
+            if (touch !== undefined) {
+              const dy = pull.startY - touch.clientY // 手指上拖 → 正数
+              const offset = Math.min(120, Math.max(0, dy) * 0.45) // 0.45 = 阻尼
+              const el = scrollRef.current
+              if (el !== undefined && offset > 0) {
+                el.style.paddingBottom = `${String(pull.base + offset)}px`
+                el.scrollTop = el.scrollHeight
+                pull.offset = offset
+                return
+              }
+            }
+          }
           if (pinchRef.current !== undefined && event.touches.length >= 2) {
             const dist = pinchDistance(event.touches)
             if (dist > 0) applyPinch(pinchRef.current.scale0 * dist / pinchRef.current.dist0)
@@ -3348,11 +3408,13 @@ export function ChatView({
         }}
         onTouchEnd={(event) => {
           touchActiveRef.current = event.touches.length > 0
+          { const el = scrollRef.current; if (el !== undefined && pullRef.current !== null) settlePullBack(el) }
           if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
           cancelLongPress()
         }}
         onTouchCancel={(event) => {
           touchActiveRef.current = event.touches.length > 0
+          { const el = scrollRef.current; if (el !== undefined && pullRef.current !== null) settlePullBack(el) }
           if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
           cancelLongPress()
         }}
