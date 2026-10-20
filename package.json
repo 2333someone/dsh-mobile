@@ -76,5 +76,6 @@
   },
   "scripts": {
     "smoke": "node test/smoke.mjs"
-  }
+  },
+  "icon": "./assets/icon.svg"
 }

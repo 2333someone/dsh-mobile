@@ -71,7 +71,7 @@ export function PairRequiredView({ initialError, onPaired, navigate }: PairRequi
     <main className="mobile mobile-pair" aria-labelledby="mobile-pair-title">
       <form className="mobile-pairCard" onSubmit={(event) => { void submit(event) }}>
         <h1 id="mobile-pair-title" className="mobile-title">设备配对</h1>
-        <p className="mobile-muted">粘贴桌面端复制的配对链接，或输入桌面端显示的 6 位配对码。</p>
+        <p className="mobile-muted">扫描桌面端「设置 → 掌上 dsh」里的二维码即可自动配对；不方便扫码时，把面板里的配对链接复制到下面也可以。</p>
         <label className="mobile-pairLabel" htmlFor="mobile-pair-server">服务器地址</label>
         <input
           id="mobile-pair-server"
