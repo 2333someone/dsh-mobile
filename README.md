@@ -59,10 +59,9 @@
 
 <table>
 <tr>
-<td width="25%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/01-workspaces.png" alt="工作区" /><br /><sub><b>工作区</b> · 固定 / 最近 / 运行中</sub></td>
-<td width="25%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/04-attachments.png" alt="附件" /><br /><sub><b>待发送附件</b> · 图片与文件</sub></td>
-<td width="25%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/05-markdown.png" alt="长文" /><br /><sub><b>长文正文</b> · 流式输出</sub></td>
-<td width="25%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/00-pairing.png" alt="配对" /><br /><sub><b>配对</b> · 6 位码 / 二维码</sub></td>
+<td width="33%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/01-workspaces.png" alt="工作区" /><br /><sub><b>工作区</b> · 固定 / 最近 / 运行中</sub></td>
+<td width="33%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/04-attachments.png" alt="附件" /><br /><sub><b>待发送附件</b> · 图片与文件</sub></td>
+<td width="33%" align="center"><img src="https://raw.githubusercontent.com/2333someone/dsh-mobile/main/docs/screenshots/05-markdown.png" alt="长文" /><br /><sub><b>长文正文</b> · 流式输出</sub></td>
 </tr>
 </table>
 
@@ -78,7 +77,7 @@ dsh plugin add dsh-mobile-web
 dsh plugin add /path/to/dsh-mobile
 ```
 
-**2. 桌面 dsh：设置 → 掌上 dsh → 生成配对码**
+**2. 桌面 dsh：设置 → 掌上 dsh，出二维码**
 
 **3. 手机浏览器打开**
 
@@ -87,13 +86,14 @@ http://<主机IP>:19387/m/     # 局域网直连
 https://your-host.example.com:45632/m/   # 公网（HTTPS 反代）
 ```
 
-输入配对码即可进入；配对后设备 cookie 长期有效，桌面端可随时撤销。
+手机扫桌面那张二维码即可自动配对（面板里同时给了「复制链接」，不方便扫码时把链接发到手机粘贴也行）。
+配对后设备 cookie 长期有效，桌面端可随时撤销设备。
 
 > 公网访问请务必套 HTTPS 反代，不要把 `19387` 明文端口直接暴露到公网。详见 [SECURITY.md](SECURITY.md)。
 
 ## 能力一览
 
-- **6 位码 / 配对链接**：桌面出码，手机输码，服务端下发 HttpOnly 设备 cookie（可在桌面端撤销设备）。
+- **扫码配对**：桌面设置面板出二维码，手机扫一下就完成配对；扫不了码时可复制面板里的配对链接粘贴。服务端下发 HttpOnly 设备 cookie，可在桌面端随时撤销设备。
 - **完整手机聊天界面**：会话列表、流式回复（SSE `/m/api/events.mux`）、推理块、工具卡、Markdown/代码块、消息队列、引用、重新生成、搜索。
 - **工作区与会话**：浏览 / 新建 / 重命名 / 归档；运行中徽标；「最近访问 / 固定 / 运行中」快捷入口；会话清理（归档 / 本地隐藏 / 彻底删除 / 回收站）。
 - **审批与提问**：`mobile.pending` / `mobile.respond`；进入会话自动补发待处理卡片，工作区与会话行有橙条提示。
@@ -217,4 +217,4 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:19387/m/
 
 ## 安全
 
-公开部署前请阅读 [SECURITY.md](SECURITY.md)：必须 HTTPS 反代、设备 cookie 等同登录态、`/m/shot/` 匿名可读、默认配对码务必修改。
+公开部署前请阅读 [SECURITY.md](SECURITY.md)：必须 HTTPS 反代、设备 cookie 等同登录态、`/m/shot/` 匿名可读、固定配对码（如果你的配置里设了）务必改掉。
