@@ -2202,7 +2202,23 @@ button.settings-row:focus-visible {
 }
 
 /* Font-size preference: 小 / 标准 / 大 on message text. */
-[data-font-scale='small'] .chat-msg {
+[data-font-scale='small'] /* 新消息入场（只有本轮新增的行会挂这个类，滚动重挂载不重播）：
+   170ms 轻微上浮 + 淡入 —— 够快、不闪、不像动画演示。 */
+@keyframes dm-msg-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-msg-enter {
+  animation: dm-msg-in 170ms cubic-bezier(0.22, 0.9, 0.25, 1) both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg-enter { animation: none; }
+}
+
+.chat-msg {
   font-size: 14px;
 }
 
@@ -6410,6 +6426,9 @@ button.settings-row:focus-visible {
 
 .dir-select {
   flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
   background: color-mix(in srgb, var(--bg-page) 88%, transparent);
   border-top: 1px solid var(--border-subtle);
@@ -6417,8 +6436,14 @@ button.settings-row:focus-visible {
   backdrop-filter: blur(20px);
 }
 
+.dir-select .mobile-error {
+  flex-basis: 100%;
+  margin: 0;
+}
 .dir-select .mobile-button {
-  width: 100%;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
   margin: 0;
 }
 

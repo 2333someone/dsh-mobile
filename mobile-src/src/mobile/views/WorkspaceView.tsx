@@ -123,11 +123,42 @@ function removeRecent(ids: readonly string[], id: string): string[] {
 /** Project kind driving icon tint + roster grouping. */
 type WorkspaceKind = 'active' | 'test' | 'code' | 'plain'
 
+/** Explicit project kind picked by the user at creation time (phone-local).
+ *  Keyed by workspaceId; absent means "let the heuristic decide". */
+type ExplicitKind = 'code' | 'test'
+
+const WORKSPACE_KINDS_KEY = 'dsh.palm.workspaceKinds'
+
+function readExplicitKinds(): Record<string, ExplicitKind> {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_KINDS_KEY)
+    const parsed: unknown = raw === null ? {} : JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, ExplicitKind> = {}
+    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (value === 'code' || value === 'test') out[id] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeExplicitKinds(kinds: Record<string, ExplicitKind>): void {
+  try {
+    localStorage.setItem(WORKSPACE_KINDS_KEY, JSON.stringify(kinds))
+  } catch {}
+}
+
 /** Heuristic split: the most-recently opened workspaces (up to
  *  {@link ACTIVE_RECENT_LIMIT}) are "active"; paths that look like test rigs
  *  (test/spec/benchmark segments) group under 测试项目; workspaces without
- *  any session yet stay "plain" gray. */
-export function workspaceKind(workspace: WorkspaceRow, recents: readonly string[]): WorkspaceKind {
+ *  any session yet stay "plain" gray. An explicit kind chosen by the user
+ *  always wins over the heuristic (so a project created under 测试项目 stays
+ *  there instead of jumping to 活跃项目 on first open). */
+export function workspaceKind(workspace: WorkspaceRow, recents: readonly string[], explicit?: Record<string, ExplicitKind>): WorkspaceKind {
+  const preferred = explicit === undefined ? undefined : explicit[workspace.workspaceId]
+  if (preferred === 'code' || preferred === 'test') return preferred
   if (recents.slice(0, ACTIVE_RECENT_LIMIT).includes(workspace.workspaceId)) return 'active'
   if (/\b(test|tests|testing|spec|specs|benchmark|e2e)\b/i.test(workspace.path.replace(/[\\/]+/g, ' '))
     || /\b(test|tests|testing|spec|specs|benchmark|e2e)\b/i.test(workspace.title)) return 'test'
@@ -162,13 +193,15 @@ const GROUP_ORDER: ReadonlyArray<{ kind: WorkspaceKind; placeholder: string | nu
 /** Props for the directory browser. */
 interface DirectoryBrowserProps {
   onCancel(): void
-  onPick(workspace: WorkspaceRow): void
+  onPick(workspace: WorkspaceRow, kind?: ExplicitKind): void
+  /** Preset kind when the user entered from 代码项目/测试项目 的「创建」. */
+  initialKind?: ExplicitKind
 }
 
 /**
  * Render the directory browser for creating a new workspace.
  */
-function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
+function DirectoryBrowser({ onCancel, onPick, initialKind }: DirectoryBrowserProps) {
   const [listing, setListing] = useState<DirectoryListing | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [creating, setCreating] = useState(false)
@@ -229,7 +262,7 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
     setError(undefined)
     try {
       const result = await createWorkspace(listing.path)
-      onPick(result.workspace)
+      onPick(result.workspace, initialKind)
     } catch (reason: unknown) {
       setCreating(false)
       setError(errorText(reason))
@@ -372,6 +405,7 @@ interface MenuTarget {
 
 /** Props for the workspace action menu. */
 interface WorkspaceMenuProps {
+  onSetKind(kind: 'code' | 'test' | 'auto'): void
   onPurge(workspace: WorkspaceRow): void
   target: MenuTarget
   pinned: boolean
@@ -382,7 +416,7 @@ interface WorkspaceMenuProps {
 }
 
 /** Long-press menu: pin toggle, rename, delete (bottom sheet, one column). */
-function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDelete, onPurge }: WorkspaceMenuProps) {
+function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDelete, onPurge, onSetKind }: WorkspaceMenuProps) {
   const { workspace } = target
   const actions: Array<{ key: string; label: string; danger?: boolean; run(): void }> = [
     {
@@ -391,6 +425,9 @@ function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDe
       run: () => { onPinnedChange() },
     },
     { key: 'rename', label: '重命名', run: () => { onRename(workspace) } },
+    { key: 'kind-code', label: '归为代码项目', run: () => { onSetKind('code') } },
+    { key: 'kind-test', label: '归为测试项目', run: () => { onSetKind('test') } },
+    { key: 'kind-auto', label: '自动归类', run: () => { onSetKind('auto') } },
     { key: 'delete', label: '移除工作区（保留文件）', danger: true, run: () => { onDelete(workspace) } },
     { key: 'purge', label: '清理工作区…', danger: true, run: () => { onPurge(workspace) } },
   ]
@@ -480,6 +517,10 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   // Bumped by the retry button to re-run the roster fetch effect.
   const [reload, setReload] = useState(0)
   const [isCreating, setIsCreating] = useState(false)
+  /** Preset kind when entering the directory browser from a typed group. */
+  const [createKind, setCreateKind] = useState<ExplicitKind | undefined>(undefined)
+  /** Phone-local explicit kinds (workspaceId → code/test). */
+  const [explicitKinds, setExplicitKinds] = useState<Record<string, ExplicitKind>>(() => readExplicitKinds())
   // Quick-bar state: search field, pinned-only filter, recent jump.
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -513,6 +554,11 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   /** Ordered recent workspace ids (newest first); the first few render as the
    *  活跃项目 group and the jump chip targets the newest. */
   const [recents, setRecents] = useState<readonly string[]>(() => readRecents())
+
+  /** Explicit kind wins; otherwise the original heuristic. */
+  const kindOf = useCallback((workspace: WorkspaceRow): WorkspaceKind => (
+    workspaceKind(workspace, recents, explicitKinds)
+  ), [recents, explicitKinds])
   // Long-press menu + confirm/prompt dialogs.
   const [menu, setMenu] = useState<MenuTarget | undefined>(undefined)
   const [renaming, setRenaming] = useState<WorkspaceRow | undefined>(undefined)
@@ -777,8 +823,18 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   if (isCreating) {
     return (
       <DirectoryBrowser
-        onCancel={() => setIsCreating(false)}
-        onPick={pick}
+        initialKind={createKind}
+        onCancel={() => { setIsCreating(false); setCreateKind(undefined) }}
+        onPick={(workspace, kind) => {
+          if (kind !== undefined) {
+            setExplicitKinds((previous) => {
+              const next = { ...previous, [workspace.workspaceId]: kind }
+              writeExplicitKinds(next)
+              return next
+            })
+          }
+          pick(workspace)
+        }}
       />
     )
   }
@@ -803,18 +859,18 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
       kind,
       rows: kind === 'active'
         ? ordered
-          .filter(workspace => workspaceKind(workspace, recents) === kind)
+          .filter(workspace => kindOf(workspace) === kind)
           .sort((a, b) => {
             const pinA = pinned.includes(a.workspaceId) ? 0 : 1
             const pinB = pinned.includes(b.workspaceId) ? 0 : 1
             if (pinA !== pinB) return pinA - pinB
             return (recentOrder.get(a.workspaceId) ?? Infinity) - (recentOrder.get(b.workspaceId) ?? Infinity)
           })
-        : ordered.filter(workspace => workspaceKind(workspace, recents) === kind),
+        : ordered.filter(workspace => kindOf(workspace) === kind),
     }))
     .filter(group => group.rows.length > 0)
   const emptyPlaceholders = GROUP_ORDER.filter(({ kind, placeholder }) =>
-    placeholder !== null && !ordered.some(workspace => workspaceKind(workspace, recents) === kind))
+    placeholder !== null && !ordered.some(workspace => kindOf(workspace) === kind))
   const pinnedCount = pinned.length
 
   const body = (() => {
@@ -887,7 +943,7 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
           <li key={group.kind} style={{ listStyle: 'none' }}>
             <div className="mobile-groupTitle">{KIND_LABEL[group.kind]}</div>
             {group.rows.map(workspace => {
-              const kind = workspaceKind(workspace, recents)
+              const kind = kindOf(workspace)
               const isPinned = pinned.includes(workspace.workspaceId)
               const count = (workspace.sessionIds ?? []).length
               return (
@@ -921,7 +977,10 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
             <div className="mobile-groupTitle">{KIND_LABEL[kind]}</div>
             <div className="mobile-empty-group">
               <span>{placeholder}</span>
-              <button type="button" className="mobile-empty-groupBtn" onClick={() => setIsCreating(true)}>创建</button>
+              <button type="button" className="mobile-empty-groupBtn" onClick={() => {
+                setCreateKind(kind === 'code' || kind === 'test' ? kind : undefined)
+                setIsCreating(true)
+              }}>创建</button>
             </div>
           </li>
         ))}
@@ -975,7 +1034,7 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
         )}
         {!pinnedOnly && term === '' && (
           <li style={{ listStyle: 'none' }}>
-            <button type="button" className="mobile-createCard" onClick={() => setIsCreating(true)}>
+            <button type="button" className="mobile-createCard" onClick={() => { setCreateKind(undefined); setIsCreating(true) }}>
               <PlusIcon />
               新建工作区
             </button>
@@ -1079,6 +1138,19 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
           onRename={(workspace) => { setMenu(undefined); setRenaming(workspace) }}
           onDelete={(workspace) => { setMenu(undefined); setDeleting(workspace) }}
           onPurge={(workspace) => { setMenu(undefined); setPurging(workspace) }}
+          onSetKind={(kind) => {
+            const workspace = menu?.workspace
+            setMenu(undefined)
+            if (workspace === undefined) return
+            setExplicitKinds((previous) => {
+              const next = { ...previous }
+              if (kind === 'auto') delete next[workspace.workspaceId]
+              else next[workspace.workspaceId] = kind
+              writeExplicitKinds(next)
+              return next
+            })
+            toast(kind === 'auto' ? '已改回自动归类' : kind === 'code' ? '已归为代码项目' : '已归为测试项目')
+          }}
         />
       )}
       {renaming !== undefined && (
