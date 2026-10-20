@@ -1696,6 +1696,35 @@ export function ChatView({
     scrollTopRef.current = el.scrollTop
   }, [])
 
+  /**
+   * 平滑滚动到指定位置（自定义时长 + easeOutCubic）。
+   *
+   * 浏览器原生的 `scrollTo({behavior:'smooth'})` 时长由浏览器决定（Android 上偏快，
+   * 有时几乎是瞬移），这里自己用 rAF 跑，快慢可以直接调 —— 用户要求「进会话时整屏
+   * 滑上去」「点回到最底部时整屏滑下去」都是这条路径。
+   */
+  const animateScrollTo = useCallback((el: HTMLDivElement, target: number, duration = 340): void => {
+    const reduce = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const start = el.scrollTop
+    const delta = target - start
+    if (reduce || Math.abs(delta) < 2) {
+      setScrollTopProgrammatically(el, target)
+      return
+    }
+    programmaticScrollRef.current = true
+    const t0 = performance.now()
+    const ease = (t: number): number => 1 - Math.pow(1 - t, 3)
+    const step = (now: number): void => {
+      const progress = Math.min(1, (now - t0) / duration)
+      el.scrollTop = start + delta * ease(progress)
+      scrollTopRef.current = el.scrollTop
+      if (progress < 1) window.requestAnimationFrame(step)
+      else setScrollTopProgrammatically(el, target)
+    }
+    window.requestAnimationFrame(step)
+  }, [setScrollTopProgrammatically])
+
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
     if (el === undefined) return
@@ -1734,9 +1763,9 @@ export function ChatView({
     const target = Math.min(maxTop, Math.max(0, el.scrollTop + delta - 8))
     // 已经几乎在底部（内容很短）时不折腾。
     if (target >= maxTop - 4) return false
-    setScrollTopProgrammatically(el, target)
+    animateScrollTo(el, target, 360)
     return true
-  }, [setScrollTopProgrammatically])
+  }, [animateScrollTo])
 
 
   /** Pin the viewport to the REAL tail. In windowed mode the DOM scrollHeight
@@ -1783,8 +1812,11 @@ export function ChatView({
     bottomGapAtUserScrollRef.current = 0
     setShowJumpToLatest(false)
     markSeen()
-    scrollToBottom()
-  }, [markSeen, scrollToBottom])
+    const el = scrollRef.current
+    if (el === undefined) return
+    // 用户要求：点「回到最底部」时整屏滑下去，不要瞬移到底。
+    animateScrollTo(el, el.scrollHeight, 360)
+  }, [animateScrollTo, markSeen])
 
   /** Locate one message row for a jump, reusing the search-hit locate machinery
    *  (focusMsgId + focusTargetRef + the layout-effect scroll): sets the same
