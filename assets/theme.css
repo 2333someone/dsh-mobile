@@ -7,7 +7,9 @@
   background: #ffffff !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  opacity: 1 !important;
+  /* 注意：这里**不能**写 opacity: 1 !important —— author 的 !important 声明优先级
+     高于 CSS 动画，会把下面 dm-float-in / dm-float-out 的透明度动画按死（动画照跑、
+     但视觉上全程不透明，等于没有淡入淡出）。 */
   border-color: rgba(0, 0, 0, 0.07) !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 4px 14px rgba(0, 0, 0, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
@@ -78,6 +80,41 @@
 .chat-jump-turns-live {
   color: var(--accent, #4D6BFE) !important;
   border-color: var(--accent, #4D6BFE) !important;
+}
+
+/* ── 浮层淡入淡出：轮次药丸 + 回到最下方 ─────────────────────────────
+   用户要求：这两个东西不要直接「闪」出来，出现和消失都要有过渡。
+   挂载/卸载的时机在 ChatView 的 useFadePresence 里控制（先播 out 动画再卸载），
+   这里只负责视觉：180ms 淡入 + 轻微上浮缩放，150ms 淡出。 */
+@keyframes dm-float-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes dm-float-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.96); }
+}
+.chat-jump-turns.chat-float-in,
+.chat-jump-latest.chat-float-in {
+  animation: dm-float-in 180ms cubic-bezier(0.2, 0.9, 0.25, 1) both !important;
+}
+.chat-jump-turns.chat-float-out,
+.chat-jump-latest.chat-float-out {
+  animation: dm-float-out 150ms ease-in both !important;
+}
+/* 「有新消息」时保留原来的呼吸脉冲，但让它在淡入之后开始。 */
+.chat-jump-latest-hot.chat-float-in {
+  animation: dm-float-in 180ms cubic-bezier(0.2, 0.9, 0.25, 1) both,
+    chat-jump-pulse 1.6s ease-in-out 180ms infinite !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-jump-turns.chat-float-in,
+  .chat-jump-turns.chat-float-out,
+  .chat-jump-latest.chat-float-in,
+  .chat-jump-latest.chat-float-out {
+    animation: none !important;
+    opacity: 1 !important;
+  }
 }
 
 /* ── 「回到上次 · 第 N 轮」胶囊：用不到，隐藏（不显示、不占位、不可点）── */

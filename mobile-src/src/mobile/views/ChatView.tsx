@@ -93,6 +93,32 @@ import { TaskStatusBar } from '../task-status.tsx'
 import type { JobView } from '../../api-proxy-types'
 import { SUBAGENT_POLL_MS, fetchSubagentsFlat, type SubagentFlatNode } from '../subagent-tree.ts'
 
+/**
+ * 让一个「按条件渲染」的浮层在**出现与消失**时都有淡入淡出，而不是硬切。
+ *
+ * show 变 true 立刻挂载并加 chat-float-in；变 false 先加 chat-float-out，
+ * 持续 ms 毫秒后再真正卸载（否则 React 一卸载，CSS 动画根本没机会跑）。
+ */
+function useFadePresence(show: boolean, ms = 160): { mounted: boolean; leaving: boolean } {
+  const [mounted, setMounted] = useState(show)
+  const [leaving, setLeaving] = useState(false)
+  useEffect(() => {
+    if (show) {
+      setMounted(true)
+      setLeaving(false)
+      return undefined
+    }
+    if (!mounted) return undefined
+    setLeaving(true)
+    const timer = window.setTimeout(() => {
+      setMounted(false)
+      setLeaving(false)
+    }, ms)
+    return () => { window.clearTimeout(timer) }
+  }, [show, mounted, ms])
+  return { mounted, leaving }
+}
+
 /** D1 handle-gesture tunables: the travel (px) a press must exceed before it
  *  counts as a scrub drag, and the horizontal inset of the scrub card's track
  *  inside the viewport (card margin + padding). The inset mirrors .turn-scrub in
@@ -1804,6 +1830,9 @@ export function ChatView({
   const followedBottomRef = useRef(false)
   /** Whether the reader scrolled away from the bottom (jump-to-latest button). */
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  // 轮次药丸与「回到最下方」都要淡入淡出（用户要求：不要直接闪烁出现）。
+  const jumpPresence = useFadePresence(showJumpToLatest)
+  const turnsPresence = useFadePresence(showJumpToLatest && turnEntries.length >= 2)
   /** New turns that arrived while the reader was away (badge count). One
    * agent reply — however many messages and tool calls it spans — counts as
    * one, so the badge grows at reply pace, not message pace. */
@@ -3378,10 +3407,11 @@ export function ChatView({
             }}
           />
         )}
-        {showJumpToLatest && turnEntries.length >= 2 && (
+        {turnsPresence.mounted && (
           <button
             type="button"
-            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')}
+            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')
+              + (turnsPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
             aria-label="轮次导航：轻点开清单，按住拖动刮擦"
             onPointerDown={startScrub}
             onPointerMove={moveScrub}
@@ -3417,10 +3447,11 @@ export function ChatView({
             回到上次 · 第 {lastReadTurn} 轮
           </button>
         )}
-        {showJumpToLatest && (
+        {jumpPresence.mounted && (
           <button
             type="button"
-            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')}
+            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')
+              + (jumpPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
             aria-label="回到最新消息"
             onClick={jumpToLatest}
           >
