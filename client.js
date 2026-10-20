@@ -14,6 +14,7 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const { useState, useEffect, useCallback, useRef } = React
 
+
     // ── QR 生成（qrcode-generator 2.0.4，MIT，Copyright (c) 2009 Kazuhiko Arase）──
     // 无构建步骤的手写 client.js 不能 require npm 包；这里内联一个 MIT 的极简
     // byte-mode 编码器（约 21KB，esbuild 压缩），在客户端直接算矩阵并绘制 SVG。
@@ -202,6 +203,50 @@ window.__ModuleLoader__.load({
 @keyframes dm-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes dm-pop { 0% { opacity: 0; transform: scale(.86); } 62% { transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
 @keyframes dm-rot { to { transform: rotate(360deg); } }
+/* ── 定稿（A · 极简留白）：大字级对比 + 留白分组，全部 DSH token ── */
+.dm-connectCard { position: relative; border: 0; background: transparent; padding: 24px 24px 16px; }
+.dm-connectHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.dm-headRight { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+.dm-pageTitle { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.2px; line-height: 22px; color: var(--dsw-alias-label-primary); }
+.dm-stepTag { flex: none; padding-top: 2px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.dm-page.dm-inner { padding: 0; background: transparent; border: 0; animation: dm-page-in 160ms ease both; }
+@keyframes dm-page-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dm-page.dm-inner { animation: none; } }
+.dm-netList { margin: 0; }
+.dm-netItem + .dm-netItem { margin: 0 6px; }
+.dm-netRow { min-height: 44px; padding: 0 2px; }
+.dm-qrStage { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dm-qrWrap { flex: 1; display: flex; justify-content: center; padding: 4px 0; }
+.dm-qrCard { padding: 8px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1); background: #ffffff; }
+.dm-scanHint { text-align: center; margin: 8px 0 0; }
+.dm-pageTools { justify-content: center; margin-top: 10px; }
+.dm-pageActions { margin-top: 20px; }
+.dm-navRow { display: flex; justify-content: flex-end; margin-top: 16px; }
+.dm-arrow {
+  flex: none; display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; min-width: 48px; min-height: 56px; padding: 6px;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--dsw-alias-label-tertiary);
+  transition: color 120ms ease;
+}
+.dm-arrow:hover, .dm-arrow:active, .dm-arrow:focus-visible { color: var(--dsw-alias-label-primary); }
+.dm-arrow:disabled { opacity: 0.4; cursor: default; }
+.dm-arrowGlyph { font-size: 20px; line-height: 20px; }
+.dm-arrowLabel { font-size: 12px; line-height: 16px; color: var(--dsw-alias-label-tertiary); }
+.dm-arrow:hover .dm-arrowLabel, .dm-arrow:active .dm-arrowLabel { color: var(--dsw-alias-label-primary); }
+@media (prefers-reduced-motion: reduce) { .dm-arrow { transition: none; } }
+.dm-stepBtn { height: 36px; padding: 0 16px; border-radius: 8px; }
+.dm-stepBtnPrimary {
+  border-color: transparent;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-weight: 600;
+}
+.dm-stepBtnPrimary:hover { background: var(--dsw-alias-button-primary-hover); }
+.dm-stepBtnGhost { border-color: transparent; background: transparent; padding: 0 8px; font-weight: 400; }
+.dm-stepBtnGhost:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dm-summaryLine { margin-top: 2px; }
+.dm-devicesOneLine { margin: 4px 2px 0; }
 @keyframes dm-pulse { 0% { box-shadow: 0 0 0 0 var(--dsw-alias-bg-layer-1); } 70% { box-shadow: 0 0 0 6px var(--dsw-alias-bg-layer-1); } 100% { box-shadow: 0 0 0 0 var(--dsw-alias-bg-layer-1); } }
 @media (prefers-reduced-motion: reduce) {
   .dm-card, .dm-row, .dm-code { animation: none !important; }
@@ -526,6 +571,19 @@ window.__ModuleLoader__.load({
         '公网地址需要一条反向代理 / 隧道（frp、Cloudflare Tunnel、Tailscale 均可）。',
       ].join(' ')
 
+      // 分页导航箭头：左=上一步，右=下一步/完成；热区 ≥40×40，视觉 20px。
+      const navArrow = (direction, label, glyph, onClick, disabled) => h('button', {
+        type: 'button',
+        className: 'dm-arrow dm-arrow-' + direction,
+        'aria-label': label,
+        title: label,
+        disabled: disabled === true,
+        onClick: onClick,
+      },
+        h('span', { className: 'dm-arrowGlyph' }, glyph),
+        h('span', { className: 'dm-arrowLabel' }, label),
+      )
+
       const regenerate = () => {
         setQrVersion((v) => v + 1)
         issue()
@@ -619,32 +677,43 @@ window.__ModuleLoader__.load({
           )
         : null
 
-      const step1Node = h('div', { className: 'dm-page' },
-        h('p', { className: 'dm-stepText' }, '第 1 步 / 共 2 步'),
-        h('p', { className: 'dm-pageTitle' }, '选择手机连接的网络'),
+      const step1Node = h('div', { className: 'dm-page dm-inner' },
+        h('div', { className: 'dm-connectHead' },
+          h('p', { className: 'dm-pageTitle' }, '选择手机连接的网络'),
+          h('span', { className: 'dm-headRight' },
+            h('span', { className: 'dm-stepTag' }, '1/2'),
+            h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
+          ),
+        ),
         h('ul', { className: 'dm-netList' }, netNodes),
         remoteFormNode,
-        h('div', { className: 'dm-pageActions' },
-          h('button', {
-            type: 'button',
-            className: 'dm-stepBtn',
-            disabled: activeBase === '',
-            onClick: () => setWizardStep(2),
-          }, '下一步'),
+        h('div', { className: 'dm-navRow' },
+          navArrow('right', '下一步', '›', () => setWizardStep(2), activeBase === ''),
         ),
       )
 
       // ── 第 2 页：扫码连接（160px 二维码，1px hairline，无投影）──
       const qrCardNode = h('div', { className: 'dm-qrCard', 'data-qr-url': qrText },
-        h('div', { dangerouslySetInnerHTML: { __html: qrSvg(qrText, 160) } }),
+        h('div', { dangerouslySetInnerHTML: { __html: qrSvg(qrText, 124) } }),
       )
 
-      const step2Node = h('div', { className: 'dm-page' },
-        h('p', { className: 'dm-stepText' }, '第 2 步 / 共 2 步'),
-        h('p', { className: 'dm-pageTitle' }, '用手机扫描二维码'),
-        pairingCode && activeBase
-          ? qrCardNode
-          : h('p', { className: 'dm-muted' }, '正在生成二维码…'),
+      const step2Node = h('div', { className: 'dm-page dm-inner' },
+        h('div', { className: 'dm-connectHead' },
+          h('p', { className: 'dm-pageTitle' }, '用手机扫描二维码'),
+          h('span', { className: 'dm-headRight' },
+            h('span', { className: 'dm-stepTag' }, '2/2'),
+            h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
+          ),
+        ),
+        h('div', { className: 'dm-qrStage' },
+          navArrow('left', '上一步', '‹', () => setWizardStep(1)),
+          h('div', { className: 'dm-qrWrap' },
+            pairingCode && activeBase
+              ? qrCardNode
+              : h('p', { className: 'dm-muted' }, '正在生成二维码…'),
+          ),
+          navArrow('right', '完成', '›', () => setWizardStep(0)),
+        ),
         h('p', { className: 'dm-scanHint' }, '扫码后自动配对，无需输入配对码'),
         h('div', { className: 'dm-pageTools' },
           h('button', {
@@ -662,22 +731,20 @@ window.__ModuleLoader__.load({
             onClick: regenerate,
           }, '刷新'),
         ),
-        h('div', { className: 'dm-pageActions' },
-          h('button', { type: 'button', className: 'dm-stepBtn', onClick: () => setWizardStep(1) }, '上一步'),
-          h('button', {
-            type: 'button',
-            className: 'dm-stepBtn dm-stepBtnPrimary',
-            onClick: () => setWizardStep(0),
-          }, '完成'),
-        ),
       )
 
       // 完成后：摘要态（可重新进入向导）
-      const summaryNode = h('div', { className: 'dm-page' },
-        h('p', { className: 'dm-pageTitle' }, '连接手机'),
+      const summaryNode = h('div', { className: 'dm-page dm-inner' },
+        h('div', { className: 'dm-connectHead' },
+          h('p', { className: 'dm-pageTitle' }, '连接手机'),
+          h('span', { className: 'dm-headRight' },
+            h('span', { className: 'dm-stepTag' }, '完成'),
+            h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
+          ),
+        ),
         h('p', { className: 'dm-summaryLine' }, activeBase ? ('已选择 ' + displayAddr(activeBase)) : '未选择网络'),
         h('div', { className: 'dm-pageActions' },
-          h('button', { type: 'button', className: 'dm-stepBtn', onClick: () => setWizardStep(1) }, '重新设置'),
+          h('button', { type: 'button', className: 'dm-stepBtn dm-stepBtnGhost', onClick: () => setWizardStep(1) }, '重新设置'),
         ),
       )
 
@@ -729,17 +796,7 @@ window.__ModuleLoader__.load({
         h('style', { dangerouslySetInnerHTML: { __html: CSS } }),
 
         // ── 连接二维码（主路径：单码 + 地址切换；备用：配对码 / 远程连接 折叠）──
-        h('div', { className: 'dm-card', 'data-qr-card': '1' },
-          h('div', { className: 'dm-cardHead' },
-            h('p', { className: 'dm-title' }, '连接手机'),
-            h('span', {
-              className: 'dm-help',
-              role: 'note',
-              tabIndex: 0,
-              title: HELP_TEXT,
-              'aria-label': HELP_TEXT,
-            }, '?'),
-          ),
+        h('div', { className: 'dm-card dm-connectCard', 'data-qr-card': '1' },
           wizardNode,
           errNode,
         ),
