@@ -933,33 +933,13 @@ export function createHost(ctx, config) {
     }
 
     const first = await pageWindow(beforeSeq)
-    // 首屏（无 beforeSeq）：用户点进会话时，屏幕顶部应该先是**自己最近那条提问气泡**，
-    // 然后才是 AI 的回复（过程卡）。但一页是按事件条数切的，最后一轮很长时窗口会从
-    // assistant 事件开始 —— 表现为进来第一眼就是思考卡、自己的话要在点一次「加载更早」
-    // 之后才出现。这里把首屏也向前补齐到最近一条可见 user/message，并从头截断。
+    // 首屏（无 beforeSeq）：只取最新一页，**不做任何对齐/补齐**。
+    // 用户要求：点进会话直接看到最新的聊天记录（最底部），不要先对齐到「上一条提问」，
+    // 也不要为了对齐而多翻页 —— 那会让进入后的落点不可预期、还多一次宿主查询。
     if (beforeSeq === undefined) {
-      let records = first.records
-      let hasMore = first.hasMore
-      let found = firstUserIndex(records)
-      let rounds = 0
-      while (found < 0 && hasMore && rounds < 3) {
-        const earliest = firstSeqOf(records)
-        if (earliest === undefined || records.length === 0) break
-        const older = await pageWindow(earliest)
-        if (older.records.length === 0) {
-          hasMore = older.hasMore
-          break
-        }
-        records = [...older.records, ...records]
-        hasMore = older.hasMore
-        rounds += 1
-        found = firstUserIndex(records)
-      }
-      // 补齐失败（整轮事件超过 4 页的极端会话）：保持原样，交给「加载更早」按钮。
-      if (found > 0) records = records.slice(found)
       return {
-        events: toEvents(records),
-        hasMore,
+        events: toEvents(first.records),
+        hasMore: first.hasMore,
         ...(projections ? { projections } : {}),
       }
     }
@@ -4438,6 +4418,23 @@ export function createHost(ctx, config) {
             },
           }
         }
+      }
+      case 'mobile.roots': {
+        // 手机端目录浏览的「盘符」列表：Windows 下逐盘符探测可访问的根目录，
+        // 其它平台只给 /。仅返回目录根，不暴露文件。
+        const roots = []
+        if (process.platform === 'win32') {
+          for (let code = 65; code <= 90; code += 1) {
+            const letter = String.fromCharCode(code)
+            const path = `${letter}:\\`
+            try {
+              if (statSync(path).isDirectory()) roots.push({ name: `${letter}:`, path })
+            } catch {}
+          }
+        } else {
+          roots.push({ name: '/', path: '/' })
+        }
+        return { ok: true, value: { roots, home: homedir() } }
       }
       case 'mobile.mkdir': {
         // 「新建工作区 → 新建文件夹」：宿主的 workspace.create 只接受**已存在**的

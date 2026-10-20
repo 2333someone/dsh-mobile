@@ -1785,6 +1785,49 @@ button.settings-row:focus-visible {
   }
 }
 
+/* 会话加载页：骨架条 + 「正在加载会话…」，让进入瞬间就有一个完整、稳定的画面，
+   而不是先空白再逐条冒出来。 */
+.chat-loading {
+  margin: 24px auto 0;
+  width: min(100%, 420px);
+  padding: 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-loading-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-loading-bar {
+  display: block;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    var(--surface-2) 0%, color-mix(in srgb, var(--surface-2) 55%, #fff) 50%, var(--surface-2) 100%);
+  background-size: 200% 100%;
+  animation: dm-shimmer 1.2s ease-in-out infinite;
+}
+
+.chat-loading-text {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+@keyframes dm-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-loading-bar { animation: none; }
+}
+
 /* ── skeleton loading (gradient shimmer, no spinners) ────────────────── */
 
 .skel {
@@ -6326,8 +6369,39 @@ button.settings-row:focus-visible {
   font-size: 14px;
 }
 
+/* 目录行：bundle 用 .mobile-row 的 grid 模板，而 dir-browser 的子节点是
+   .mobile-rowMain（grid-column: 1/-1）+ .mobile-chevron，网格里会被拆成两行、
+   每行都很高。这里改成一条横向卡片：名称占满、右侧箭头。 */
+.dir-browser .mobile-list {
+  padding: 8px 0 4px;
+}
 .dir-entry {
-  padding-left: 16px;
+  display: flex;
+  align-items: center;
+  width: calc(100% - 32px);
+  min-height: 52px;
+  margin: 0 16px 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+}
+.dir-entry .mobile-rowMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  grid-column: auto;
+}
+.dir-entry .mobile-rowTitle {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dir-entry .mobile-chevron {
+  margin-left: 12px;
+  flex: none;
 }
 
 .dir-entry-hidden {
@@ -7823,5 +7897,37 @@ details.think-block[open] .chat-disclosure-caret {
   .dm-undo-progress { display: none; }
   .dm-check, .dm-file-row, .dm-hold { transition: none !important; }
 }
+
+
+/* 目录选择页：盘符切换条（手机端跨盘工作的入口） */
+.dir-drives {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.dir-drive {
+  flex: none;
+  appearance: none;
+  padding: 6px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dir-drive:active { background: var(--fill); }
+.dir-drive-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.dir-drive-jump { border-style: dashed; color: var(--text-tertiary); }
 
 `;

@@ -765,6 +765,11 @@ export async function makeDirectory(parent: string, name: string): Promise<{ pat
   return await callUnary<{ path: string; name: string }>('mobile.mkdir', { parent, name })
 }
 
+/** Filesystem roots (Windows drive letters) for the directory browser. */
+export async function listDirectoryRoots(): Promise<{ roots: Array<{ name: string; path: string }>; home: string }> {
+  return await callUnary('mobile.roots', {})
+}
+
 /** Rename a workspace's display title (host validates trim/conflict). */
 export async function renameWorkspace(workspaceId: string, title: string): Promise<{ workspace: WorkspaceView }> {
   return await callUnary<{ workspace: WorkspaceView }>('workspace.rename', { workspaceId, title })

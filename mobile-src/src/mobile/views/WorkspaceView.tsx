@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 let workspaceRowsCache: WorkspaceRow[] | undefined
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { WorkspaceView as WorkspaceRow } from '../../api-proxy-types'
-import { deleteWorkspace, listWorkspaces, listDirectory, makeDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
+import { deleteWorkspace, listWorkspaces, listDirectory, listDirectoryRoots, makeDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
 import { errorText } from './App.tsx'
 import { compactPath, dominantPathPrefix } from '../ui-text.ts'
 import { Sheet } from '../sheet.tsx'
@@ -177,6 +177,17 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
   const [folderPrompt, setFolderPrompt] = useState(false)
   const [folderBusy, setFolderBusy] = useState(false)
   const [folderError, setFolderError] = useState<string | undefined>(undefined)
+  const [roots, setRoots] = useState<Array<{ name: string; path: string }>>([])
+  const [jumpPrompt, setJumpPrompt] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    void listDirectoryRoots().then(
+      (result) => { if (alive) setRoots(result.roots) },
+      () => {},
+    )
+    return () => { alive = false }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -235,6 +246,26 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
         <div className="mobile-headerSlot mobile-headerSlot-right" />
       </header>
 
+      {roots.length > 0 && (
+        <div className="dir-drives" role="toolbar" aria-label="盘符">
+          {roots.map((root) => {
+            const current = listing !== undefined && listing.path.toUpperCase().startsWith(root.path.toUpperCase())
+            return (
+              <button
+                key={root.path}
+                type="button"
+                className={'dir-drive' + (current ? ' dir-drive-on' : '')}
+                onClick={() => { setPath(root.path) }}
+              >
+                {root.name}
+              </button>
+            )
+          })}
+          <button type="button" className="dir-drive dir-drive-jump" onClick={() => { setJumpPrompt(true) }}>
+            跳转…
+          </button>
+        </div>
+      )}
       {listing !== undefined && (
         <div className="dir-crumbs">
           {listing.crumbs.map((crumb, idx) => (
@@ -305,6 +336,19 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
           {creating ? '创建中…' : '选择此目录'}
         </button>
       </div>
+      {jumpPrompt && listing !== undefined && (
+        <PromptDialog
+          title="跳转到目录"
+          initial={listing.path}
+          confirmLabel="跳转"
+          onCancel={() => { setJumpPrompt(false) }}
+          onConfirm={(value) => {
+            setJumpPrompt(false)
+            const next = value.trim()
+            if (next !== '') setPath(next)
+          }}
+        />
+      )}
       {folderPrompt && listing !== undefined && (
         <PromptDialog
           title="新建文件夹"
