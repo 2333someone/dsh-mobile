@@ -158,7 +158,11 @@ window.__ModuleLoader__.load({
 }
 /* 公网域名区：放在最上方（先设域名，再出码） */
 .dm-domainBlock { margin: 0 0 4px; padding-bottom: 6px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.dm-domainHead { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.dm-domainHead {
+  display: grid; grid-template-columns: auto 4.6em minmax(0, 1fr) auto;
+  align-items: center; column-gap: 8px; min-height: 30px;
+  padding: 0 2px; /* 与地址行同内边距，动作列严格对齐 */
+}
 .dm-domainLabel { flex: none; width: 4.6em; white-space: nowrap; font-size: 12.5px; font-weight: 500; color: var(--dsw-alias-label-primary); }
 .dm-domainValue {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -166,11 +170,18 @@ window.__ModuleLoader__.load({
 }
 .dm-domainValueUnset { color: var(--dsw-alias-label-tertiary); }
 .dm-netUnsetText { flex: 1; min-width: 0; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
+.dm-rowAction {
+  justify-self: end; flex: none; border: 0; background: transparent; padding: 0 2px;
+  color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer;
+}
+.dm-rowAction:hover { color: var(--dsw-alias-label-primary); }
+.dm-domainPad { width: 13px; }
 .dm-netEdit, .dm-netOpen {
   flex: none; border: 0; background: transparent; padding: 0 2px;
   color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer;
 }
-.dm-netEdit { text-decoration: underline; }
+.dm-netEdit { text-decoration: underline; justify-self: end; }
+.dm-netOpen { justify-self: end; }
 .dm-remoteForm { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l1); }
 .dm-remoteHint { margin: 0 0 6px; font-size: 11.5px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
 .dm-remoteRow { display: flex; align-items: center; gap: 8px; }
@@ -642,20 +653,28 @@ window.__ModuleLoader__.load({
             option.configured
               ? h('code', { className: 'dm-netAddr' }, displayAddr(option.base))
               : h('span', { className: 'dm-netUnsetText' }, '未配置'),
-            option.kind === 'public' && option.configured
+            option.configured && option.kind === 'lan'
               ? h('button', {
                   type: 'button',
-                  className: 'dm-netEdit',
-                  onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
-                }, '修改')
-              : null,
-            option.configured
-              ? null
-              : h('button', {
-                  type: 'button',
-                  className: 'dm-netOpen',
-                  onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
-                }, '›'),
+                  className: 'dm-rowAction',
+                  'aria-label': '复制局域网链接',
+                  title: '复制局域网链接',
+                  onClick: (event) => {
+                    event.preventDefault()
+                    onCopy(option.base + '/m/' + (pairingCode ? '?code=' + encodeURIComponent(pairingCode) : ''))
+                  },
+                }, '复制')
+              : option.kind === 'public' && option.configured
+                ? h('button', {
+                    type: 'button',
+                    className: 'dm-rowAction dm-netEdit',
+                    onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
+                  }, '修改')
+                : h('button', {
+                    type: 'button',
+                    className: 'dm-netOpen',
+                    onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
+                  }, '›'),
           ),
         )
       })
@@ -697,6 +716,7 @@ window.__ModuleLoader__.load({
       // 单页布局（用户要求取消分页）：先设公网域名 → 选连接地址 → 二维码
       const domainBlockNode = h('div', { className: 'dm-domainBlock' },
         h('div', { className: 'dm-domainHead' },
+          h('span', { className: 'dm-domainPad', 'aria-hidden': 'true' }),
           h('span', { className: 'dm-domainLabel' }, '公网域名'),
           publicBase
             ? h('span', { className: 'dm-domainValue' }, displayAddr(publicBase))
