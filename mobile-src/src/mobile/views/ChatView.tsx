@@ -1637,6 +1637,14 @@ export function ChatView({
 
 
   const scrollFrameRef = useRef<number | undefined>(undefined)
+  /**
+   * 手指是否正按在聊天区上。
+   *
+   * 用户在列表最底部继续拖（浏览器的 overscroll 回弹）时，如果我们在同一时刻
+   * 写 scrollTop（自动贴底、钉住真实底部），浏览器会立刻取消回弹并把内容「拽回」底部
+   * —— 现象就是「往上拖的一瞬间就弹回下面」。手势期间一律不写 scrollTop。
+   */
+  const touchActiveRef = useRef(false)
 
   /** 一帧只跑一次滚动处理（下面 handleScroll 只是它的节流壳）。 */
   const runScrollUpdate = useCallback(() => {
@@ -1781,7 +1789,12 @@ export function ChatView({
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
     if (el === undefined) return
-    setScrollTopProgrammatically(el, el.scrollHeight)
+    // 手指在屏幕上时不要抢滚动（overscroll 回弹会被打断成「拽回底部」）。
+    if (!touchActiveRef.current) {
+      const maxTop = el.scrollHeight - el.clientHeight
+      // 已经在最底部（含 overscroll 期间）就别再写：重复赋同一个值会取消回弹。
+      if (Math.abs(el.scrollTop - maxTop) > 1) setScrollTopProgrammatically(el, el.scrollHeight)
+    }
     // Windowed mode: pin the window to the tail right away. The follow-up
     // rAF locate would land on the current scroll position, which can still
     // be 0 here (jsdom, or the very first frames) — the chat opens at the
@@ -1827,6 +1840,7 @@ export function ChatView({
    * correction is refreshed alongside it (see the height-correction effect).
    * Non-windowed sessions render in full, so the exact DOM value is used. */
   const pinToRealBottom = useCallback(() => {
+    if (touchActiveRef.current) return
     const el = scrollRef.current
     if (el === undefined) return
     const prefix = prefixRef.current
@@ -3289,6 +3303,8 @@ export function ChatView({
           }
         }}
         onTouchStart={(event) => {
+          // 手势期间禁止程序化写 scrollTop（否则底部 overscroll 回弹会被拽回）。
+          touchActiveRef.current = true
           // Two fingers on a code block = pinch zoom; single finger keeps the
           // long-press menu gesture.
           if (event.touches.length >= 2) {
@@ -3331,10 +3347,12 @@ export function ChatView({
           cancelLongPress()
         }}
         onTouchEnd={(event) => {
+          touchActiveRef.current = event.touches.length > 0
           if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
           cancelLongPress()
         }}
         onTouchCancel={(event) => {
+          touchActiveRef.current = event.touches.length > 0
           if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
           cancelLongPress()
         }}
