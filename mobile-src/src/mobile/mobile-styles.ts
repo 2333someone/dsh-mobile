@@ -7962,4 +7962,53 @@ details.think-block[open] .chat-disclosure-caret {
 }
 .dir-drive-jump { border-style: dashed; color: var(--text-tertiary); }
 
+
+/* 工作区分类：标题行 + 右侧「新建/更多」 */
+.dm-cat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dm-cat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-cat-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dm-cat-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dm-cat-btn svg { width: 16px; height: 16px; }
+.dm-cat-btn:active { background: var(--fill); }
+
+/* 「新建分类」卡片：比新建工作区弱一档（虚线、透明底） */
+.mobile-createCategory {
+  margin-top: 8px !important;
+  border-style: dashed !important;
+  background: transparent !important;
+  color: var(--text-secondary);
+  box-shadow: none !important;
+}
+.mobile-createCategory svg { width: 16px; height: 16px; }
+
 `;
