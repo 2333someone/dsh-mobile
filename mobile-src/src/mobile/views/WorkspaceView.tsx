@@ -28,6 +28,7 @@ import { errorText } from './App.tsx'
 import { compactPath, dominantPathPrefix } from '../ui-text.ts'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
+import { PurgeWorkspaceSheet } from '../cleanup-sheets.tsx'
 import { toast } from '../toast.tsx'
 import { CheckIcon, ClockIcon, CloseIcon, FolderIcon, FolderPlusIcon, InboxIcon, PinIcon, PlusIcon, SearchIcon } from '../icons.tsx'
 import { HeaderActions } from '../dm-header/index.tsx'
@@ -288,6 +289,7 @@ interface MenuTarget {
 
 /** Props for the workspace action menu. */
 interface WorkspaceMenuProps {
+  onPurge(workspace: WorkspaceRow): void
   target: MenuTarget
   pinned: boolean
   onClose(): void
@@ -297,7 +299,7 @@ interface WorkspaceMenuProps {
 }
 
 /** Long-press menu: pin toggle, rename, delete (bottom sheet, one column). */
-function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDelete }: WorkspaceMenuProps) {
+function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDelete, onPurge }: WorkspaceMenuProps) {
   const { workspace } = target
   const actions: Array<{ key: string; label: string; danger?: boolean; run(): void }> = [
     {
@@ -306,7 +308,8 @@ function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDe
       run: () => { onPinnedChange() },
     },
     { key: 'rename', label: '重命名', run: () => { onRename(workspace) } },
-    { key: 'delete', label: '删除工作区', danger: true, run: () => { onDelete(workspace) } },
+    { key: 'delete', label: '移除工作区（保留文件）', danger: true, run: () => { onDelete(workspace) } },
+    { key: 'purge', label: '清理工作区…', danger: true, run: () => { onPurge(workspace) } },
   ]
   return (
     <Sheet title={workspace.title} onClose={onClose}>
@@ -431,6 +434,7 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   const [menu, setMenu] = useState<MenuTarget | undefined>(undefined)
   const [renaming, setRenaming] = useState<WorkspaceRow | undefined>(undefined)
   const [deleting, setDeleting] = useState<WorkspaceRow | undefined>(undefined)
+  const [purging, setPurging] = useState<WorkspaceRow | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   // Long-press detection: 500ms touch hold, cancelled on move/end.
   const pressTimerRef = useRef<number | undefined>(undefined)
@@ -991,6 +995,7 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
           onPinnedChange={() => { togglePin(menu.workspace) }}
           onRename={(workspace) => { setMenu(undefined); setRenaming(workspace) }}
           onDelete={(workspace) => { setMenu(undefined); setDeleting(workspace) }}
+          onPurge={(workspace) => { setMenu(undefined); setPurging(workspace) }}
         />
       )}
       {renaming !== undefined && (
@@ -1012,6 +1017,22 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
           busy={busy}
           onCancel={() => { setDeleting(undefined) }}
           onConfirm={() => { void handleDelete(deleting) }}
+        />
+      )}
+      {purging !== undefined && (
+        <PurgeWorkspaceSheet
+          workspace={{
+            workspaceId: purging.workspaceId,
+            title: purging.title,
+            path: purging.path,
+            sessionCount: (purging.sessionIds ?? []).length,
+          }}
+          onClose={() => { setPurging(undefined) }}
+          onDone={() => {
+            setItems(previous => previous?.filter(row => row.workspaceId !== purging.workspaceId) ?? previous)
+            setRecents(previous => removeRecent(previous, purging.workspaceId))
+            setPurging(undefined)
+          }}
         />
       )}
     </div>

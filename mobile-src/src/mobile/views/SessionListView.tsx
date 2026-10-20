@@ -22,6 +22,12 @@ import type { MuxFrame } from '../../api-proxy-types'
 import type { SessionSummary } from '../../api-proxy-types'
 import type { MuxClient } from '../mux.ts'
 import { archiveSession, createSession, history, listAgentPresets, listSessions, listWorkspaces, previews, searchAll, searchMessages, type SessionSearchHit } from '../api.ts'
+import { SessionActionsSheet, PurgeSessionSheet, SessionFilesSheet, UndoBar } from '../cleanup-sheets.tsx'
+import {
+  getLocalHidden, hideSessionLocally, onLocalHiddenChange, restoreTrashEntry, unarchiveSession,
+  unhideSessionLocally, type PurgeSessionResult,
+} from '../cleanup-api.ts'
+
 import { errorText, formatFullTime, staleHostHint, toSessionView, type SessionView } from './App.tsx'
 import { previewSummary } from '../ui-text.ts'
 import { foldEvents, type WireEvent } from '../messages.ts'
@@ -394,11 +400,21 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
   const retryBlockedAtRef = useRef(0)
   /** Long-press row menu (delete session) + its confirm dialog. */
   const [menuSession, setMenuSession] = useState<SessionView | undefined>(undefined)
-  const [deleting, setDeleting] = useState<SessionView | undefined>(undefined)
+  /** 永久删除 / 文件管理 / 本机隐藏 / 撤销条。 */
+  const [purgeTarget, setPurgeTarget] = useState<SessionView | undefined>(undefined)
+  const [filesTarget, setFilesTarget] = useState<SessionView | undefined>(undefined)
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set(getLocalHidden()))
+  const [showHidden, setShowHidden] = useState(false)
+  const [leavingIds, setLeavingIds] = useState<Set<string>>(() => new Set())
+  const [undo, setUndo] = useState<{ kind: 'archive' | 'local' | 'purge'; sessionId: string; trashId?: string; message: string } | undefined>(undefined)
+  /** 撤销/恢复之后重新拉第一页（归档与回收站恢复都要让行回来）。 */
+  const [refreshTick, setRefreshTick] = useState(0)
   const pressTimerRef = useRef<number | undefined>(undefined)
   const pressConsumedRef = useRef<string | undefined>(undefined)
   /** Pinned session ids (local preference, persisted in localStorage). */
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => loadPinnedSessions())
+  // 本机隐藏是 localStorage 偏好：别的标签页/页面改了也要同步过来。
+  useEffect(() => onLocalHiddenChange((ids) => setHiddenIds(new Set(ids))), [])
   /** The session whose delete action is currently swiped open (at most one). */
   const [openSwipeId, setOpenSwipeId] = useState<string | undefined>(undefined)
   /** Active swipe gesture origin (sessionId + start point). */
@@ -612,7 +628,7 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
       },
     )
     return () => { cancelled = true }
-  }, [workspace, initialSessionId, onPick, loadPreviews])
+  }, [workspace, initialSessionId, onPick, loadPreviews, refreshTick])
 
   /**
    * Scroll-position round-trip (v3.2, v3.3): leaving for a chat saves the
@@ -877,22 +893,89 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
    * desktop). The local row drop + outbox cleanup run either way; if the RPC
    * fails the session would otherwise resurrect on reload, so surface why.
    */
-  const handleDeleteSession = useCallback((row: SessionView): void => {
-    setDeleting(undefined)
-    setMenuSession(undefined)
+  /** 行收起动画：先上 dm-row-leaving，再把行从数据/缓存里移除。 */
+  const collapseRow = useCallback((sessionId: string, next: () => void): void => {
+    setLeavingIds(previous => new Set(previous).add(sessionId))
+    window.setTimeout(() => {
+      next()
+      setLeavingIds(previous => {
+        if (!previous.has(sessionId)) return previous
+        const copy = new Set(previous)
+        copy.delete(sessionId)
+        return copy
+      })
+    }, 260)
+  }, [])
+
+  const dropRow = useCallback((sessionId: string): void => {
     setRows(previous => {
-      const next = previous.filter(item => item.sessionId !== row.sessionId)
+      const next = previous.filter(item => item.sessionId !== sessionId)
       const cached = sessionListCache.get(String(workspace.workspaceId))
       if (cached !== undefined) {
         setCachedList(String(workspace.workspaceId), { rows: next, cursor: cached.cursor, hasMore: cached.hasMore })
       }
       return next
     })
-    void removeOutboxForSession(row.sessionId)
-    void archiveSession(row.sessionId).catch((reason: unknown) => {
-      toast(`删除未生效：${errorText(reason)}`)
-    })
+    void removeOutboxForSession(sessionId)
   }, [workspace])
+
+  /** 归档（所有设备隐藏，可撤销）。 */
+  const handleArchive = useCallback((row: SessionView): void => {
+    setMenuSession(undefined)
+    collapseRow(row.sessionId, () => dropRow(row.sessionId))
+    void archiveSession(row.sessionId).then(
+      () => setUndo({ kind: 'archive', sessionId: row.sessionId, message: `已归档「${row.title || '会话'}」` }),
+      (reason: unknown) => {
+        toast(`归档未生效：${errorText(reason)}`)
+        setRefreshTick(tick => tick + 1)
+      },
+    )
+  }, [collapseRow, dropRow])
+
+  /** 仅本机隐藏：只写这台手机的 localStorage。 */
+  const handleLocalHide = useCallback((row: SessionView): void => {
+    setMenuSession(undefined)
+    collapseRow(row.sessionId, () => {
+      hideSessionLocally(row.sessionId)
+      setHiddenIds(new Set(getLocalHidden()))
+    })
+    setUndo({ kind: 'local', sessionId: row.sessionId, message: `已在本机隐藏「${row.title || '会话'}」` })
+  }, [collapseRow])
+
+  /** 永久删除完成：行收起 + 撤销条（恢复回收站记录）。 */
+  const handlePurgeDone = useCallback((row: SessionView, result: PurgeSessionResult): void => {
+    setPurgeTarget(undefined)
+    collapseRow(row.sessionId, () => dropRow(row.sessionId))
+    setUndo({
+      kind: 'purge',
+      sessionId: row.sessionId,
+      ...(result.trashId === undefined ? {} : { trashId: result.trashId }),
+      message: `已删除「${row.title || '会话'}」`,
+    })
+  }, [collapseRow, dropRow])
+
+  /** 撤销条：归档 → 反归档；本机隐藏 → 取消隐藏；删除 → 恢复回收站记录。 */
+  const runUndo = useCallback((entry: { kind: 'archive' | 'local' | 'purge'; sessionId: string; trashId?: string }): void => {
+    setUndo(undefined)
+    if (entry.kind === 'local') {
+      unhideSessionLocally(entry.sessionId)
+      setHiddenIds(new Set(getLocalHidden()))
+      return
+    }
+    if (entry.kind === 'archive') {
+      void unarchiveSession(entry.sessionId).then(
+        () => setRefreshTick(tick => tick + 1),
+        (reason: unknown) => toast(`撤销失败：${errorText(reason)}`),
+      )
+      return
+    }
+    if (entry.trashId !== undefined) {
+      void restoreTrashEntry(entry.trashId).then(
+        () => { toast('已恢复'); setRefreshTick(tick => tick + 1) },
+        (reason: unknown) => toast(`恢复失败：${errorText(reason)}`),
+      )
+    }
+  }, [])
 
   const createHint = createError !== undefined ? staleHostHint(createError) : undefined
   const [presetPickerOpen, setPresetPickerOpen] = useState(false)
@@ -905,6 +988,7 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
     // cannot reopen it from the roster.
     const hitIds = new Set(searchHits.map(hit => hit.sessionId))
     const visible = rows.filter(row => {
+      if (hiddenIds.has(row.sessionId) && !showHidden) return false
       if (term === '') return true
       return row.title.toLowerCase().includes(term) || hitIds.has(row.sessionId)
     })
@@ -916,7 +1000,7 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
       .filter(group => group.rows.length > 0)
     return [...pinnedGroup, ...dayGroups]
     // previewTick: cached previews arrive async — recompute the filter when they land.
-  }, [rows, search, searchHits, previewTick, pinnedIds])
+  }, [rows, search, searchHits, previewTick, pinnedIds, hiddenIds, showHidden])
 
   /** Host full-roster search: debounced, best-effort, narrowed to THIS
    *  workspace's owned sessions (the list page searches what it shows; the
@@ -1080,14 +1164,18 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
                 flatIndex += 1
                 const swiped = openSwipeId === row.sessionId
                 return (
-                  <div key={row.sessionId} className="mobile-row-swipe" style={cvStyle}>
+                  <div
+                    key={row.sessionId}
+                    className={'mobile-row-swipe' + (leavingIds.has(row.sessionId) ? ' dm-row-leaving' : '') + (hiddenIds.has(row.sessionId) ? ' dm-row-hidden' : '')}
+                    style={cvStyle}
+                  >
                     <button
                       type="button"
                       className="mobile-row-swipe-action"
-                      aria-label="删除会话"
-                      onClick={() => { setOpenSwipeId(undefined); setDeleting(row) }}
+                      aria-label="归档会话"
+                      onClick={() => { setOpenSwipeId(undefined); handleArchive(row) }}
                     >
-                      删除
+                      归档
                     </button>
                     <div className={'mobile-row-swipe-inner' + (swiped ? ' swiped' : '')}>
                       <button type="button" className="mobile-row" {...rowHandlers(row, matchedHit)}>
@@ -1120,6 +1208,17 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
             </li>
           )
         })})()}
+        {!searchActive && hiddenIds.size > 0 && (
+          <li style={{ listStyle: 'none' }}>
+            <button
+              type="button"
+              className="dm-hidden-toggle"
+              onClick={() => setShowHidden(value => !value)}
+            >
+              {showHidden ? '收起本机隐藏的会话' : `本机隐藏了 ${hiddenIds.size} 个会话`}
+            </button>
+          </li>
+        )}
         {!loading && searchBusy && (
           <li style={{ listStyle: 'none' }}>
             <p className="mobile-muted mobile-pad" role="status">正在搜索全部会话…</p>
@@ -1266,40 +1365,37 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
         </Sheet>
       )}
       {menuSession !== undefined && (
-        <Sheet title={menuSession.title} onClose={() => { setMenuSession(undefined) }}>
-          <div role="menu" aria-label="会话操作">
-            <div className="sheet-option-divider" aria-hidden />
-            <button
-              type="button"
-              role="menuitem"
-              className="sheet-option"
-              onClick={() => { togglePin(menuSession.sessionId); setMenuSession(undefined) }}
-            >
-              <span className="sheet-option-copy">
-                <span className="sheet-option-title">{pinnedIds.has(menuSession.sessionId) ? '取消置顶' : '置顶'}</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="sheet-option"
-              onClick={() => { setMenuSession(undefined); setDeleting(menuSession) }}
-            >
-              <span className="sheet-option-copy">
-                <span className="sheet-option-title" style={{ color: 'var(--danger)' }}>删除会话</span>
-              </span>
-            </button>
-          </div>
-        </Sheet>
+        <>
+          <SessionActionsSheet
+            session={{ sessionId: menuSession.sessionId, title: menuSession.title, running: menuSession.running }}
+            pinned={pinnedIds.has(menuSession.sessionId)}
+            onClose={() => setMenuSession(undefined)}
+            onTogglePin={() => { togglePin(menuSession.sessionId); setMenuSession(undefined) }}
+            onArchive={() => handleArchive(menuSession)}
+            onLocalHide={() => handleLocalHide(menuSession)}
+            onFiles={() => { setFilesTarget(menuSession); setMenuSession(undefined) }}
+            onPurge={() => { setPurgeTarget(menuSession); setMenuSession(undefined) }}
+          />
+        </>
       )}
-      {deleting !== undefined && (
-        <ConfirmDialog
-          title="删除会话"
-          body={<>确定删除「{deleting.title}」吗？该会话将从所有设备消失（电脑上的会话记录保留，可从桌面找回）。</>}
-          confirmLabel="删除"
-          tone="danger"
-          onCancel={() => { setDeleting(undefined) }}
-          onConfirm={() => { handleDeleteSession(deleting) }}
+      {filesTarget !== undefined && (
+        <SessionFilesSheet
+          session={{ sessionId: filesTarget.sessionId, title: filesTarget.title }}
+          onClose={() => setFilesTarget(undefined)}
+        />
+      )}
+      {purgeTarget !== undefined && (
+        <PurgeSessionSheet
+          session={{ sessionId: purgeTarget.sessionId, title: purgeTarget.title, running: purgeTarget.running }}
+          onClose={() => setPurgeTarget(undefined)}
+          onDone={(result) => handlePurgeDone(purgeTarget, result)}
+        />
+      )}
+      {undo !== undefined && (
+        <UndoBar
+          message={undo.message}
+          onUndo={() => runUndo(undo)}
+          onExpire={() => setUndo(undefined)}
         />
       )}
     </div>
