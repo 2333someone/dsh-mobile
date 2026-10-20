@@ -7462,13 +7462,19 @@ details.think-block[open] .chat-disclosure-caret {
 .dm-hidden-toggle:active { background: var(--bg-elevated); }
 
 /* 动作面板：逐条错峰上浮 */
-.dm-action-list { display: flex; flex-direction: column; }
+.dm-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* 弹层按内容撑高：底部再多留一点，最后一行不会贴着浏览器底栏。 */
+  padding: 2px 0 calc(env(safe-area-inset-bottom, 0px) + 10px);
+}
 .dm-action-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 56px;
-  padding: 10px 12px;
+  gap: 14px;
+  min-height: 62px;
+  padding: 10px 10px;
   border-radius: var(--radius-menu, 12px);
   animation: dm-action-in 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
 }
@@ -7477,19 +7483,21 @@ details.think-block[open] .chat-disclosure-caret {
   to { opacity: 1; transform: translateY(0); }
 }
 .dm-action-item:active { background: var(--accent-soft, rgba(77, 107, 254, 0.12)); }
+/* 图标与聊天工具栏同款：裸图标、20×20、24 viewBox、1.8 描边。 */
 .dm-action-icon {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.05));
+  width: 20px;
+  height: 20px;
   color: var(--text-secondary);
 }
-.dm-action-danger .dm-action-icon { background: rgba(229, 72, 77, 0.12); color: var(--danger, #e5484d); }
+.dm-action-icon svg { width: 20px; height: 20px; }
+.dm-action-danger .dm-action-icon { color: var(--danger, #e5484d); }
 .dm-action-danger .sheet-option-title { color: var(--danger, #e5484d); }
+.dm-action-item .sheet-option-title { font-size: 15px; }
+.dm-action-item .sheet-option-desc { font-size: 12px; line-height: 1.45; }
 .dm-action-sep { height: 1px; margin: 8px 12px; background: var(--border-subtle, rgba(0, 0, 0, 0.08)); }
 .dm-action-warn {
   display: flex;

@@ -639,9 +639,11 @@ export function UndoBar({ message, onUndo, onExpire }: {
 
 function ArchiveIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-      <rect x="3.5" y="4.5" width="17" height="4" rx="1.2" />
-      <path d="M5 8.5v9a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 17.5v-9" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 8.5h16" />
+      <path d="M6 8.5v9A1.5 1.5 0 0 0 7.5 19h9a1.5 1.5 0 0 0 1.5-1.5v-9" />
+      <path d="M4.5 4.5h15A1.5 1.5 0 0 1 21 6v.5" />
+      <path d="M3 6v.5a1.5 1.5 0 0 0 1.5 1.5" />
       <path d="M10 12.5h4" />
     </svg>
   )
@@ -649,11 +651,11 @@ function ArchiveIcon() {
 
 function EyeOffIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-      <path d="M4 4l16 16" />
-      <path d="M9.9 5.2A9.4 9.4 0 0 1 12 5c5 0 8.6 4.3 9.5 6-.3.6-1 1.6-2 2.5" />
-      <path d="M6.2 7.2C4.4 8.5 3.1 10.2 2.5 11c.9 1.7 4.5 6 9.5 6 1 0 1.9-.2 2.8-.5" />
-      <path d="M10.5 10.7a2 2 0 0 0 2.8 2.8" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4.5 20 19.5" />
+      <path d="M9.9 5.4A9.7 9.7 0 0 1 12 5.2c5 0 8.8 4.4 9.7 6.2-.4.8-1.2 1.9-2.4 3" />
+      <path d="M6.2 7.4C4.4 8.7 3.1 10.4 2.4 11.4c.9 1.8 4.7 6.2 9.6 6.2 1 0 2-.2 2.9-.5" />
+      <path d="M10.4 10.9a2.1 2.1 0 0 0 2.8 2.9" />
     </svg>
   )
 }

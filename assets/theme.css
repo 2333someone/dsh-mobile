@@ -367,9 +367,10 @@ body:has(> #dm-preset-btn) #dm-preset-btn {
   font-weight: 600 !important;
 }
 
-/* ── 底部抽屉：默认只占半屏高，内容在内部滚动（拖拽展开 .sheet-full 不受影响） */
+/* ── 底部抽屉：按内容撑高（上限 = 可见高度 − 96px），内容实在太多才内部滚动。
+   之前固定半屏（50vh）会把 5 条动作的面板切掉最后一行；用户要求「正好容纳所有内容」。 */
 .sheet:not(.sheet-full) {
-  max-height: 50vh !important;
+  max-height: calc(var(--dm-vh, 100vh) - 96px) !important;
   display: flex !important;
   flex-direction: column !important;
 }
