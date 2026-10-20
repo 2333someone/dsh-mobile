@@ -76,6 +76,26 @@ function fileNameOf(path: string): string {
   return last.replace(/^\d{10,}-/, '')
 }
 
+/** 失败原因卡片：显示宿主 turn/end 带回来的 error.message / code（可展开长文本）。 */
+function FailureDetail({ failure }: { failure: { message: string; code?: string } }): ReactNode {
+  const [open, setOpen] = useState(false)
+  const long = failure.message.length > 140 || failure.message.split('\n').length > 3
+  return (
+    <div className={'chat-msg-failure' + (open ? ' chat-msg-failure-open' : '')}>
+      <div className="chat-msg-failure-head">
+        <span className="chat-msg-failtag">本次回复失败</span>
+        {failure.code !== undefined && <span className="chat-msg-failure-code">{failure.code}</span>}
+      </div>
+      <p className="chat-msg-failure-text">{failure.message}</p>
+      {long && (
+        <button type="button" className="chat-msg-failure-toggle" onClick={() => { setOpen(value => !value) }}>
+          {open ? '收起' : '展开详情'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export const MessageRow = memo(function MessageRow({ message, sessionId, showToolCalls, showSystemMessages, showTime = true, focused = false, focusedQuery, style, onRegenerate, onOpenFile, clockOffsetMs, liveTurnStartAt, liveTurn }: {
   message: RenderMessage
   /**
@@ -287,7 +307,9 @@ export const MessageRow = memo(function MessageRow({ message, sessionId, showToo
           )}
         </>
       )}
-      {message.failed === true && <span className="chat-msg-failtag">本次回复失败</span>}
+      {message.failed === true && (message.failure === undefined
+        ? <span className="chat-msg-failtag">本次回复失败</span>
+        : <FailureDetail failure={message.failure} />)}
       {message.maxTokens === true && <div className="chat-msg-maxtokens">已达到输出 token 上限，回答被截断。发送“继续”可让模型接着输出。</div>}
       <span className="chat-msg-footer">
         {showTime && <span className="chat-msg-time">{formatTime(message.time)}</span>}

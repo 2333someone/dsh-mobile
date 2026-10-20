@@ -159,6 +159,16 @@ export interface RenderMessage {
   readonly toolSummary?: string
   /** Set when the owning turn ended in an error. */
   readonly failed?: boolean
+  /**
+   * 失败原因（宿主 turn/end 的 reason.error）。
+   *
+   * 桌面端会显示「本次运行失败 503: {...}」，手机端原先只有一句「本次回复失败」，
+   * 用户不知道到底为什么失败。这里把 message/code 一起带上，由消息行渲染出来。
+   */
+  readonly failure?: {
+    readonly message: string
+    readonly code?: string
+  }
   /** Set when the owning turn ended at the per-request output-token cap. */
   readonly maxTokens?: boolean
   /**
@@ -1402,6 +1412,18 @@ function applyTurnEnd(state: FoldState, event: WireEvent): void {
   const reason = isRecord(data['reason']) ? data['reason'] : {}
   const failed = reason['kind'] === 'error'
   const maxTokens = reason['kind'] === 'max-tokens'
+  // 失败原因有两种线格式：宿主实际下发的 reason.error = { message, code }，
+  // 以及更早/简化版的 reason.message。两种都要认，手机端才能讲清为什么失败。
+  const failureRaw = isRecord(reason['error']) ? reason['error'] : undefined
+  const failureMessage = failureRaw !== undefined && typeof failureRaw['message'] === 'string'
+    ? failureRaw['message'].trim()
+    : typeof reason['message'] === 'string' ? reason['message'].trim() : ''
+  const failureCode = failureRaw !== undefined && typeof failureRaw['code'] === 'string'
+    ? failureRaw['code'].trim()
+    : ''
+  const failure = failed && failureMessage !== ''
+    ? { message: failureMessage, ...(failureCode === '' ? {} : { code: failureCode }) }
+    : undefined
 
   const startedAt = turn === undefined ? undefined : state.turnStarts.get(turn)
   const durationMs = startedAt === undefined ? undefined : Math.max(0, event.time - startedAt)
@@ -1433,6 +1455,7 @@ function applyTurnEnd(state: FoldState, event: WireEvent): void {
         : {}),
       ...(wasPending ? { pending: false } : {}),
       ...(failed ? { failed: true } : {}),
+      ...(failure === undefined ? {} : { failure }),
       ...(maxTokens ? { maxTokens: true } : {}),
       // The process head lives on the assistant row, so the turn's clock must
       // land there too — not only on the turn-tail row.

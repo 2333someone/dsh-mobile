@@ -2328,6 +2328,64 @@ button.settings-row:focus-visible {
   font-weight: 400;
 }
 
+/* 失败原因卡片：红色浅底 + 等宽小字，长文本默认 4 行截断，点「展开详情」看全文。 */
+.chat-msg-failure {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.chat-msg-failure-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.chat-msg-failure-head .chat-msg-failtag {
+  margin-top: 0;
+}
+
+.chat-msg-failure-code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+}
+
+.chat-msg-failure-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  word-break: break-word;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
+.chat-msg-failure-open .chat-msg-failure-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.chat-msg-failure-toggle {
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-family: inherit;
+}
+
 .chat-msg-maxtokens {
   margin-top: 8px;
   padding: 8px 10px;

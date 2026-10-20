@@ -185,15 +185,6 @@ function compactModelName(id: string): string {
   return parts.length <= 2 ? id : parts.slice(-2).join('-')
 }
 
-/** Permission tone for the shield pill: read = neutral, write = accent,
- *  full access = danger (the human-vision status channel). */
-function permissionTone(value: string): 'read' | 'write' | 'full' | undefined {
-  if (value === 'danger-full-access') return 'full'
-  if (value.includes('write')) return 'write'
-  if (value.includes('read')) return 'read'
-  return undefined
-}
-
 /**
  * Distance from the bottom (px) within which streaming output still auto-follows.
  * A reader who scrolled farther up than this is left alone while new chunks
@@ -3007,10 +2998,6 @@ export function ChatView({
   }, [stopping, session.sessionId])
 
   const modelLabel = currentModel?.model ?? '模型'
-  const permissionLabel = permissions === undefined
-    ? undefined
-    : permissions.options.find(option => option.value === permissions.currentValue)?.name
-      ?? displayName(permissions.currentValue)
 
   // Context usage chip: the host's context-pressure projection (token-meter)
   // is the authoritative per-session occupancy source — it is computed for
@@ -3502,20 +3489,6 @@ export function ChatView({
             <ModelIcon width={16} height={16} />
             <span className="chat-pill-name">{currentModel === undefined ? '模型' : compactModelName(currentModel.model)}</span>
             <span className="chat-pill-chevron" aria-hidden>▾</span>
-          </button>
-          {/* 始终渲染：数据还没到时显示「权限」占位，避免进入后图标一个个冒出来。 */}
-          <button
-            type="button"
-            className={'chat-pill chat-pill-perm'
-              + (permissions === undefined ? '' : ' chat-pill-perm-' + (permissionTone(permissions.currentValue) ?? 'read'))}
-            onClick={permissions === undefined ? undefined : openPermissionPicker}
-            disabled={permissions === undefined}
-            aria-haspopup="listbox"
-            aria-label={permissionLabel === undefined ? '切换权限' : `切换权限：${permissionLabel}`}
-            title={permissionLabel}
-          >
-            <ShieldIcon width={16} height={16} />
-            <span className="chat-pill-name">{permissionLabel ?? '权限'}</span>
           </button>
         </div>
         <div
