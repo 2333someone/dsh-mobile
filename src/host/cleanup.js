@@ -437,7 +437,9 @@ export function trashSessionFiles(sessionId, paths, cwd, options = {}) {
 }
 
 export function listTrash() {
-  return readJournal().slice().reverse().map((entry) => ({
+  // 只把「可恢复」的记录给界面看；hard 记录只留在 journal 里做审计（不可恢复，
+  // 列出来只会让人误以为能还原）。
+  return readJournal().filter((entry) => entry.hard !== true).reverse().map((entry) => ({
     id: entry.id,
     kind: entry.kind,
     sessionId: entry.sessionId,
