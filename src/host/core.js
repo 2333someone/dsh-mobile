@@ -933,11 +933,33 @@ export function createHost(ctx, config) {
     }
 
     const first = await pageWindow(beforeSeq)
-    // 首屏（无 beforeSeq）与其他读取路径一律保持原样：只取最新一页，不做任何裁剪。
+    // 首屏（无 beforeSeq）：用户点进会话时，屏幕顶部应该先是**自己最近那条提问气泡**，
+    // 然后才是 AI 的回复（过程卡）。但一页是按事件条数切的，最后一轮很长时窗口会从
+    // assistant 事件开始 —— 表现为进来第一眼就是思考卡、自己的话要在点一次「加载更早」
+    // 之后才出现。这里把首屏也向前补齐到最近一条可见 user/message，并从头截断。
     if (beforeSeq === undefined) {
+      let records = first.records
+      let hasMore = first.hasMore
+      let found = firstUserIndex(records)
+      let rounds = 0
+      while (found < 0 && hasMore && rounds < 3) {
+        const earliest = firstSeqOf(records)
+        if (earliest === undefined || records.length === 0) break
+        const older = await pageWindow(earliest)
+        if (older.records.length === 0) {
+          hasMore = older.hasMore
+          break
+        }
+        records = [...older.records, ...records]
+        hasMore = older.hasMore
+        rounds += 1
+        found = firstUserIndex(records)
+      }
+      // 补齐失败（整轮事件超过 4 页的极端会话）：保持原样，交给「加载更早」按钮。
+      if (found > 0) records = records.slice(found)
       return {
-        events: toEvents(first.records),
-        hasMore: first.hasMore,
+        events: toEvents(records),
+        hasMore,
         ...(projections ? { projections } : {}),
       }
     }
@@ -2995,11 +3017,9 @@ export function createHost(ctx, config) {
           return { ok: false, error: { code: 'running', message: '会话正在运行，先停止再删除' } }
         }
       } catch {}
-      for (const variant of sessionIdVariants(id)) {
-        if (liveAgentOf(variant) !== undefined) {
-          return { ok: false, error: { code: 'running', message: '会话有活跃 Agent，先停止再删除' } }
-        }
-      }
+      // 注意：不能只看 liveAgentOf()。宿主的 session.create/resolveAgent 会给
+      // 刚建的空会话挂一个活 Agent（非运行中），用它当判据会让「新建的空会话」
+      // 永远删不掉。是否真的在跑，以 controller.list() 的 running 为准。
     }
     // 墓碑：先归档，列表立刻不再显示（即使宿主内存里还有这条会话）。
     for (const variant of sessionIdVariants(id)) {
@@ -3008,7 +3028,7 @@ export function createHost(ctx, config) {
         if (reg && typeof reg.archiveSession === 'function') await reg.archiveSession(variant, { stopActivity: true })
       } catch {}
     }
-    const result = trashSessionDir(id, { hard: options.hard === true })
+    const result = trashSessionDir(id, { hard: options.hard === true, title: options.title })
     if (!result.ok) return result
     // 待处理审批/提问属于已删会话：放开等待链，避免桌面审批卡死。
     for (const [rpcId, entry] of [...pending.approvals]) {
@@ -3361,6 +3381,7 @@ export function createHost(ctx, config) {
           hard: payload.hard === true,
           allowProtected: payload.allowProtected === true,
           force: payload.force === true,
+          title: payload.title,
         })
       }
       case 'session.files.list': {

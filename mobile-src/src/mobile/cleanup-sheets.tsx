@@ -234,7 +234,7 @@ export function PurgeSessionSheet({ session, onClose, onDone }: {
     if (busy) return
     setBusy(true)
     setError(undefined)
-    void purgeSession(session.sessionId).then(
+    void purgeSession(session.sessionId, { title: session.title }).then(
       (result) => { setBusy(false); onDone(result) },
       (reason: unknown) => { setBusy(false); setError(errorText(reason)) },
     )
@@ -475,11 +475,16 @@ export function TrashSheet({ onClose }: { onClose(): void }) {
             </span>
             <span className="dm-trash-main">
               <span className="dm-trash-title">
-                {entry.kind === 'session' ? '会话' : entry.kind === 'workspace' ? '工作区目录' : '会话文件'}
+                {entry.kind === 'session'
+                  ? (entry.title || '会话')
+                  : entry.kind === 'workspace'
+                    ? (entry.title || '工作区目录')
+                    : (entry.items[0] ? entry.items[0].from.split(/[\/]/).pop() || '会话文件' : '会话文件')}
                 {entry.hard && <span className="dm-trash-hard">已彻底删除</span>}
               </span>
               <span className="dm-trash-sub">
                 {new Date(entry.removedAt).toLocaleString()} · {entry.items.length} 项
+                {entry.kind === 'workspace' ? ' · 恢复后需重新添加工作区' : ''}
               </span>
             </span>
             {!entry.hard && (

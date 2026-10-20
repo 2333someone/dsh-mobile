@@ -37,6 +37,7 @@ export interface TrashEntry {
   id: string
   kind: 'session' | 'files' | 'workspace'
   sessionId?: string
+  title?: string
   hard: boolean
   removedAt: number
   items: Array<{ kind: string; from: string; to?: string }>
@@ -65,11 +66,12 @@ export async function deleteSessionFiles(sessionId: string, paths: string[], har
 }
 
 /** Permanently delete a session: archive tombstone + session dir to trash. */
-export async function purgeSession(sessionId: string, options: { hard?: boolean; allowProtected?: boolean } = {}): Promise<PurgeSessionResult> {
+export async function purgeSession(sessionId: string, options: { hard?: boolean; allowProtected?: boolean; title?: string } = {}): Promise<PurgeSessionResult> {
   return await callUnary<PurgeSessionResult>('session.purge', {
     sessionId,
     ...(options.hard === true ? { hard: true } : {}),
     ...(options.allowProtected === true ? { allowProtected: true } : {}),
+    ...(options.title === undefined ? {} : { title: options.title }),
   })
 }
 

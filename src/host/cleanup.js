@@ -368,13 +368,14 @@ export function trashSessionDir(sessionId, options = {}) {
   if (!info.found) return { ok: false, error: { code: 'not-found', message: '找不到会话目录（可能已经被删除）' } }
   const id = newTrashId()
   const hard = options.hard === true
+  const title = typeof options.title === 'string' && options.title.trim() !== '' ? options.title.trim().slice(0, 120) : undefined
   let entry
   if (hard) {
     rmSync(info.dir, { recursive: true, force: true })
-    entry = { id, kind: 'session', sessionId: String(sessionId), hard: true, removedAt: Date.now(), items: [{ kind: 'session-dir', from: info.dir, to: undefined }] }
+    entry = { id, kind: 'session', sessionId: String(sessionId), title, hard: true, removedAt: Date.now(), items: [{ kind: 'session-dir', from: info.dir, to: undefined }] }
   } else {
     const target = moveIntoTrash(id, 'session', info.dir)
-    entry = { id, kind: 'session', sessionId: String(sessionId), hard: false, removedAt: Date.now(), items: [{ kind: 'session-dir', from: info.dir, to: target }] }
+    entry = { id, kind: 'session', sessionId: String(sessionId), title, hard: false, removedAt: Date.now(), items: [{ kind: 'session-dir', from: info.dir, to: target }] }
   }
   removeProjectionCache(sessionId)
   const journal = readJournal()
@@ -440,6 +441,7 @@ export function listTrash() {
     id: entry.id,
     kind: entry.kind,
     sessionId: entry.sessionId,
+    title: typeof entry.title === 'string' ? entry.title : undefined,
     hard: entry.hard === true,
     removedAt: entry.removedAt,
     items: Array.isArray(entry.items) ? entry.items.map((item) => ({ kind: item.kind, from: item.from, to: item.to })) : [],
