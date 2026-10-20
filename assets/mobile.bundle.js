@@ -15526,13 +15526,20 @@ details.think-block[open] .chat-disclosure-caret {
     // 思考步骤的图标是 bundle 自己画的「云朵」SVG（不是 emoji，emoji→SVG 的映射
     // 碰不到它），而用户指定思考中要用**四角星**。这里直接把那条 path 的 d 换掉，
     // 并在 flush 里与文字同一拍执行（否则会出现「文字已换、图标还停在云朵」的滞后）。
-    var THINK_STAR_PATH = 'M12 3.1 13.8 9.2 20.4 11.2 13.8 13.2 12 19.3 10.2 13.2 3.6 11.2 10.2 9.2Z';
+    // 用户给的参考：**实心四角星（凹边 sparkle）**，不是描边星形。
+    // 24×24 视框、四条边向中心内凹的贝塞尔曲线，fill=currentColor、无描边 ——
+    // 在 18px 下与其它步骤图标同重量，且和「工具」类图标一眼区分。
+    var THINK_STAR_PATH = 'M12 3C12.9 8.1 15.9 11.1 21 12 15.9 12.9 12.9 15.9 12 21 11.1 15.9 8.1 12.9 3 12 8.1 11.1 11.1 8.1 12 3Z';
+
+    function paintStar(path) {
+      if (path.getAttribute('d') !== THINK_STAR_PATH) path.setAttribute('d', THINK_STAR_PATH);
+      if (path.getAttribute('fill') !== 'currentColor') path.setAttribute('fill', 'currentColor');
+      if (path.getAttribute('stroke') !== 'none') path.setAttribute('stroke', 'none');
+    }
 
     function overrideThinkGlyph() {
       var paths = document.querySelectorAll('.chat-step-icon-thinking svg path, .chat-proc-lead-running svg path');
-      for (var i = 0; i < paths.length; i++) {
-        if (paths[i].getAttribute('d') !== THINK_STAR_PATH) paths[i].setAttribute('d', THINK_STAR_PATH);
-      }
+      for (var i = 0; i < paths.length; i++) paintStar(paths[i]);
     }
 
     function flush() {

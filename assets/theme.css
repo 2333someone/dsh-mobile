@@ -187,6 +187,13 @@
    （这里曾有一条 padding-top:13 / padding-bottom:5 的历史规则，已删除：
      它把文字整体上移，是「placeholder 偏上」的源头之一。） */
 
+/* ── 折叠过程卡：思考图标用强调色的实心四角星 ───────────────────────
+   形状由 dm-patches/chat-status.ts 的 overrideThinkGlyph() 把 path 换成实心
+   sparkle（fill=currentColor），这里只给颜色：与「正在思考」的强调色一致。 */
+.chat-step-icon-thinking {
+  color: var(--accent) !important;
+}
+
 /* ── 输入栏里的原始「+」「麦克风」隐藏：改用上方工具行图标 ────────── */
 .chat-attach-btn[aria-label="添加内容"],
 .chat-attach-btn[aria-label="语音输入"] {
