@@ -3390,7 +3390,15 @@ export function ChatView({
             onLostPointerCapture={cancelScrub}
             onClick={(event) => { if (event.detail === 0) setTurnListOpen(true) }}
           >
-            <span className="chat-jump-turns-label">{shownTurn}/{maxTurn}</span>
+            {/* 直接在 React 里输出「当前 / 横线 / 总数」的结构：
+                以前是 bundle 先渲染 "x/y" 文本、再由 DOM 补丁事后包成竖排，
+                于是从出现到补丁生效之间会「先横后竖」闪一下。这里一次渲染成型，
+                补丁看到 .dm-turn-sep 已存在会直接跳过（幂等）。 */}
+            <span className="chat-jump-turns-label">
+              <span className="dm-turn-cur">{shownTurn}</span>
+              <span className="dm-turn-sep" aria-hidden="true" />
+              <span className="dm-turn-total">{maxTurn}</span>
+            </span>
           </button>
         )}
         {/* 「回到上次」 is ENTRY-TIME intent: it must be offered as soon as an
