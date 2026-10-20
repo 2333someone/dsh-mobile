@@ -332,6 +332,12 @@ export function ChatView({
   initialFocusQuery,
 }: ChatViewProps) {
   const [messages, setMessages] = useState<RenderMessage[]>([])
+  /**
+   * 本轮**新出现**的消息 id（只有它们挂入场动画）。
+   *
+   * 关键：动画只给新增行，滚动重挂载/窗口搬动都不会重播 —— 否则长会话上下滑
+   * 会看到消息反复“闪一下”。首屏（第一次拿到消息）不做动画，避免整屏一起淡入。
+   */
   // Foreground gate for every poll on this view: a frozen background PWA must
   // not keep issuing RPCs (the stream and the host-side follow are released by
   // App's observe effect; returning resyncs them).

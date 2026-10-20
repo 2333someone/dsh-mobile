@@ -409,6 +409,23 @@ export const CHAT_STATUS_HTML = `<script>
       return '思考中';
     }
 
+    /**
+     * 就地改文字时给一个 140ms 的淡入过渡。
+     *
+     * 思考/工具那一行动态改文案（「思考中」→「已完成 · 用时 5 秒」、工具描述变化）
+     * 是就地把文本节点改掉，不触发任何挂载动画，看起来就是「啪」地换了。
+     * 这里在改完之后跑一个很短的透明度过渡：够轻，不会闪。
+     */
+    function softFade(el) {
+      if (!el || typeof el.animate !== 'function') return;
+      try {
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      } catch (e) { /* 忽略 */ }
+      try {
+        el.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
+      } catch (e) { /* 老内核忽略 */ }
+    }
+
     function progressiveStep() {
       var nodes = document.querySelectorAll(STEP_TEXT);
       for (var i = 0; i < nodes.length; i++) {
@@ -436,7 +453,7 @@ export const CHAT_STATUS_HTML = `<script>
         if (timeEl) {
           var doneText = '已完成 · ' + trim(timeEl.textContent || '');
           if (textNode !== null) {
-            if (textNode.nodeValue !== doneText) textNode.nodeValue = doneText;
+            if (textNode.nodeValue !== doneText) { textNode.nodeValue = doneText; softFade(el); }
           } else {
             el.appendChild(document.createTextNode(doneText));
           }
@@ -447,7 +464,7 @@ export const CHAT_STATUS_HTML = `<script>
           var thinkText = thinkingLabelOf(el);
           var nextThink = thinkText === '' ? '思考中' : thinkText;
           if (textNode !== null) {
-            if (textNode.nodeValue !== nextThink) textNode.nodeValue = nextThink;
+            if (textNode.nodeValue !== nextThink) { textNode.nodeValue = nextThink; softFade(el); }
           } else {
             el.appendChild(document.createTextNode(nextThink));
           }
@@ -458,7 +475,7 @@ export const CHAT_STATUS_HTML = `<script>
         // 保证这一行任何时刻都不是空的。
         if (raw === '') {
           var fallback = toolLabelOf(el);
-          if (textNode !== null) textNode.nodeValue = fallback;
+          if (textNode !== null) { textNode.nodeValue = fallback; softFade(el); }
           else el.appendChild(document.createTextNode(fallback));
         }
       }

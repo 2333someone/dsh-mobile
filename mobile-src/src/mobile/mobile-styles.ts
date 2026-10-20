@@ -2202,23 +2202,7 @@ button.settings-row:focus-visible {
 }
 
 /* Font-size preference: 小 / 标准 / 大 on message text. */
-[data-font-scale='small'] /* 新消息入场（只有本轮新增的行会挂这个类，滚动重挂载不重播）：
-   170ms 轻微上浮 + 淡入 —— 够快、不闪、不像动画演示。 */
-@keyframes dm-msg-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.chat-msg-enter {
-  animation: dm-msg-in 170ms cubic-bezier(0.22, 0.9, 0.25, 1) both;
-  will-change: opacity, transform;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-msg-enter { animation: none; }
-}
-
-.chat-msg {
+[data-font-scale='small'] .chat-msg {
   font-size: 14px;
 }
 
@@ -3411,6 +3395,29 @@ button.settings-row:focus-visible {
  * 后面，头两行只有状态词/用时/报错信号、此刻到哪一步与改动量；步数在展开体首行
  * （「共 N 步」）。行不编号，层级只靠缩进与行首字形。
  */
+/* 卡片型内容（思考折叠、工具卡、提问卡、轮次尾卡）出现时轻微淡入 + 上浮，
+   160ms —— 比消息行的 180ms 略快，看起来是「同一股节奏」。 */
+@keyframes dm-card-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-proc,
+.chat-proc-steps,
+.chat-md-notes,
+.chat-qa,
+.chat-turn-tail {
+  animation: dm-card-in 160ms cubic-bezier(0.22, 0.9, 0.25, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-proc,
+  .chat-proc-steps,
+  .chat-md-notes,
+  .chat-qa,
+  .chat-turn-tail { animation: none; }
+}
+
 .chat-proc {
   display: flex;
   flex-direction: column;
