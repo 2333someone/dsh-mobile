@@ -1,7 +1,7 @@
 {
-  "name": "dsh-mobile",
+  "name": "dsh-mobile-web",
   "version": "0.1.0",
-  "description": "掌上 dsh —— 手机端完整聊天界面（复用 dsh-palm 手机 bundle）：6 位码配对、设备信任、工作区/会话/聊天，可经公网反代访问。",
+  "description": "掌上 dsh —— DSH 的手机端完整聊天界面：6 位码配对、设备信任、工作区/会话/聊天、SSE 实时流，可经局域网或公网反代访问。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -28,8 +28,29 @@
     "NOTICE",
     "src/host"
   ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "mobile",
+    "phone",
+    "remote-access",
+    "pwa",
+    "sse"
+  ],
+  "author": {
+    "name": "2333someone"
+  },
   "license": "MIT",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2333someone/dsh-mobile.git"
+  },
+  "homepage": "https://github.com/2333someone/dsh-mobile#readme",
+  "bugs": {
+    "url": "https://github.com/2333someone/dsh-mobile/issues"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
@@ -47,6 +68,9 @@
         "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "smoke": "node test/smoke.mjs"
