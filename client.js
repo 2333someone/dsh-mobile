@@ -210,7 +210,10 @@ window.__ModuleLoader__.load({
 .dm-pageTitle { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.2px; line-height: 22px; color: var(--dsw-alias-label-primary); }
 .dm-stepTag { flex: none; padding-top: 2px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
 .dm-page.dm-inner { padding: 0; background: transparent; border: 0; animation: dm-page-in 160ms ease both; }
-@keyframes dm-page-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dm-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @media (prefers-reduced-motion: reduce) { .dm-page.dm-inner { animation: none; } }
 .dm-netList { margin: 0; }
 .dm-netItem + .dm-netItem { margin: 0 6px; }
@@ -677,7 +680,7 @@ window.__ModuleLoader__.load({
           )
         : null
 
-      const step1Node = h('div', { className: 'dm-page dm-inner' },
+      const step1Node = h('div', { key: 'connect-page-1', className: 'dm-page dm-inner' },
         h('div', { className: 'dm-connectHead' },
           h('p', { className: 'dm-pageTitle' }, '选择手机连接的网络'),
           h('span', { className: 'dm-headRight' },
@@ -697,7 +700,7 @@ window.__ModuleLoader__.load({
         h('div', { dangerouslySetInnerHTML: { __html: qrSvg(qrText, 124) } }),
       )
 
-      const step2Node = h('div', { className: 'dm-page dm-inner' },
+      const step2Node = h('div', { key: 'connect-page-2', className: 'dm-page dm-inner' },
         h('div', { className: 'dm-connectHead' },
           h('p', { className: 'dm-pageTitle' }, '用手机扫描二维码'),
           h('span', { className: 'dm-headRight' },
@@ -734,7 +737,7 @@ window.__ModuleLoader__.load({
       )
 
       // 完成后：摘要态（可重新进入向导）
-      const summaryNode = h('div', { className: 'dm-page dm-inner' },
+      const summaryNode = h('div', { key: 'connect-page-0', className: 'dm-page dm-inner' },
         h('div', { className: 'dm-connectHead' },
           h('p', { className: 'dm-pageTitle' }, '连接手机'),
           h('span', { className: 'dm-headRight' },
