@@ -101,11 +101,19 @@ export const SEND_DECODE_GUARD_HTML = `<script>
       startPoll();
     }
 
-    // 选图和「粘贴图片」都走 bundle 里同一个异步解码函数 ni()。
+    // 选图走 bundle 里同一个异步解码函数 ni()。注意：只统计**图片** ——
+    // 「＋ → 文件」用的是同一个 input[type=file]，把非图片也记成 pending 会让
+    // 发送被永久拦住（并弹出「图片处理中，马上发送…」）。
     document.addEventListener('change', function (e) {
       var t = e.target;
       if (t === null || t.tagName !== 'INPUT' || t.type !== 'file') return;
-      addPending(t.files === null || t.files === undefined ? 0 : t.files.length);
+      var files = t.files === null || t.files === undefined ? [] : t.files;
+      var n = 0;
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        if (f && typeof f.type === 'string' && f.type.indexOf('image/') === 0) n++;
+      }
+      if (n > 0) addPending(n);
     }, true);
 
     document.addEventListener('paste', function (e) {

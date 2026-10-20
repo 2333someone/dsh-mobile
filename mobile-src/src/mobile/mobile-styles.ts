@@ -5054,6 +5054,57 @@ button.settings-row:focus-visible {
   justify-content: center;
 }
 
+/* 待发送的「文件」胶囊（+ → 文件）：一行可横向滚动，名称超长省略。 */
+.chat-attach-files {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  max-width: 80vw;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-chip);
+  background: var(--bg-elevated, #f1f1f4);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.chat-attach-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.chat-attach-file-size {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.chat-attach-file-remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .chat-attach-remove:active {
   background: rgba(0, 0, 0, 0.8);
 }

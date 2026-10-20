@@ -21,7 +21,7 @@ import { usePageVisible } from '../foreground.ts'
 import { buzz } from '../display-prefs.ts'
 import { loadCachedHistory } from '../history-cache.ts'
 import { errorText, staleHostHint } from './App.tsx'
-import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, listSessions, history, type CommandDescriptor } from '../api.ts'
+import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, listSessions, history, saveFile, type CommandDescriptor } from '../api.ts'
 import type { SessionModels } from '../../api-proxy-types'
 import type { PendingApproval, PendingQuestionItem } from '../api.ts'
 import { buildPromptParts, compressImageFile, imageFromClipboard, MAX_ATTACHED_IMAGES, type AttachedImage, type PromptPart } from '../image.ts'
@@ -469,6 +469,8 @@ export function ChatView({
   const [plusOpen, setPlusOpen] = useState(false)
   /** Images picked or pasted into the composer, awaiting send (community-style attach). */
   const [attachImages, setAttachImages] = useState<AttachedImage[]>([])
+  /** 已上传到工作区的文件（发送时把路径写进 prompt 文本）。 */
+  const [attachFiles, setAttachFiles] = useState<Array<{ name: string; path: string; bytes: number }>>([])
   /** Live mirror of attachImages for the async addImage cap check (no stale closure). */
   const attachImagesRef = useRef(attachImages)
   useEffect(() => { attachImagesRef.current = attachImages }, [attachImages])
@@ -496,6 +498,7 @@ export function ChatView({
   }, [session.sessionId])
   /** Hidden file chooser backing the + menu's 图片 entry. */
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const docInputRef = useRef<HTMLInputElement | null>(null)
   /** Hidden camera capture input backing the + menu's 拍照 entry (mobile
    *  `capture` attribute opens the device camera directly). */
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
@@ -2729,11 +2732,38 @@ export function ChatView({
     })
   }, [])
 
+  /**
+   * 「文件」：读成 base64 交给宿主落到会话工作区 `.dsh-uploads/`，拿到相对路径后
+   * 显示成待发送的胶囊；发送时把这些路径写进 prompt 文本，agent 用文件工具直接读。
+   */
+  const addFile = useCallback((file: File) => {
+    const MAX = 24 * 1024 * 1024
+    if (file.size > MAX) {
+      toast(`文件超过 ${Math.round(MAX / 1024 / 1024)}MB，无法上传`)
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => { toast('读取文件失败') }
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      const comma = result.indexOf(',')
+      const dataBase64 = comma >= 0 ? result.slice(comma + 1) : ''
+      if (dataBase64 === '') { toast('读取文件失败'); return }
+      void saveFile(session.sessionId, file.name, dataBase64).then(
+        (saved) => {
+          setAttachFiles(previous => [...previous, { name: saved.name, path: saved.path, bytes: saved.bytes }])
+        },
+        (reason: unknown) => { toast(`上传失败：${errorText(reason)}`) },
+      )
+    }
+    reader.readAsDataURL(file)
+  }, [session.sessionId])
+
   /** Send the drafted prompt (the echoed user/message arrives over mux).
    * Offline: queue in IndexedDB instead — the reconnect effect drains it. */
   const send = useCallback(() => {
     const text = input.trim()
-    if ((text === '' && attachImages.length === 0) || sending) return
+    if ((text === '' && attachImages.length === 0 && attachFiles.length === 0) || sending) return
     // Offline: images can't queue (too big for the outbox), text can.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       if (text === '') {
@@ -2763,7 +2793,7 @@ export function ChatView({
     // registry (session.prompt would deliver it to the model verbatim).
     // Quotes and image attachments compose a prompt, so they keep prompt
     // semantics even when the text starts with '/'.
-    if (text.startsWith('/') && quoted === undefined && attachImages.length === 0) {
+    if (text.startsWith('/') && quoted === undefined && attachImages.length === 0 && attachFiles.length === 0) {
       setSending(true)
       void runCommand(text).then(
         () => {
@@ -2778,15 +2808,22 @@ export function ChatView({
     setSending(true)
     // A quoted draft composes the citation banner INTO the text part and
     // still carries the attached images (buildPromptParts appends them).
-    const body: PromptPart[] = quoted !== undefined && text !== ''
-      ? buildPromptParts(`引用消息：\n> ${quoted.replace(/\n+/g, ' ')}\n\n${text}`, attachImages)
-      : buildPromptParts(input, attachImages)
+    // 文件以「路径清单」的形式并进文本：消息协议没有通用附件类型，而 agent 读文件
+    // 本来就是按路径读，所以上传到工作区 + 写路径是最稳的。
+    const fileNote = attachFiles.length === 0
+      ? ''
+      : `\n\n已上传文件（可直接用文件工具读取）：\n${attachFiles.map(item => `- ${item.path}`).join('\n')}`
+    const baseText = quoted !== undefined && text !== ''
+      ? `引用消息：\n> ${quoted.replace(/\n+/g, ' ')}\n\n${text}`
+      : input
+    const body: PromptPart[] = buildPromptParts(baseText + fileNote, attachImages)
     void prompt(session.sessionId, body).then(
       () => {
         setSending(false)
         setInput('')
         removeDraft(session.sessionId)
         setAttachImages([])
+        setAttachFiles([])
         setQuoted(undefined)
         // Fresh activity just started: drop the poll backoff so the mux
         // fallback picks the reply up immediately, not after the stall window.
@@ -3561,6 +3598,22 @@ export function ChatView({
             ))}
           </div>
         )}
+        {attachFiles.length > 0 && (
+          <div className="chat-attach-files" role="list" aria-label="待发送文件">
+            {attachFiles.map((item, index) => (
+              <div key={`${item.path}-${String(index)}`} className="chat-attach-file" role="listitem">
+                <span className="chat-attach-file-name">{item.name}</span>
+                <span className="chat-attach-file-size">{Math.max(1, Math.round(item.bytes / 1024))} KB</span>
+                <button
+                  type="button"
+                  className="chat-attach-file-remove"
+                  aria-label="移除文件"
+                  onClick={() => { setAttachFiles(previous => previous.filter((_, i) => i !== index)) }}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="chat-inputbar">
           <button
             type="button"
@@ -3616,6 +3669,7 @@ export function ChatView({
       {plusOpen && (
         <PlusSheet
           onPickImage={() => { setPlusOpen(false); fileInputRef.current?.click() }}
+          onPickFile={() => { setPlusOpen(false); docInputRef.current?.click() }}
           onPickCamera={() => { setPlusOpen(false); cameraInputRef.current?.click() }}
           onClose={() => { setPlusOpen(false) }}
         />
@@ -3641,6 +3695,17 @@ export function ChatView({
         onChange={(event) => {
           const files = [...(event.target.files ?? [])]
           for (const file of files) addImage(file)
+          event.target.value = ''
+        }}
+      />
+      <input
+        ref={docInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])]
+          for (const file of files) addFile(file)
           event.target.value = ''
         }}
       />

@@ -29,7 +29,7 @@ import { createPushRpc } from './rpc/push.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
-import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
+import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, MOBILE_FILE_MAX_BYTES, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
 import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuffer, readBody, readJsonBody, parseCookies, isLoopback, lanIPv4Addresses } from './http.js'
 
@@ -3994,6 +3994,62 @@ export function createHost(ctx, config) {
         }
         return { ok: true, value: { mediaType, dataUrl: `data:${mediaType};base64,${data}` } }
       }
+      /**
+       * 手机端「添加文件」：把选中的文件落到会话工作区的 `.dsh-uploads/` 下，
+       * 返回相对路径。手机端拿到路径后写进 prompt 文本，agent 用普通文件工具
+       * 就能读到 —— DSH 的消息协议没有「附件」概念，路径是最稳的载体。
+       *
+       * 边界：必须已配对设备、必须有会话 cwd、文件名去危险字符、大小上限
+       * MOBILE_FILE_MAX_BYTES；只写 `.dsh-uploads/`，不动工作区其它位置。
+       */
+      case 'mobile.saveFile': {
+        const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+        const rawName = typeof payload?.name === 'string' ? payload.name : ''
+        const dataBase64 = typeof payload?.dataBase64 === 'string' ? payload.dataBase64 : ''
+        if (sessionId === '' || rawName === '' || dataBase64 === '') {
+          return { ok: false, error: { code: 'invalid-request', message: '缺少会话、文件名或内容' } }
+        }
+        const cwd = sessionCwd(sessionId)
+        if (cwd === '') {
+          return { ok: false, error: { code: 'no-workspace', message: '当前会话没有工作目录，无法保存文件' } }
+        }
+        const safeName = rawName
+          .replace(/[\/:*?"<>|]/g, '_')
+          .replace(/[\u0000-\u001f]/g, '_')
+          .replace(/^\.+/, '')
+          .slice(-120) || 'file'
+        let buffer
+        try {
+          buffer = Buffer.from(dataBase64, 'base64')
+        } catch {
+          return { ok: false, error: { code: 'bad-request', message: '文件内容不是合法的 base64' } }
+        }
+        if (buffer.length === 0) {
+          return { ok: false, error: { code: 'bad-request', message: '文件是空的' } }
+        }
+        if (buffer.length > MOBILE_FILE_MAX_BYTES) {
+          return {
+            ok: false,
+            error: { code: 'too-large', message: `文件超过 ${Math.round(MOBILE_FILE_MAX_BYTES / 1024 / 1024)}MB 上限` },
+          }
+        }
+        try {
+          const dir = join(cwd, '.dsh-uploads')
+          mkdirSync(dir, { recursive: true })
+          const target = join(dir, `${Date.now()}-${safeName}`)
+          writeFileSync(target, buffer)
+          return {
+            ok: true,
+            value: {
+              path: relativePath(cwd, target).split('\\').join('/'),
+              name: safeName,
+              bytes: buffer.length,
+            },
+          }
+        } catch (err) {
+          return { ok: false, error: { code: 'write-failed', message: String(err && err.message ? err.message : err) } }
+        }
+      }
       case 'mobile.readFile': {
         // 手机端 markdown 里的本地图片（`![](相对路径)`）走这里：
         // bundle 只把路径写进 <img data-local-src>，随后用 mobile.readFile
@@ -4288,7 +4344,9 @@ export function createHost(ctx, config) {
     try {
       const budget = method === 'session.prompt'
         ? PROMPT_BODY
-        : method === 'mobile.transcribe' ? 12 * 1024 * 1024 : SMALL_BODY
+        : method === 'mobile.transcribe' ? 12 * 1024 * 1024
+          : method === 'mobile.saveFile' ? MOBILE_FILE_MAX_BYTES + 4 * 1024 * 1024
+            : SMALL_BODY
       envelope = await readJsonBody(req, budget)
     } catch {
       sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'invalid json body' } })

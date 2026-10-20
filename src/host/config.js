@@ -71,6 +71,8 @@ export const DEFAULT_MOBILE_PORT = 19387
 export const DEFAULT_PAIR_CODE = '123456'
 export const SMALL_BODY = 64 * 1024
 export const PROMPT_BODY = 2 * 1024 * 1024
+/** 手机端「添加文件」的单个文件上限（宿主侧最终把关；客户端也会先挡一次）。 */
+export const MOBILE_FILE_MAX_BYTES = 24 * 1024 * 1024
 // 手机点命令后的单次执行上限：bundle 侧 mobile.commandExec 的 fetch 超时是 180s，
 // 宿主这里留 30s 余量，避免「前端已放弃、宿主还在 await」的悬挂。
 export const COMMAND_EXEC_TIMEOUT_MS = 150 * 1000

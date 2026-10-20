@@ -210,6 +210,20 @@ export async function checkUpdate(): Promise<UpdateCheckView> {
  * @param attachmentId - 事件里折出来的附件 id。
  * @returns 媒体类型与 data URL。
  */
+/**
+ * 把手机选中的文件上传到会话工作区的 `.dsh-uploads/`，返回相对路径。
+ *
+ * 为什么是「上传+路径」而不是附件：DSH 的消息协议只有文本/图片块，没有通用附件；
+ * agent 读文件是靠工具按路径读，所以把文件落到工作区、把路径写进 prompt 最稳。
+ */
+export async function saveFile(
+  sessionId: string,
+  name: string,
+  dataBase64: string,
+): Promise<{ path: string; name: string; bytes: number }> {
+  return await callUnary<{ path: string; name: string; bytes: number }>('mobile.saveFile', { sessionId, name, dataBase64 })
+}
+
 export async function readAttachment(sessionId: string, attachmentId: string): Promise<{ mediaType: string; dataUrl: string }> {
   return await callUnary<{ mediaType: string; dataUrl: string }>('mobile.readAttachment', { sessionId, attachmentId })
 }
