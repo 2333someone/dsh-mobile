@@ -123,25 +123,48 @@ window.__ModuleLoader__.load({
 .dm-live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
 .dm-liveDot { width: 7px; height: 7px; border-radius: 50%; background: #18a058; box-shadow: 0 0 0 0 rgba(24,160,88,.45); animation: dm-pulse 2s infinite; }
 .dm-liveDotOff { background: #b8bcc6; animation: none; }
-/* ── 连接二维码（局域网直连 / 公网）──────────────────────────────────── */
-.dm-qrSection { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--dsw-alias-border-l2, #d0d2da); }
-.dm-qrHead { display: flex; align-items: center; gap: 8px; }
-.dm-qrTitle { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary, #1b1c20); }
-.dm-qrTag { padding: 1px 7px; border-radius: 999px; background: rgba(127,127,127,.12); color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 11px; line-height: 18px; }
-.dm-qrTagRec { background: rgba(77,107,254,.12); color: #4D6BFE; }
-.dm-qrHint { margin: 4px 0 10px; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-qrRow { display: flex; align-items: center; gap: 14px; padding: 8px 0; }
-.dm-qrRow + .dm-qrRow { border-top: 1px solid var(--dsw-alias-border-l1, #e6e7ec); }
-.dm-qrBox { flex: none; display: grid; place-items: center; padding: 4px; border-radius: 10px; background: #fff; box-shadow: 0 1px 4px rgba(16,24,40,.1); }
-.dm-qrBox svg { display: block; }
-.dm-qrMeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.dm-qrIndex { font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-qrUrl { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: #4D6BFE; }
-.dm-qrActions { display: flex; gap: 8px; }
-.dm-qrGuide { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: rgba(77,107,254,.07); color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 11.5px; line-height: 17px; }
-.dm-qrNone { margin-top: 14px; padding: 12px; border-radius: 12px; background: rgba(229,72,77,.06); border: 1px solid rgba(229,72,77,.25); }
-.dm-qrNoneTitle { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; color: #e5484d; }
-.dm-qrNoneBody { margin: 0; font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+/* ── 连接二维码：单码 + 地址切换器（与设置卡片同一套 token/圆角/间距）── */
+.dm-cardHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dm-qrHero { margin-top: 14px; display: flex; flex-direction: column; align-items: center; }
+.dm-qrBoxLarge {
+  display: grid; place-items: center; padding: 10px; border-radius: 14px; background: #fff;
+  border: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
+  box-shadow: 0 1px 3px rgba(16,24,40,.08);
+}
+.dm-qrBoxLarge svg { display: block; max-width: 100%; height: auto; }
+.dm-qrCurrentRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; margin-top: 12px; }
+.dm-qrCurrent { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.dm-qrCurrentLabel { flex: none; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-qrCurrentAddr { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--dsw-alias-label-primary, #1b1c20); }
+.dm-switch {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--dsw-alias-border-l2, #d0d2da); border-radius: 9px;
+  padding: 6px 12px; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  background: transparent; color: var(--dsw-alias-label-primary, #1b1c20);
+  transition: background-color .16s ease, border-color .16s ease;
+}
+.dm-switch:hover { background: rgba(127,127,127,.08); }
+.dm-picker { list-style: none; margin: 10px 0 0; padding: 6px; width: 100%; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1, #e6e7ec); background: var(--dsw-alias-bg-layer-2, #fff); }
+.dm-pickerItem {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px;
+  border: 0; border-radius: 9px; background: transparent; cursor: pointer; text-align: left;
+  color: var(--dsw-alias-label-primary, #1b1c20); font: inherit;
+}
+.dm-pickerItem:hover { background: rgba(127,127,127,.08); }
+.dm-pickerItemActive { background: rgba(77,107,254,.1); }
+.dm-pickerLabel { flex: none; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-pickerAddr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.dm-pickerCheck { flex: none; color: #4D6BFE; font-weight: 600; }
+.dm-qrActions { display: flex; justify-content: center; margin-top: 12px; }
+.dm-qrNote { margin: 10px 0 0; text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-qrNoteSub { margin: 4px 0 0; text-align: center; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary, #8a8f99); }
+.dm-qrPlaceholder { margin-top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.dm-qrPlaceholderBox { width: 100%; max-width: 184px; aspect-ratio: 1; display: grid; place-items: center; border-radius: 14px; border: 1px dashed var(--dsw-alias-border-l2, #d0d2da); color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 12.5px; text-align: center; padding: 12px; box-sizing: border-box; }
+.dm-qrPlaceholderHint { margin: 0; text-align: center; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #8a8f99); }
+.dm-collapse { margin-top: 14px; border-top: 1px dashed var(--dsw-alias-border-l2, #d0d2da); padding-top: 10px; }
+.dm-collapseHead { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 0; border: 0; background: transparent; cursor: pointer; color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 12.5px; font-weight: 500; }
+.dm-collapseCaret { font-size: 12px; }
+.dm-collapseBody { padding-top: 10px; }
 @keyframes dm-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes dm-pop { 0% { opacity: 0; transform: scale(.86); } 62% { transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
 @keyframes dm-rot { to { transform: rotate(360deg); } }
@@ -338,6 +361,10 @@ window.__ModuleLoader__.load({
       const [domainDraft, setDomainDraft] = useState('')
       const [domainBusy, setDomainBusy] = useState(false)
       const [domainErr, setDomainErr] = useState('')
+      // 连接二维码：当前选中的地址 + 切换面板 + 「远程连接（可选）」折叠区
+      const [selectedBase, setSelectedBase] = useState('')
+      const [pickerOpen, setPickerOpen] = useState(false)
+      const [remoteOpen, setRemoteOpen] = useState(false)
       const domainEdited = useRef(false)
       const confirmTimer = useRef()
       const copyTimer = useRef()
@@ -449,132 +476,160 @@ window.__ModuleLoader__.load({
       const hasDomainOverride = addrs.publicBaseCustom === true
       const isFixed = !!(code && (code.fixed === true || code.expiresAt > now + 86400000))
       const expired = code && !isFixed ? now > code.expiresAt : false
-      // 扫码即配对：每条地址的二维码都指向 /m/?code=<配对码>。
+      // 扫码即配对：二维码指向 /m/?code=<配对码>，手机打开即自动接受。
       const pairingCode = code && !expired ? String(code.code || '') : ''
-      const lanLinks = pairingCode ? lanBases.map((base) => ({ base: base, url: qrUrl(base, pairingCode) })) : []
-      const publicLink = pairingCode && publicBase ? { base: publicBase, url: qrUrl(publicBase, pairingCode) } : null
+      const candidates = [...lanBases, ...(publicBase ? [publicBase] : [])]
+      // 默认选中规则（用户口径）：配了公网地址 → 默认公网（在家在外都能连）；
+      // 没配 → 默认第一个局域网地址。用户手动切换后保持其选择。
+      const defaultBase = publicBase !== '' ? publicBase : (lanBases[0] || '')
+      const activeBase = candidates.indexOf(selectedBase) >= 0 ? selectedBase : defaultBase
+      const isPublicSelected = activeBase !== '' && activeBase === publicBase
+      const qrText = pairingCode && activeBase ? qrUrl(activeBase, pairingCode) : ''
+      const displayAddr = (base) => String(base || '').replace(/^https?:\/\//, '').replace(/\/+$/, '')
+      const selectedReason = publicBase !== '' ? '已配置公网地址，默认选公网' : '未配置公网地址，默认选第一个局域网地址'
+
+      useEffect(() => {
+        // 配置变化（新增/清除公网域名、网卡增减）时回到默认选择；
+        // 同一批候选里用户切换过的选择保持不动。
+        setSelectedBase((current) => (candidates.indexOf(current) >= 0 ? current : defaultBase))
+      }, [publicBase, lanBases.join('|')])
 
       return h('div', { className: 'dm-wrap' },
         h('style', { dangerouslySetInnerHTML: { __html: CSS } }),
 
-        // ── 访问地址 ──
-        h('div', { className: 'dm-card' },
-          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 } },
-            h('p', { className: 'dm-title' }, '访问地址'),
+        // ── 连接二维码（单码 + 地址切换器）──
+        // 用户口径：一个二维码就够，别铺一屏。默认选中规则见上面的 defaultBase：
+        // 配了公网 → 公网；没配 → 第一个局域网。切换器里列出全部候选地址。
+        h('div', { className: 'dm-card', 'data-qr-card': '1' },
+          h('div', { className: 'dm-cardHead' },
+            h('p', { className: 'dm-title' }, '连接二维码'),
             h('span', { className: 'dm-live' },
               h('span', { className: 'dm-liveDot' + (urls.length ? '' : ' dm-liveDotOff') }),
               urls.length ? '就绪' : '未监听'),
           ),
-          h('p', { className: 'dm-sub' }, '手机扫码即自动配对进入；也可打开地址后手输配对码。'),
-          // ── 连接二维码 ──
-          // 局域网直连优先（同一网络最快，也最稳）：每个候选地址各一张二维码；
-          // 公网作为备选，标明「不在同一局域网时使用」。两者都没有时给明确提示，
-          // 绝不留空白二维码。
+
           !pairingCode
             ? h('p', { className: 'dm-muted', style: { marginTop: 10 } }, '先生成配对码，二维码会自动出现在这里。')
-            : null,
-
-          pairingCode && lanLinks.length > 0
-            ? h('div', { className: 'dm-qrSection', 'data-conn': 'lan' },
-                h('div', { className: 'dm-qrHead' },
-                  h('span', { className: 'dm-qrTitle' }, '局域网直连'),
-                  h('span', { className: 'dm-qrTag dm-qrTagRec' }, '推荐'),
-                ),
-                h('p', { className: 'dm-qrHint' }, '手机与电脑在同一局域网时使用，速度最快'),
-                h('p', { className: 'dm-qrGuide' }, '扫完手机没反应？说明手机与电脑不在同一网络（例如电脑有线、手机用流量）→ 请改用下面的公网连接二维码'),
-                lanLinks.map((link, i) =>
-                  h('div', { key: link.url, className: 'dm-qrRow', 'data-qr-url': link.url },
-                    h('div', { className: 'dm-qrBox', style: { width: 168, height: 168 }, dangerouslySetInnerHTML: { __html: qrSvg(link.url, 168) } }),
-                    h('div', { className: 'dm-qrMeta' },
-                      h('span', { className: 'dm-qrIndex' }, lanLinks.length > 1 ? `地址 ${i + 1}` : '当前地址'),
-                      h('code', { className: 'dm-qrUrl', title: link.url }, link.url),
-                      h('div', { className: 'dm-qrActions' },
-                        h('button', {
-                          type: 'button',
-                          className: 'dm-copy',
-                          'data-copied': copied === link.url ? 'true' : 'false',
-                          onClick: () => onCopy(link.url),
-                        }, copied === link.url ? '已复制' : '复制链接'),
+            : (!activeBase
+                ? h('div', { className: 'dm-qrPlaceholder', 'data-conn': 'none' },
+                    h('div', { className: 'dm-qrPlaceholderBox' }, '未检测到可用地址'),
+                    h('p', { className: 'dm-qrPlaceholderHint' }, '展开下方「远程连接（可选）」填写公网域名后即可生成二维码。'))
+                : h('div', {
+                    className: 'dm-qrHero',
+                    'data-selected-base': activeBase,
+                    'data-selected-kind': isPublicSelected ? 'public' : 'lan',
+                    'data-selected-reason': selectedReason,
+                  },
+                    h('div', {
+                      className: 'dm-qrBoxLarge',
+                      'data-qr-url': qrText,
+                      dangerouslySetInnerHTML: { __html: qrSvg(qrText, 184) },
+                    }),
+                    h('div', { className: 'dm-qrCurrentRow' },
+                      h('div', { className: 'dm-qrCurrent' },
+                        h('span', { className: 'dm-qrCurrentLabel' }, '当前地址'),
+                        h('code', { className: 'dm-qrCurrentAddr', title: activeBase }, displayAddr(activeBase)),
                       ),
+                      h('button', {
+                        type: 'button',
+                        className: 'dm-switch',
+                        'aria-expanded': pickerOpen ? 'true' : 'false',
+                        onClick: () => setPickerOpen((open) => !open),
+                      }, '切换 ▾'),
                     ),
-                  ),
-                ),
-              )
-            : null,
-
-          pairingCode && publicLink
-            ? h('div', { className: 'dm-qrSection', 'data-conn': 'public' },
-                h('div', { className: 'dm-qrHead' },
-                  h('span', { className: 'dm-qrTitle' }, '公网连接'),
-                  h('span', { className: 'dm-qrTag' }, '备选'),
-                ),
-                h('p', { className: 'dm-qrHint' }, '不在同一局域网时使用'),
-                h('div', { className: 'dm-qrRow', 'data-qr-url': publicLink.url },
-                  h('div', { className: 'dm-qrBox', style: { width: 128, height: 128 }, dangerouslySetInnerHTML: { __html: qrSvg(publicLink.url, 128) } }),
-                  h('div', { className: 'dm-qrMeta' },
-                    h('span', { className: 'dm-qrIndex' }, '公网地址'),
-                    h('code', { className: 'dm-qrUrl', title: publicLink.url }, publicLink.url),
+                    pickerOpen
+                      ? h('ul', { className: 'dm-picker' },
+                          lanBases.map((base) => h('li', { key: base },
+                            h('button', {
+                              type: 'button',
+                              className: 'dm-pickerItem' + (base === activeBase ? ' dm-pickerItemActive' : ''),
+                              'data-base': base,
+                              'data-kind': 'lan',
+                              onClick: () => { setSelectedBase(base); setPickerOpen(false) },
+                            },
+                              h('span', { className: 'dm-pickerLabel' }, '局域网'),
+                              h('code', { className: 'dm-pickerAddr' }, displayAddr(base)),
+                              base === activeBase ? h('span', { className: 'dm-pickerCheck' }, '✓') : null,
+                            ),
+                          )),
+                          publicBase !== ''
+                            ? h('li', { key: publicBase },
+                                h('button', {
+                                  type: 'button',
+                                  className: 'dm-pickerItem' + (publicBase === activeBase ? ' dm-pickerItemActive' : ''),
+                                  'data-base': publicBase,
+                                  'data-kind': 'public',
+                                  onClick: () => { setSelectedBase(publicBase); setPickerOpen(false) },
+                                },
+                                  h('span', { className: 'dm-pickerLabel' }, '公网'),
+                                  h('code', { className: 'dm-pickerAddr' }, displayAddr(publicBase)),
+                                  publicBase === activeBase ? h('span', { className: 'dm-pickerCheck' }, '✓') : null,
+                                ),
+                              )
+                            : null,
+                        )
+                      : null,
                     h('div', { className: 'dm-qrActions' },
                       h('button', {
                         type: 'button',
                         className: 'dm-copy',
-                        'data-copied': copied === publicLink.url ? 'true' : 'false',
-                        onClick: () => onCopy(publicLink.url),
-                      }, copied === publicLink.url ? '已复制' : '复制链接'),
+                        'data-copied': copied === qrText ? 'true' : 'false',
+                        onClick: () => onCopy(qrText),
+                      }, copied === qrText ? '已复制' : '复制链接'),
                     ),
+                    h('p', { className: 'dm-qrNote' }, '扫码后自动配对，无需输入配对码'),
+                    h('p', { className: 'dm-qrNoteSub' }, '扫完没反应？可能是手机与电脑不在同一网络（例如电脑有线、手机用流量）→ 点「切换」改用公网地址。'),
+                  )),
+
+          // ── 远程连接（可选）：公网域名配置，默认折叠，不占主视觉 ──
+          h('div', { className: 'dm-collapse' },
+            h('button', {
+              type: 'button',
+              className: 'dm-collapseHead',
+              'aria-expanded': remoteOpen ? 'true' : 'false',
+              onClick: () => setRemoteOpen((open) => !open),
+            },
+              h('span', null, '远程连接（可选）'),
+              h('span', { className: 'dm-collapseCaret' }, remoteOpen ? '▴' : '▾'),
+            ),
+            remoteOpen
+              ? h('div', { className: 'dm-collapseBody' },
+                  h('p', { className: 'dm-domainHint', style: { marginBottom: 8 } }, '公网域名 / 隧道地址（反代、frp、Cloudflare Tunnel 均可），填好后会出现在「切换」列表里'),
+                  h('div', { className: 'dm-urlRow' },
+                    h('input', {
+                      className: 'dm-input',
+                      value: domainDraft,
+                      placeholder: 'https://example.com:45632',
+                      spellCheck: false,
+                      autoCapitalize: 'none',
+                      autoCorrect: 'off',
+                      onChange: (e) => {
+                        domainEdited.current = true
+                        setDomainDraft(e.target.value)
+                        setDomainErr('')
+                      },
+                      onKeyDown: (e) => {
+                        if (e.key === 'Enter') saveDomain(domainDraft.trim())
+                      },
+                    }),
+                    h('button', {
+                      type: 'button',
+                      className: 'dm-btn dm-btnSm',
+                      disabled: domainBusy,
+                      onClick: () => saveDomain(domainDraft.trim()),
+                    }, domainBusy ? '保存中…' : '保存'),
+                    addrs.publicBaseCustom
+                      ? h('button', {
+                          type: 'button',
+                          className: 'dm-ghost dm-btnSm',
+                          disabled: domainBusy,
+                          onClick: clearDomain,
+                        }, '清除')
+                      : null,
                   ),
-                ),
-              )
-            : null,
-
-          !lanBases.length && !publicBase
-            ? h('div', { className: 'dm-qrNone', 'data-conn': 'none', role: 'alert' },
-                h('p', { className: 'dm-qrNoneTitle' }, '无法生成连接二维码'),
-                h('p', { className: 'dm-qrNoneBody' }, '未检测到局域网地址，也未配置公网地址'),
-                h('p', { className: 'dm-sub', style: { marginTop: 8 } }, '在下方「公网域名」填写隧道地址后即可生成二维码。'),
-              )
-            : null,
-
-          // 公网域名：反代 / 隧道的对外地址。填了之后会出现在上面的地址里，
-          // 手机直接打开「域名/m/」，配对时只需要输入配对码。
-          h('div', { className: 'dm-domain' },
-            h('div', { className: 'dm-domainHead' },
-              h('span', { className: 'dm-domainLabel' }, '公网域名'),
-              h('span', { className: 'dm-domainHint' }, '可选 · 反向代理 / 隧道地址'),
-            ),
-            h('div', { className: 'dm-urlRow' },
-              h('input', {
-                className: 'dm-input',
-                value: domainDraft,
-                placeholder: 'https://example.com:45632',
-                spellCheck: false,
-                autoCapitalize: 'none',
-                autoCorrect: 'off',
-                onChange: (e) => {
-                  domainEdited.current = true
-                  setDomainDraft(e.target.value)
-                  setDomainErr('')
-                },
-                onKeyDown: (e) => {
-                  if (e.key === 'Enter') saveDomain(domainDraft.trim())
-                },
-              }),
-              h('button', {
-                type: 'button',
-                className: 'dm-btn dm-btnSm',
-                disabled: domainBusy,
-                onClick: () => saveDomain(domainDraft.trim()),
-              }, domainBusy ? '保存中…' : '保存'),
-              addrs.publicBaseCustom
-                ? h('button', {
-                    type: 'button',
-                    className: 'dm-ghost dm-btnSm',
-                    disabled: domainBusy,
-                    onClick: clearDomain,
-                  }, '清除')
-                : null,
-            ),
-            domainErr ? h('p', { className: 'dm-err' }, domainErr) : null,
+                  domainErr ? h('p', { className: 'dm-err' }, domainErr) : null,
+                )
+              : null,
           ),
         ),
 
