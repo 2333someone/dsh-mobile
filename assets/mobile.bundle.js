@@ -15364,6 +15364,13 @@ details.think-block[open] .chat-disclosure-caret {
         '.chat-proc-think-run{display:block!important;max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
         '.chat-proc-think-scroll .chat-proc-think-run+.chat-proc-think-run{display:none!important;}',
         '.chat-proc-current-text{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
+        // ── 折叠栏「第二行闪现」────────────────────────────────────────────
+        // 头行有两行：.chat-proc-label（状态词 + 用时）与 .chat-proc-current（当前步骤）。
+        // 运行中 bundle 会同时渲染两行，两行都可见就是用户看到的「突然多出一行」；
+        // 原来只靠 JS 在下一帧给第一行加 .dm-proc-dup 隐藏 —— 进聊天页首帧来不及，
+        // 于是闪一下再消失。这里改由 CSS 在样式计算阶段直接隐藏，与渲染同帧生效，
+        // 不再依赖 JS 时机；不支持的旧内核仍由 dedupeProcCurrent() 兜底。
+        '.chat-proc-head:has(.chat-proc-current) .chat-proc-label{display:none!important;}',
       ].join('');
       (document.head || document.documentElement).appendChild(style);
     }
