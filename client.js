@@ -358,7 +358,6 @@ window.__ModuleLoader__.load({
       const [err, setErr] = useState('')
       const [copied, setCopied] = useState('')
       const [confirmRevoke, setConfirmRevoke] = useState('')
-      const [now, setNow] = useState(() => Date.now())
       const [domainDraft, setDomainDraft] = useState('')
       const [domainBusy, setDomainBusy] = useState(false)
       const [domainErr, setDomainErr] = useState('')
@@ -366,7 +365,8 @@ window.__ModuleLoader__.load({
       const [selectedBase, setSelectedBase] = useState('')
       const [pickerOpen, setPickerOpen] = useState(false)
       const [remoteOpen, setRemoteOpen] = useState(false)
-      const [codeOpen, setCodeOpen] = useState(false)
+      // 手动重画二维码用：固定配对码下重画不改变内容，但保留入口以防宿主轮换码。
+      const [qrVersion, setQrVersion] = useState(0)
       const domainEdited = useRef(false)
       const confirmTimer = useRef()
       const copyTimer = useRef()
@@ -390,12 +390,6 @@ window.__ModuleLoader__.load({
         const t = setInterval(refresh, 4000)
         return () => clearInterval(t)
       }, [refresh])
-
-      // 倒计时 tick
-      useEffect(() => {
-        const t = setInterval(() => setNow(Date.now()), 1000)
-        return () => clearInterval(t)
-      }, [])
 
       useEffect(() => () => {
         clearTimeout(confirmTimer.current)
@@ -476,10 +470,8 @@ window.__ModuleLoader__.load({
       // 「清除」只在用户自己填过域名时出现；没填时 publicBase 来自 profile 配置，
       // 清掉只会回到配置值，按钮会误导。
       const hasDomainOverride = addrs.publicBaseCustom === true
-      const isFixed = !!(code && (code.fixed === true || code.expiresAt > now + 86400000))
-      const expired = code && !isFixed ? now > code.expiresAt : false
-      // 扫码即配对：二维码指向 /m/?code=<配对码>，手机打开即自动接受。
-      const pairingCode = code && !expired ? String(code.code || '') : ''
+      // 二维码内部仍用 6 位配对码拼 ?code=，但它不再作为 UI 概念出现。
+      const pairingCode = code ? String(code.code || '') : ''
       const candidates = [...lanBases, ...(publicBase ? [publicBase] : [])]
       // 默认选中规则（用户口径）：配了公网地址 → 默认公网（在家在外都能连）；
       // 没配 → 默认第一个局域网地址。用户手动切换后保持其选择。
@@ -492,6 +484,12 @@ window.__ModuleLoader__.load({
 
       const HELP_TEXT = '扫完手机没反应？说明手机与电脑不在同一网络（例如电脑有线、手机用流量）→ 点地址旁的「▾」改用公网地址。'
 
+      // 手动重画：重新取一次码（宿主可能轮换）+ 强制重绘二维码节点。
+      const regenerate = () => {
+        setQrVersion((v) => v + 1)
+        issue()
+      }
+
       const copyGlyph = copied === qrText
         ? h('span', { className: 'dm-iconGlyph' }, '✓')
         : h('span', {
@@ -500,6 +498,13 @@ window.__ModuleLoader__.load({
               __html: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"></rect><path d="M10.5 3.5H3.9A1.4 1.4 0 0 0 2.5 4.9v6.6"></path></svg>',
             },
           })
+
+      const refreshGlyph = h('span', {
+        className: 'dm-iconGlyph',
+        dangerouslySetInnerHTML: {
+          __html: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 6.4A5.4 5.4 0 1 0 13 9.9"></path><path d="M13.4 3.2v3.4h-3.4"></path></svg>',
+        },
+      })
 
       const pickerNodes = candidates.map((base) => {
         const isPublic = base === publicBase
@@ -523,6 +528,7 @@ window.__ModuleLoader__.load({
         : null
 
       const qrBoxNode = h('div', {
+        key: 'qr-' + qrVersion,
         className: 'dm-qrBoxLarge',
         'data-qr-url': qrText,
         dangerouslySetInnerHTML: { __html: qrSvg(qrText, 200) },
@@ -542,6 +548,13 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: 'dm-iconBtn',
+          'aria-label': '刷新二维码',
+          title: '刷新二维码',
+          onClick: regenerate,
+        }, refreshGlyph),
+        h('button', {
+          type: 'button',
+          className: 'dm-iconBtn',
           'aria-label': '复制链接',
           title: copied === qrText ? '已复制' : '复制链接',
           'data-copied': copied === qrText ? 'true' : 'false',
@@ -555,60 +568,25 @@ window.__ModuleLoader__.load({
             'data-selected-base': activeBase,
             'data-selected-kind': isPublicSelected ? 'public' : 'lan',
             'data-selected-reason': selectedReason,
+            'data-qr-version': String(qrVersion),
           }, qrBoxNode, addrRowNode, pickerNode)
         : h('div', { className: 'dm-qrPlaceholder', 'data-conn': 'none' },
-            h('div', { className: 'dm-qrPlaceholderBox' }, '未检测到可用地址'),
-            h('p', { className: 'dm-qrPlaceholderHint' }, '展开下方「远程连接」填写公网域名，或检查插件监听状态。'))
+            h('p', { className: 'dm-qrPlaceholderHint' }, '未检测到可用地址 · 填写公网域名后自动生成二维码'),
+            h('button', {
+              type: 'button',
+              className: 'dm-btn',
+              onClick: () => setRemoteOpen(true),
+            }, '生成二维码'))
 
       const notesNode = h('div', { className: 'dm-qrNotes' },
         h('span', { className: 'dm-qrNoteMain' }, '扫码即连，无需配对码'),
         h('span', { className: 'dm-qrHelp', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
       )
 
-      const codeBodyNode = code
-        ? h('div', null,
-            h('div', { className: 'dm-code' + (expired ? ' dm-codeExpired' : '') }, code.code),
-            h('p', { className: 'dm-count' },
-              isFixed
-                ? '固定配对码 · 长期有效'
-                : expired
-                  ? '配对码已过期，请重新生成'
-                  : h('span', null, '剩余 ', h('b', null, remaining(code.expiresAt, now))),
-            ),
-          )
-        : h('p', { className: 'dm-muted', style: { margin: '4px 0 10px' } }, '还没有配对码，点下面按钮生成。')
-
-      const codeCollapseNode = h('div', { className: 'dm-collapse' },
-        h('button', {
-          type: 'button',
-          className: 'dm-collapseHead',
-          'aria-expanded': codeOpen ? 'true' : 'false',
-          onClick: () => setCodeOpen((open) => !open),
-        },
-          h('span', null, '用配对码连接'),
-          h('span', { className: 'dm-collapseCaret' }, codeOpen ? '▴' : '▾'),
-        ),
-        codeOpen
-          ? h('div', { className: 'dm-collapseBody' },
-              codeBodyNode,
-              h('div', { className: 'dm-actions', style: { justifyContent: 'flex-start', marginTop: 8 } },
-                h('button', {
-                  type: 'button',
-                  className: code ? 'dm-ghost dm-btnSm' : 'dm-btn dm-btnSm',
-                  onClick: issue,
-                  disabled: issuing,
-                },
-                  issuing ? h('span', { className: code ? 'dm-spinGhost' : 'dm-spin' }) : null,
-                  issuing ? '生成中…' : (code ? '重新生成' : '生成配对码'),
-                ),
-              ),
-              err ? h('p', { className: 'dm-err' }, err) : null,
-            )
-          : null,
-      )
+      const errNode = err ? h('p', { className: 'dm-err' }, err) : null
 
       const remoteBodyNode = h('div', { className: 'dm-collapseBody' },
-        h('p', { className: 'dm-domainHint', style: { marginBottom: 8 } }, '公网域名 / 隧道地址（反代、frp、Cloudflare Tunnel 均可），填好后会出现在地址切换列表里'),
+        h('p', { className: 'dm-domainHint', style: { marginBottom: 8 } }, '公网域名（可选，不在同一局域网时使用）'),
         h('div', { className: 'dm-urlRow' },
           h('input', {
             className: 'dm-input',
@@ -681,6 +659,12 @@ window.__ModuleLoader__.load({
         setSelectedBase((current) => (candidates.indexOf(current) >= 0 ? current : defaultBase))
       }, [publicBase, lanBases.join('|')])
 
+      useEffect(() => {
+        // 二维码内部依赖 ?code=：状态里没有码时静默取一次；配对码不再作为
+        // UI 概念出现（宿主默认是固定码，取一次即可长期有效）。
+        if (!code && !issuing) issue()
+      }, [code, issuing])
+
       return h('div', { className: 'dm-wrap' },
         h('style', { dangerouslySetInnerHTML: { __html: CSS } }),
 
@@ -694,7 +678,7 @@ window.__ModuleLoader__.load({
           ),
           heroNode,
           notesNode,
-          codeCollapseNode,
+          errNode,
           remoteCollapseNode,
         ),
         devicesNode,
