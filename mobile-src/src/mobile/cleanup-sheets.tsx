@@ -16,7 +16,7 @@ import { Sheet } from './sheet.tsx'
 import { ConfirmDialog } from './dialog.tsx'
 import { toast } from './toast.tsx'
 import { buzz } from './display-prefs.ts'
-import { CheckIcon, ClockIcon, FolderIcon, InfoIcon, PinIcon, TrashIcon } from './icons.tsx'
+import { CheckIcon, ClockIcon, FolderIcon, InfoIcon, TrashIcon } from './icons.tsx'
 import { errorText } from './views/App.tsx'
 import {
   deleteSessionFiles, emptyTrash, formatBytes, purgeSession, purgeWorkspace, readTrash,
@@ -161,7 +161,7 @@ export function SessionActionsSheet({ session, pinned = false, onClose, onToggle
     <Sheet title={session.title || '会话操作'} onClose={onClose}>
       <div role="menu" aria-label="会话操作" className="dm-action-list">
         <ActionItem
-          icon={<PinIcon />}
+          icon={<TopIcon />}
           title={pinned ? '取消置顶' : '置顶会话'}
           onClick={onTogglePin}
           delay={0}
@@ -640,11 +640,19 @@ export function UndoBar({ message, onUndo, onExpire }: {
 function ArchiveIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 8.5h16" />
-      <path d="M6 8.5v9A1.5 1.5 0 0 0 7.5 19h9a1.5 1.5 0 0 0 1.5-1.5v-9" />
-      <path d="M4.5 4.5h15A1.5 1.5 0 0 1 21 6v.5" />
-      <path d="M3 6v.5a1.5 1.5 0 0 0 1.5 1.5" />
+      <rect x="3.5" y="4.5" width="17" height="4" rx="1.2" />
+      <path d="M5.5 8.5V17a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8.5" />
       <path d="M10 12.5h4" />
+    </svg>
+  )
+}
+
+function TopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 4h14" />
+      <path d="M12 20V8" />
+      <path d="M7.5 12.5 12 8l4.5 4.5" />
     </svg>
   )
 }
@@ -652,10 +660,9 @@ function ArchiveIcon() {
 function EyeOffIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 4.5 20 19.5" />
-      <path d="M9.9 5.4A9.7 9.7 0 0 1 12 5.2c5 0 8.8 4.4 9.7 6.2-.4.8-1.2 1.9-2.4 3" />
-      <path d="M6.2 7.4C4.4 8.7 3.1 10.4 2.4 11.4c.9 1.8 4.7 6.2 9.6 6.2 1 0 2-.2 2.9-.5" />
-      <path d="M10.4 10.9a2.1 2.1 0 0 0 2.8 2.9" />
+      <path d="M2.5 12c2.4-4.2 5.6-6.2 9.5-6.2s7.1 2 9.5 6.2c-2.4 4.2-5.6 6.2-9.5 6.2S4.9 16.2 2.5 12Z" />
+      <circle cx="12" cy="12" r="3" />
+      <path d="M4 4l16 16" />
     </svg>
   )
 }
