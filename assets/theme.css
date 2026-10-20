@@ -3040,8 +3040,12 @@ html.dm-host-page-open body {
      · 输入框高度由 field-sizing 按内容算（22 + 11*2 + 边框 2 = 46），
        不要再通过 padding 去凑高度。 */
 .chat-input {
-  padding-top: 11px !important;
-  padding-bottom: 11px !important;
+  /* 光学微调（正 = 文字下移）：盒模型居中后，不同设备的 CJK 字体在行框里的位置
+     仍有 1~2px 差异（真机华为浏览器的字形看起来比 Chrome 更靠上）。这里用变量
+     统一挪动，而不是再写死一组不对称内边距 —— 调这一个数即可。 */
+  --dm-input-nudge: 1px;
+  padding-top: calc(11px + var(--dm-input-nudge)) !important;
+  padding-bottom: calc(11px - var(--dm-input-nudge)) !important;
   line-height: 22px !important;
 }
 
