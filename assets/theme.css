@@ -167,8 +167,11 @@
       · padding-top = 分隔线到第一个元素的距离；
       · gap         = 模式卡与「新建会话」按钮之间的距离（bundle 原为 8px）。
     只加间距不动高度：按钮仍是 48px 触控高度，列表只是整体下移。
-    注意不要改 .mobile-new —— 它在配对页与错误页也被复用。 */
-.mobile-create {
+    注意不要改 .mobile-new —— 它在配对页与错误页也被复用。
+   另：这条只对**顶部**那份 .mobile-create 生效。按钮后来被移到了列表下方
+   （.mobile-create-footer），它的 18px 内边距就把「新建会话」上面的空白顶得很空 ——
+   用户反馈「新建会话按钮上面的空白有点多」。footer 用自己的 8px 内边距。 */
+.mobile-create:not(.mobile-create-footer) {
   padding-top: 18px !important;
   gap: 12px !important;
 }
@@ -1676,7 +1679,8 @@ label[for="mobile-pair-server"],
    描述行高 1.4×sm），左右外边距/下外边距也与卡片一致。卡片插入后 :has()
    立即不再匹配、占位消失，两者几何完全相同，所以不会再推挤下方内容。
    只占位，不隐藏卡片，也不影响没有预设时 bundle 自己的「不渲染卡片」行为。 */
-.mobile-create:not(:has(> .mobile-presetCard))::before {
+/* 同上：占位块只服务顶部那份（模式卡在按钮上方）；footer 里没有卡片，不该再垫一块。 */
+.mobile-create:not(.mobile-create-footer):not(:has(> .mobile-presetCard))::before {
   content: "";
   display: block;
   block-size: calc(18px + 1.5 * var(--text-base, 15px) + 2px + 1.4 * var(--text-sm, 12px));
