@@ -4506,6 +4506,92 @@ button.settings-row:focus-visible {
   transform: none;
 }
 
+/* ── 提问记录（聊天历史里的「提问 · N/M 已回答」）─────────────────────
+   桌面端那张卡的手机版：折叠时一条计数，展开逐条列问答。
+   不跟「显示工具调用」开关走 —— 它是对话内容，不是过程噪音。 */
+
+.chat-qa {
+  margin: 8px 0 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  overflow: hidden;
+}
+
+.chat-qa-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-qa-head-pending {
+  color: var(--accent);
+}
+
+.chat-qa-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chat-qa-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-qa-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.chat-qa-chevron-open {
+  transform: rotate(90deg);
+}
+
+.chat-qa-list {
+  margin: 0;
+  padding: 0 12px 10px;
+  list-style: none;
+}
+
+.chat-qa-item + .chat-qa-item {
+  margin-top: 8px;
+}
+
+.chat-qa-q {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.chat-qa-a {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
 /* ── composer toolbar pills ──────────────────────────────────────────── */
 
 /* One row, two zones: the icon pills (model/permission) on the left, the

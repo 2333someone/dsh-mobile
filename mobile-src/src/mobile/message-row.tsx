@@ -636,6 +636,12 @@ function ProcessRows({ message, model, showToolCalls, focusedQuery, sessionId }:
       continue
     }
     if (row.kind === 'tool') {
+      // 提问不走工具行：它有自己的「提问 · N/M 已回答」记录（QuestionRecords），
+      // 原始行只会在记录上方再放一遍 JSON 参数，纯噪音（桌面同样只留卡）。
+      if (row.tool.name === 'ask_user_question' && row.tool.question !== undefined) {
+        flush()
+        continue
+      }
       // 工具行跟着开关走；diff 卡不跟 —— 卡是这一轮的产出（改了哪些文件），
       // 关掉"显示工具调用"是想少看过程噪音，不是想看不到改动。
       if (showToolCalls) nodes.push(<ToolStep key={row.key} tool={row.tool} />)
@@ -759,11 +765,26 @@ function AssistantBody({ message, showToolCalls, forceOpen, focusedQuery, sessio
   // 有过程行，或者至少有一枚回合时钟（纯文本回复也要显示"本轮用了 X"）。
   // 注意：这个开关只挡工具行，不挡整组 —— 关掉工具调用不该连带丢掉思考与用时。
   const visibleRows = visibleRowCount(model, showToolCalls)
-  const showGroup = visibleRows > 0 || message.durationMs !== undefined || message.turnStartAt !== undefined
+  // 提问记录：ask_user_question 的问答历史（不跟「显示工具调用」开关，它是对话内容）
+  // 同一 callId 只留一份（合并/回放可能给出重复条目），避免记录被算两遍。
+  const questionTools = (() => {
+    const seen = new Set<string>()
+    const out: ToolCallInfo[] = []
+    for (const tool of message.tools ?? []) {
+      if (tool.question === undefined || seen.has(tool.callId)) continue
+      seen.add(tool.callId)
+      out.push(tool)
+    }
+    return out
+  })()
+  // 一轮里只有提问时，过程组没有行可显示：留着只剩「思考中 / 未改动文件」的空壳，纯噪音。
+  const questionOnly = visibleRows === 0 && questionTools.length > 0
+  const showGroup = !questionOnly && (visibleRows > 0 || message.durationMs !== undefined || message.turnStartAt !== undefined)
   const answer = model.answer
   return (
     <>
       {showGroup && <ProcessGroup message={message} model={model} showToolCalls={showToolCalls} focusedQuery={focusedQuery} sessionId={sessionId} clockOffsetMs={clockOffsetMs} liveTurnStartAt={liveTurnStartAt} liveTurn={liveTurn} />}
+      {questionTools.length > 0 && <QuestionRecords tools={questionTools} />}
       {answer !== undefined && answer !== '' && (model.answerSeq === undefined ? (
         <MarkdownText text={answer} pending={message.pending === true} forceOpen={forceOpen} highlightQuery={focusedQuery} sessionId={sessionId} />
       ) : (
@@ -772,6 +793,54 @@ function AssistantBody({ message, showToolCalls, forceOpen, focusedQuery, sessio
         </div>
       ))}
     </>
+  )
+}
+
+/**
+ * 聊天历史里的「提问 · N/M 已回答」记录。
+ *
+ * 桌面端由 `dsh-client-ui-user-questions` 渲染成一张卡（读宿主投影）。手机端没有那条
+ * 渲染路径，而本部署的 `userQuestions` 投影并不产出 settled，所以这里直接读
+ * `messages.ts` 从 tool/call + tool/result 事件折出来的记录：折叠时只显示计数，
+ * 展开才逐条列出「问了什么 / 选了什么」。
+ */
+function QuestionRecords({ tools }: { tools: ToolCallInfo[] }) {
+  const [open, setOpen] = useState(false)
+  const total = tools.reduce((sum, tool) => sum + (tool.question?.total ?? 0), 0)
+  const answered = tools.reduce((sum, tool) => sum + (tool.question?.answered ?? 0), 0)
+  if (total === 0) return null
+  const pending = total - answered
+  const items = tools.flatMap(tool => tool.question?.items ?? [])
+  return (
+    <div className="chat-qa">
+      <button
+        type="button"
+        className={`chat-qa-head${pending > 0 ? ' chat-qa-head-pending' : ''}`}
+        onClick={() => setOpen(value => !value)}
+        aria-expanded={open}
+        aria-label={`提问 · ${answered}/${total} ${pending > 0 ? '待回答' : '已回答'}`}
+      >
+        <span className="chat-qa-icon" aria-hidden>?</span>
+        <span className="chat-qa-text">
+          提问 · {answered}/{total} {pending > 0 ? '待回答' : '已回答'}
+        </span>
+        <span className={`chat-qa-chevron${open ? ' chat-qa-chevron-open' : ''}`} aria-hidden>›</span>
+      </button>
+      {open && (
+        <ul className="chat-qa-list">
+          {items.map((item, index) => (
+            <li key={`${item.id}-${String(index)}`} className="chat-qa-item">
+              <div className="chat-qa-q">{item.header === undefined ? item.question : `${item.header}：${item.question}`}</div>
+              <div className="chat-qa-a">
+                {item.selected.length > 0
+                  ? item.selected.join('、')
+                  : (item.custom !== undefined ? item.custom : '未回答')}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 

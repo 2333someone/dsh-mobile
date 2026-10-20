@@ -197,6 +197,30 @@ export interface ToolCallInfo {
    * the call still open — an interrupted turn, exactly like the desktop row.
    */
   readonly state?: 'running' | 'ok' | 'error' | 'stopped'
+  /**
+   * 这一调用如果是 `ask_user_question`，把「问了什么、答了什么」折出来。
+   * 手机端用它渲染聊天历史里的「提问 · N/M 已回答」记录（与桌面一致）：
+   * 桌面那张卡读的是宿主投影，但投影在本部署里并不产出 settled，
+   * 事件里的 tool/call + tool/result 才是可靠来源。
+   */
+  readonly question?: QuestionRecord
+}
+
+/** 一批提问里的一条：问题、选项与用户的选择。 */
+export interface QuestionRecordItem {
+  readonly id: string
+  readonly header?: string
+  readonly question: string
+  readonly options?: ReadonlyArray<string>
+  readonly selected: ReadonlyArray<string>
+  readonly custom?: string
+}
+
+/** 一次 `ask_user_question` 调用的问答记录。 */
+export interface QuestionRecord {
+  readonly total: number
+  readonly answered: number
+  readonly items: ReadonlyArray<QuestionRecordItem>
 }
 
 /**
@@ -1102,10 +1126,11 @@ function applyToolCall(state: FoldState, event: WireEvent): void {
   const tools = target.tools ?? []
   const existingIndex = tools.findIndex(tool => tool.callId === callId)
   const isNewCall = existingIndex === -1
+  const question = name === ASK_USER_QUESTION_TOOL ? questionRecordOf(args) : undefined
   const nextTools: ToolCallInfo[] = isNewCall
-    ? [...tools, { callId, name, state: 'running', ...(args !== undefined ? { arguments: args } : {}), ...(view !== undefined ? { view } : {}) }]
+    ? [...tools, { callId, name, state: 'running', ...(args !== undefined ? { arguments: args } : {}), ...(view !== undefined ? { view } : {}), ...(question !== undefined ? { question } : {}) }]
     : tools.map((tool, index) => index === existingIndex
-      ? { ...tool, ...(args !== undefined ? { arguments: args } : {}), ...(view !== undefined ? { view } : {}) }
+      ? { ...tool, ...(args !== undefined ? { arguments: args } : {}), ...(view !== undefined ? { view } : {}), ...(question !== undefined && tool.question === undefined ? { question } : {}) }
       : tool)
   const next: RenderMessage = {
     ...target,
@@ -1125,6 +1150,85 @@ function applyToolCall(state: FoldState, event: WireEvent): void {
  * call-time view on the matching tool entry — the applied hunk diff wins
  * over the args-derived call diff (desktop parity).
  */
+const ASK_USER_QUESTION_TOOL = 'ask_user_question'
+
+/**
+ * 从 `tool/call` 的 arguments JSON 里读出提问批次；解析失败返回 undefined
+ * （宁可没有记录，也不要在聊天里留一条空卡）。
+ */
+function questionRecordOf(args: string | undefined): QuestionRecord | undefined {
+  if (args === undefined || args === '') return undefined
+  let parsed: unknown
+  try { parsed = JSON.parse(args) } catch { return undefined }
+  if (!isRecord(parsed)) return undefined
+  const rawQuestions = parsed['questions']
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return undefined
+  const items: QuestionRecordItem[] = []
+  for (const raw of rawQuestions) {
+    if (!isRecord(raw)) continue
+    const id = pickString(raw['id'])
+    const question = pickString(raw['question'])
+    if (id === undefined || question === undefined) continue
+    const header = pickString(raw['header'])
+    const rawOptions = raw['options']
+    const options = Array.isArray(rawOptions)
+      ? rawOptions
+        .map(option => (isRecord(option) ? pickString(option['label']) : undefined))
+        .filter((label): label is string => label !== undefined)
+      : []
+    items.push({
+      id,
+      question,
+      selected: [],
+      ...(header !== undefined ? { header } : {}),
+      ...(options.length > 0 ? { options } : {}),
+    })
+  }
+  if (items.length === 0) return undefined
+  return { total: items.length, answered: 0, items }
+}
+
+/**
+ * 用 `tool/result` 的 message.content（`{"answers":[{"id","selected","custom"}]}`）
+ * 补上每条问题的选择；解析不出来就保持「未答」，由状态词兜底。
+ */
+function answerQuestionRecord(record: QuestionRecord, message: Record<string, unknown>): QuestionRecord | undefined {
+  const content = message['content']
+  let payload: unknown
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!isRecord(block)) continue
+      const text = pickString(block['text'])
+      if (text === undefined) continue
+      try { payload = JSON.parse(text) } catch { continue }
+      break
+    }
+  }
+  if (!isRecord(payload)) return undefined
+  const rawAnswers = payload['answers']
+  if (!Array.isArray(rawAnswers)) return undefined
+  const byId = new Map<string, { selected: string[]; custom?: string }>()
+  for (const raw of rawAnswers) {
+    if (!isRecord(raw)) continue
+    const id = pickString(raw['id'])
+    if (id === undefined) continue
+    const rawSelected = raw['selected']
+    const selected = Array.isArray(rawSelected)
+      ? rawSelected.map(value => String(value)).filter(value => value !== '')
+      : []
+    const custom = pickString(raw['custom'])
+    byId.set(id, { selected, ...(custom !== undefined ? { custom } : {}) })
+  }
+  let answered = 0
+  const items = record.items.map((item) => {
+    const hit = byId.get(item.id)
+    if (hit === undefined) return item
+    if (hit.selected.length > 0 || hit.custom !== undefined) answered += 1
+    return { ...item, selected: hit.selected, ...(hit.custom !== undefined ? { custom: hit.custom } : {}) }
+  })
+  return { total: record.total, answered, items }
+}
+
 function applyToolResult(state: FoldState, event: WireEvent): void {
   const data = isRecord(event.data) ? event.data : {}
   const message = isRecord(data['message']) ? data['message'] : {}
@@ -1139,8 +1243,11 @@ function applyToolResult(state: FoldState, event: WireEvent): void {
     if (row.kind !== 'assistant' || row.tools === undefined) continue
     const index = row.tools.findIndex(tool => tool.callId === callId)
     if (index === -1) continue
+    const answeredQuestion = row.tools[index]?.question !== undefined
+      ? answerQuestionRecord(row.tools[index]!.question!, message)
+      : undefined
     const nextTools = row.tools.map((tool, i) => i === index
-      ? { ...tool, state: settled, ...(view !== undefined ? { view } : {}) }
+      ? { ...tool, state: settled, ...(view !== undefined ? { view } : {}), ...(answeredQuestion !== undefined ? { question: answeredQuestion } : {}) }
       : tool)
     const next: RenderMessage = { ...row, tools: nextTools, seq: event.seq, time: event.time }
     replaceMessage(state, row, next)

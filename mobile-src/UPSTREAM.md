@@ -34,6 +34,14 @@ byte-identical files (`sha256sum ../assets/mobile.bundle.js`).
    page-local default. Styled by `assets/theme.css` (`.dm-sendmode-select`).
 2. **Balance label** (`SettingsView.tsx`, usage card): `账户余额` → `充值余额`
    to match the wording used on the desktop side.
+3. **Question record in chat history** (`messages.ts`, `message-row.tsx`,
+   `process-rows.ts`, `mobile-styles.ts`): `ask_user_question` calls are folded into a
+   `QuestionRecord` (question text + chosen options) from the `tool/call` and
+   `tool/result` events and rendered inline as a compact 「提问 · N/M 已回答」 card
+   (expandable). The raw tool row is suppressed for that tool, and a turn whose only
+   process content was the question no longer shows an empty process card. Desktop parity:
+   the desktop renders the same record from its own projection; this deployment's
+   `userQuestions` projection stays empty, so the phone folds the events instead.
 
 Everything else is upstream v1.6.0 as published. Host-side behaviours that used to be
 patched into the shipped bundle by hand now live where they belong:

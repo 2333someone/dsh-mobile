@@ -205,7 +205,16 @@ function answerPartOf(
  */
 export function processModel(message: RenderMessage, liveTurn?: number): ProcessModel {
   const flow = message.flow ?? []
-  const toolsById = new Map((message.tools ?? []).map(tool => [tool.callId, tool] as const))
+  // 同一 callId 可能在合并后的 tools 里出现两份（多步 coalesce 会拼接各步的数组，
+  // 历史回放有时也会补一份不带扩展字段的）。带问答记录的那份优先，否则过程行会
+  // 拿到没有 question 的副本，导致本该隐藏的 ask_user_question 原始行又冒出来。
+  const toolsById = new Map<string, ToolCallInfo>()
+  for (const tool of message.tools ?? []) {
+    const previous = toolsById.get(tool.callId)
+    if (previous === undefined || (previous.question === undefined && tool.question !== undefined)) {
+      toolsById.set(tool.callId, tool)
+    }
+  }
 
   // 多步（coalesce 过的回合）：最后一步的文本才是答案，前面各步的文本是过程叙述。
   const steps = message.stepSeqs
@@ -270,7 +279,7 @@ export function processModel(message: RenderMessage, liveTurn?: number): Process
       rows.push({ kind: 'reasoning', key: `r${i}`, text: part.text, lines: lineCount(part.text) })
     } else if (part.kind === 'tool') {
       const tool = toolsById.get(part.callId)
-      if (tool === undefined) continue
+      if (tool === undefined || isQuestionRecordTool(tool)) continue
       toolCount += 1
       rows.push({ kind: 'tool', key: `t${i}`, tool })
     } else if (!skipText && part.text.trim() !== '') {
@@ -284,8 +293,18 @@ export function processModel(message: RenderMessage, liveTurn?: number): Process
   for (const part of flow) {
     if (part.kind === 'tool') seenCalls.add(part.callId)
   }
+  // 同一 callId 可能有多份（合并/回放），这里同样先去重：带问答记录的那份优先，
+  // 否则会给 ask_user_question 补出一行没有 record 的工具行，空壳过程卡又回来了。
+  const extras = new Map<string, ToolCallInfo>()
   for (const item of message.tools ?? []) {
+    const previous = extras.get(item.callId)
+    if (previous === undefined || (previous.question === undefined && item.question !== undefined)) {
+      extras.set(item.callId, item)
+    }
+  }
+  for (const item of extras.values()) {
     if (seenCalls.has(item.callId)) continue
+    if (isQuestionRecordTool(item)) continue
     toolCount += 1
     rows.push({ kind: 'tool', key: `t-${item.callId}`, tool: item })
   }
@@ -338,6 +357,15 @@ export function processModel(message: RenderMessage, liveTurn?: number): Process
  * 工具行不渲染，但有 diff 视图的卡片仍然渲染，所以卡片也要算进去。
  */
 /** 折叠头第二行：此刻进行到哪一步。运行中看最新事件，结束后报最后一步做了什么。 */
+/**
+ * `ask_user_question` 不参与过程行：它已经在消息体里渲染成「提问 · N/M 已回答」记录，
+ * 再留一行过程会让折叠头显示「工具 · ask_user_question · {json}」（纯噪音），
+ * 也会把这一步算进「N 步」。
+ */
+function isQuestionRecordTool(tool: ToolCallInfo): boolean {
+  return tool.name === 'ask_user_question' && tool.question !== undefined
+}
+
 function currentStepOf(message: RenderMessage, rows: readonly ProcessRow[], liveTurn?: number): ProcessCurrent | undefined {
   // 复用同一个"还在跑"判据（含活跃轮次）：pending 已落下但还有工具在跑、或这一行
   // 就属于当前活跃轮次的行同样是运行中，第二行必须走"进行中"分支（末尾是思考报

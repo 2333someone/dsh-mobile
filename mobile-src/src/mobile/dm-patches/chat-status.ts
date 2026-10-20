@@ -465,11 +465,13 @@ export const CHAT_STATUS_HTML = `<script>
             es.addEventListener('message', function (ev) {
               var data = ev && ev.data;
               if (typeof data !== 'string') return;
-              if (data.indexOf('turn/end') < 0 && data.indexOf('turn/start') < 0) return;
               var msg;
               try { msg = JSON.parse(data); } catch (e) { return; }
-              var event = msg && msg.event;
-              if (!event || msg.type !== 'session/event') return;
+              // mux 帧是 {type:'server-request', payload: frame} 信封；兼容直接帧。
+              var frame = msg && msg.type === 'server-request' ? msg.payload : msg;
+              if (!frame || typeof frame !== 'object') return;
+              if (frame.type !== 'session/event' || !frame.event) return;
+              var event = frame.event;
               if (event.type === 'turn/start') {
                 turnStart = Date.now();
                 if (TURN_ENDED) { TURN_ENDED = false; schedule(); }
