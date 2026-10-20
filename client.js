@@ -25,180 +25,184 @@ window.__ModuleLoader__.load({
     const CSS = `
 .dm-wrap { display: flex; flex-direction: column; gap: 16px; padding: 4px 2px; }
 .dm-card {
-  border: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
-  background: var(--dsw-alias-bg-layer-1, #f5f6f8);
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
   border-radius: 16px; padding: 18px;
   animation: dm-in .34s cubic-bezier(.2,.75,.25,1) both;
 }
 .dm-card:nth-child(2) { animation-delay: .06s; }
 .dm-card:nth-child(3) { animation-delay: .12s; }
-.dm-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary, #1b1c20); }
-.dm-sub { margin: 6px 0 0; font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dm-sub { margin: 6px 0 0; font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .dm-urlRow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .dm-url {
   flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px; color: #4D6BFE; word-break: break-all;
+  font-size: 12.5px; color: var(--dsw-alias-label-primary); word-break: break-all;
 }
 .dm-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  border: 1px solid #4D6BFE; border-radius: 10px; padding: 9px 16px;
+  border: 1px solid var(--dsw-alias-label-primary); border-radius: 10px; padding: 9px 16px;
   font-size: 13px; font-weight: 600; cursor: pointer;
-  background: #4D6BFE; color: #fff;
+  background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-layer-1);
   transition: background-color .16s ease, transform .09s ease, box-shadow .16s ease, opacity .16s ease;
 }
-.dm-btn:hover { background: #5f7bff; border-color: #5f7bff; box-shadow: 0 4px 14px rgba(77,107,254,.28); }
+.dm-btn:hover { background: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-label-primary); box-shadow: 0 4px 14px var(--dsw-alias-bg-layer-1); }
 .dm-btn:active { transform: scale(.97); }
-.dm-btn:focus-visible { outline: 2px solid #4D6BFE; outline-offset: 2px; }
+.dm-btn:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
 .dm-btn[disabled] { opacity: .6; cursor: default; transform: none; box-shadow: none; }
 .dm-ghost {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  border: 1px solid var(--dsw-alias-border-l2, #d0d2da); border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px;
   padding: 9px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
-  background: transparent; color: var(--dsw-alias-label-primary, #1b1c20);
+  background: transparent; color: var(--dsw-alias-label-primary);
   transition: background-color .16s ease, border-color .16s ease, transform .09s ease;
 }
-.dm-ghost:hover { background: rgba(127,127,127,.08); }
+.dm-ghost:hover { background: var(--dsw-alias-bg-layer-1); }
 .dm-ghost:active { transform: scale(.97); }
-.dm-ghost:focus-visible { outline: 2px solid #4D6BFE; outline-offset: 2px; }
+.dm-ghost:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
 .dm-danger {
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid #e5484d; border-radius: 10px; padding: 7px 12px;
-  font-size: 12.5px; font-weight: 500; cursor: pointer; background: transparent; color: #e5484d;
+  border: 1px solid var(--dsw-alias-state-error-primary); border-radius: 10px; padding: 7px 12px;
+  font-size: 12.5px; font-weight: 500; cursor: pointer; background: transparent; color: var(--dsw-alias-state-error-primary);
   transition: background-color .16s ease, color .16s ease, transform .09s ease;
 }
-.dm-danger:hover { background: rgba(229,72,77,.1); }
+.dm-danger:hover { background: var(--dsw-alias-bg-layer-1); }
 .dm-danger:active { transform: scale(.96); }
-.dm-danger[data-confirm="true"] { background: #e5484d; color: #fff; }
+.dm-danger[data-confirm="true"] { background: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-bg-layer-1); }
 .dm-copy {
-  flex: none; border: 1px solid var(--dsw-alias-border-l2, #d0d2da); background: transparent;
-  color: var(--dsw-alias-label-secondary, #6b6e78); border-radius: 8px; padding: 5px 10px;
+  flex: none; border: 1px solid var(--dsw-alias-border-l2); background: transparent;
+  color: var(--dsw-alias-label-secondary); border-radius: 8px; padding: 5px 10px;
   font-size: 11.5px; cursor: pointer; transition: background-color .15s, color .15s, transform .09s;
 }
-.dm-copy:hover { background: rgba(127,127,127,.1); }
+.dm-copy:hover { background: var(--dsw-alias-bg-layer-1); }
 .dm-copy:active { transform: scale(.95); }
-.dm-copy[data-copied="true"] { border-color: #18a058; color: #18a058; }
+.dm-copy[data-copied="true"] { border-color: var(--dsw-alias-label-primary); color: var(--dsw-alias-label-primary); }
 .dm-code {
   margin: 8px 0 2px; text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 30px; font-weight: 700; letter-spacing: 6px; color: #4D6BFE;
+  font-size: 30px; font-weight: 700; letter-spacing: 6px; color: var(--dsw-alias-label-primary);
   animation: dm-pop .4s cubic-bezier(.2,.8,.25,1.1) both;
 }
 .dm-codeExpired { opacity: .45; text-decoration: line-through; }
-.dm-count { text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-count b { color: #4D6BFE; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dm-count { text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dm-count b { color: var(--dsw-alias-label-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
 .dm-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 11px 0; border-top: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
+  padding: 11px 0; border-top: 1px solid var(--dsw-alias-border-l1);
   animation: dm-in .28s ease both;
 }
 .dm-row:first-of-type { border-top: 0; }
-.dm-name { font-size: 13.5px; font-weight: 500; color: var(--dsw-alias-label-primary, #1b1c20); }
-.dm-detail { font-size: 12px; color: var(--dsw-alias-label-secondary, #6b6e78); margin-top: 2px; }
-.dm-muted { color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 13px; }
-.dm-err { color: var(--dsw-alias-state-error-primary, #e5484d); font-size: 12.5px; margin-top: 10px; }
-.dm-domain { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--dsw-alias-border-l2, #d0d2da); }
+.dm-name { font-size: 13.5px; font-weight: 500; color: var(--dsw-alias-label-primary); }
+.dm-detail { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
+.dm-muted { color: var(--dsw-alias-label-secondary); font-size: 13px; }
+.dm-err { color: var(--dsw-alias-state-error-primary); font-size: 12.5px; margin-top: 10px; }
+.dm-domain { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--dsw-alias-border-l2); }
 .dm-domainHead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.dm-domainLabel { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary, #1b1c20); }
-.dm-domainHint { font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
+.dm-domainLabel { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dm-domainHint { font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
 .dm-input {
   flex: 1; min-width: 0; height: 34px; padding: 0 10px; border-radius: 8px;
-  border: 1px solid var(--dsw-alias-border-l2, #d0d2da); background: transparent;
-  color: var(--dsw-alias-label-primary, #1b1c20); font-size: 12.5px;
+  border: 1px solid var(--dsw-alias-border-l2); background: transparent;
+  color: var(--dsw-alias-label-primary); font-size: 12.5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.dm-input::placeholder { color: var(--dsw-alias-label-secondary, #9aa0ad); }
-.dm-input:focus { outline: none; border-color: #4D6BFE; box-shadow: 0 0 0 2px rgba(77,107,254,.16); }
+.dm-input::placeholder { color: var(--dsw-alias-label-secondary); }
+.dm-input:focus { outline: none; border-color: var(--dsw-alias-label-primary); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); }
 .dm-btnSm { padding: 8px 14px; font-size: 12.5px; }
 .dm-actions { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; }
 .dm-spin {
-  width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4);
-  border-top-color: #fff; border-radius: 50%;
+  width: 14px; height: 14px; border: 2px solid var(--dsw-alias-bg-layer-1);
+  border-top-color: var(--dsw-alias-bg-layer-1); border-radius: 50%;
   animation: dm-rot .8s linear infinite;
 }
 .dm-spinGhost {
-  width: 14px; height: 14px; border: 2px solid rgba(77,107,254,.25);
-  border-top-color: #4D6BFE; border-radius: 50%;
+  width: 14px; height: 14px; border: 2px solid var(--dsw-alias-bg-layer-1);
+  border-top-color: var(--dsw-alias-label-primary); border-radius: 50%;
   animation: dm-rot .8s linear infinite;
 }
-.dm-live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-liveDot { width: 7px; height: 7px; border-radius: 50%; background: #18a058; box-shadow: 0 0 0 0 rgba(24,160,88,.45); animation: dm-pulse 2s infinite; }
-.dm-liveDotOff { background: #b8bcc6; animation: none; }
+.dm-live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
+.dm-liveDot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-label-primary); box-shadow: 0 0 0 0 var(--dsw-alias-bg-layer-1); animation: dm-pulse 2s infinite; }
+.dm-liveDotOff { background: var(--dsw-alias-label-secondary); animation: none; }
 /* ── 连接二维码：单码 + 地址切换器（与设置卡片同一套 token/圆角/间距）── */
 .dm-cardHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 /* 二维码卡：主视觉只有一张码、一行地址、一行提示、两条折叠备用路径 */
 /* 引导式两步：① 选择网络（radio 列表） ② 扫码连接（140–150px 小码） */
-.dm-headRight { display: inline-flex; align-items: center; gap: 8px; }
+/* 连接向导：只用 DSH 主题 token（无自定义配色 / 阴影 / 装饰） */
 .dm-help {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 16px; height: 16px; border-radius: 50%;
-  border: 1px solid var(--dsw-alias-label-secondary, #9aa0ad);
-  color: var(--dsw-alias-label-secondary, #6b6e78);
-  font-size: 10.5px; line-height: 1; cursor: help;
+  border: 0; background: transparent; padding: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px; line-height: 1; cursor: help;
 }
-.dm-stepBlock { margin-top: 10px; }
-.dm-step { display: flex; align-items: center; gap: 7px; }
-.dm-stepNo {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 17px; height: 17px; border-radius: 50%;
-  background: rgba(77,107,254,.12); color: #4D6BFE;
-  font-size: 10.5px; font-weight: 700; line-height: 1;
-}
-.dm-stepLabel { font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-primary, #1b1c20); }
-.dm-netList { list-style: none; margin: 6px 0 0; padding: 0; }
+.dm-page { margin-top: 8px; }
+.dm-stepText { margin: 0 0 6px; font-size: 11.5px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
+.dm-pageTitle { margin: 0 0 8px; font-size: 13px; font-weight: 600; line-height: 19px; color: var(--dsw-alias-label-primary); }
+.dm-netList { list-style: none; margin: 0; padding: 0; }
+.dm-netItem + .dm-netItem { border-top: 1px solid var(--dsw-alias-border-l1); }
 .dm-netRow {
-  display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 6px 8px; border: 0; border-radius: 9px; background: transparent;
-  cursor: pointer; text-align: left; color: inherit; font: inherit;
-  transition: background-color .15s ease;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 2px; cursor: pointer;
+  font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-primary);
 }
-.dm-netRow:hover { background: rgba(127,127,127,.07); }
-.dm-netRowActive { background: rgba(77,107,254,.09); }
-.dm-netRowMuted { color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-radio {
-  flex: none; width: 13px; height: 13px; border-radius: 50%;
-  border: 1.5px solid var(--dsw-alias-label-secondary, #9aa0ad); box-sizing: border-box;
+.dm-netRowUnset { color: var(--dsw-alias-label-secondary); }
+.dm-netRadio { flex: none; margin: 0; }
+.dm-netLabel { flex: none; font-weight: 500; }
+.dm-netAddr {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; color: var(--dsw-alias-label-secondary);
 }
-.dm-radioOn { border-color: #4D6BFE; box-shadow: inset 0 0 0 3px #fff, inset 0 0 0 8px #4D6BFE; }
-.dm-netLabel { flex: none; font-size: 12.5px; font-weight: 500; }
-.dm-netAddr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-netUnset { flex: 1; min-width: 0; font-size: 11.5px; color: var(--dsw-alias-label-secondary, #9aa0ad); }
-.dm-netChev { flex: none; color: var(--dsw-alias-label-secondary, #9aa0ad); font-size: 14px; line-height: 1; }
-.dm-netEdit { flex: none; border: 0; background: transparent; padding: 0 2px; color: #4D6BFE; font-size: 11.5px; cursor: pointer; }
-.dm-netEdit:hover { text-decoration: underline; }
-.dm-scanRow { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
-.dm-scanRowEmpty { min-height: 96px; }
-.dm-scanHint { margin: 0; font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary, #6b6e78); }
-.dm-qrBoxSmall {
-  position: relative; flex: none; display: grid; place-items: center;
-  padding: 6px; border-radius: 12px; background: #fff;
-  border: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
-  box-shadow: 0 1px 3px rgba(16,24,40,.08);
+.dm-netUnsetText { flex: 1; min-width: 0; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
+.dm-netEdit, .dm-netOpen {
+  flex: none; border: 0; background: transparent; padding: 0 2px;
+  color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer;
 }
-.dm-qrBoxSmall svg { display: block; }
-.dm-qrMiniIcons { position: absolute; right: 4px; bottom: 4px; display: flex; gap: 3px; }
-.dm-qrMini {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0; border-radius: 7px;
-  border: 1px solid var(--dsw-alias-border-l1, #e6e7ec);
-  background: rgba(255,255,255,.94); color: var(--dsw-alias-label-secondary, #6b6e78);
-  cursor: pointer; transition: color .15s ease, border-color .15s ease;
+.dm-netEdit { text-decoration: underline; }
+.dm-remoteForm { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.dm-remoteHint { margin: 0 0 6px; font-size: 11.5px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
+.dm-remoteRow { display: flex; align-items: center; gap: 8px; }
+.dm-input {
+  flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2); background: transparent;
+  color: var(--dsw-alias-label-primary); font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.dm-qrMini:hover { color: var(--dsw-alias-label-primary, #1b1c20); }
-.dm-qrMini[data-copied="true"] { color: #18a058; border-color: rgba(24,160,88,.45); }
-.dm-iconGlyph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; }
-.dm-remote { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--dsw-alias-border-l2, #d0d2da); }
-.dm-remoteLink { margin: 10px 0 0; }
-.dm-remoteLinkBtn { border: 0; background: transparent; padding: 0; color: #4D6BFE; font-size: 11.5px; cursor: pointer; }
-.dm-devicesOneLine { margin: 12px 2px 0; font-size: 12px; color: var(--dsw-alias-label-secondary, #8a8f99); }
-.dm-cardTight { padding: 14px 16px; }
-.dm-collapse { margin-top: 14px; border-top: 1px dashed var(--dsw-alias-border-l2, #d0d2da); padding-top: 10px; }
-.dm-collapseHead { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 0; border: 0; background: transparent; cursor: pointer; color: var(--dsw-alias-label-secondary, #6b6e78); font-size: 12.5px; font-weight: 500; }
+.dm-input:focus { outline: none; border-color: var(--dsw-alias-border-l2); }
+.dm-stepBtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-primary);
+  font-size: 12.5px; font-weight: 500; line-height: 18px; cursor: pointer;
+}
+.dm-stepBtn:hover { background: var(--dsw-alias-bg-layer-1); }
+.dm-stepBtn:disabled { opacity: 0.55; cursor: default; }
+.dm-stepBtnPrimary { font-weight: 600; }
+.dm-pageActions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.dm-pageTools { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.dm-toolBtn {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 0; background: transparent; padding: 0;
+  color: var(--dsw-alias-label-secondary); font-size: 11.5px; line-height: 16px; cursor: pointer;
+}
+.dm-toolGlyph { display: inline-flex; align-items: center; justify-content: center; }
+.dm-qrCard {
+  display: inline-grid; place-items: center; padding: 8px;
+  border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1);
+  /* 二维码白底是扫码必需（黑白对比），不属于面板配色 */
+  background: #ffffff;
+}
+.dm-qrCard svg { display: block; }
+.dm-scanHint { margin: 8px 0 0; font-size: 12px; line-height: 17px; color: var(--dsw-alias-label-secondary); }
+.dm-summaryLine { margin: 0; font-size: 12.5px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.dm-devicesOneLine { margin: 10px 2px 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.dm-cardTight { padding: 12px 16px; }
+.dm-collapse { margin-top: 14px; border-top: 1px dashed var(--dsw-alias-border-l2); padding-top: 10px; }
+.dm-collapseHead { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 0; border: 0; background: transparent; cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 12.5px; font-weight: 500; }
 .dm-collapseCaret { font-size: 12px; }
 .dm-collapseBody { padding-top: 10px; }
 @keyframes dm-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes dm-pop { 0% { opacity: 0; transform: scale(.86); } 62% { transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
 @keyframes dm-rot { to { transform: rotate(360deg); } }
-@keyframes dm-pulse { 0% { box-shadow: 0 0 0 0 rgba(24,160,88,.45); } 70% { box-shadow: 0 0 0 6px rgba(24,160,88,0); } 100% { box-shadow: 0 0 0 0 rgba(24,160,88,0); } }
+@keyframes dm-pulse { 0% { box-shadow: 0 0 0 0 var(--dsw-alias-bg-layer-1); } 70% { box-shadow: 0 0 0 6px var(--dsw-alias-bg-layer-1); } 100% { box-shadow: 0 0 0 0 var(--dsw-alias-bg-layer-1); } }
 @media (prefers-reduced-motion: reduce) {
   .dm-card, .dm-row, .dm-code { animation: none !important; }
   .dm-btn, .dm-ghost, .dm-danger, .dm-copy { transition: none !important; }
@@ -394,7 +398,7 @@ window.__ModuleLoader__.load({
       const [domainErr, setDomainErr] = useState('')
       // 连接二维码：当前选中的地址 + 切换面板 + 「远程连接（可选）」折叠区
       const [selectedBase, setSelectedBase] = useState('')
-      const [pickerOpen, setPickerOpen] = useState(false)
+      const [wizardStep, setWizardStep] = useState(1)   // 1 / 2 / 0=完成后的摘要态
       const [remoteOpen, setRemoteOpen] = useState(false)
       // 手动重画二维码用：固定配对码下重画不改变内容，但保留入口以防宿主轮换码。
       const [qrVersion, setQrVersion] = useState(0)
@@ -515,126 +519,76 @@ window.__ModuleLoader__.load({
       const selectedReason = publicBase !== '' ? '已配置公网地址，默认选公网' : '未配置公网地址，默认选第一个局域网地址'
 
       // 全部解释性文字都收进标题旁的 (?)：正文只留步骤标题与最必要的一行。
+      // 所有解释都收在这里；正文只保留步骤必要的两行字。
       const HELP_TEXT = [
         '扫码即连：手机扫码后自动配对，无需输入配对码。',
-        '扫不开 / 没反应：多半是手机与电脑不在同一网络（例如电脑有线、手机用流量），把手机接到同一 Wi-Fi，或在上面选择「公网」。',
-        '公网地址需要一条反向代理 / 隧道（frp、Cloudflare Tunnel、Tailscale 均可），填好后手机在任何网络都能连。',
+        '扫不开 / 没反应：多半是手机与电脑不在同一网络（例如电脑有线、手机用流量），把手机接到同一 Wi-Fi，或选择「公网」。',
+        '公网地址需要一条反向代理 / 隧道（frp、Cloudflare Tunnel、Tailscale 均可）。',
       ].join(' ')
 
-      // 手动重画：重新取一次码（宿主可能轮换）+ 强制重绘二维码节点。
       const regenerate = () => {
         setQrVersion((v) => v + 1)
         issue()
       }
 
       const copyGlyph = copied === qrText
-        ? h('span', { className: 'dm-iconGlyph' }, '✓')
+        ? h('span', { className: 'dm-toolGlyph' }, '✓')
         : h('span', {
-            className: 'dm-iconGlyph',
+            className: 'dm-toolGlyph',
             dangerouslySetInnerHTML: {
-              __html: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"></rect><path d="M10.5 3.5H3.9A1.4 1.4 0 0 0 2.5 4.9v6.6"></path></svg>',
+              __html: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"></rect><path d="M10.5 3.5H3.9A1.4 1.4 0 0 0 2.5 4.9v6.6"></path></svg>',
             },
           })
 
-      const refreshGlyph = h('span', {
-        className: 'dm-iconGlyph',
-        dangerouslySetInnerHTML: {
-          __html: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 6.4A5.4 5.4 0 1 0 13 9.9"></path><path d="M13.4 3.2v3.4h-3.4"></path></svg>',
-        },
-      })
-
-      // ── ① 选择网络：radio 列表（局域网各网卡 + 公网）──
+      // ── 第 1 页：选择网络（原生 radio，不用自绘圆圈/填色）──
       const netOptions = lanBases.map((base) => ({ base: base, kind: 'lan', configured: true }))
       netOptions.push({ base: publicBase, kind: 'public', configured: publicBase !== '' })
 
       const netNodes = netOptions.map((option) => {
         const active = option.configured && option.base === activeBase
         const label = option.kind === 'public' ? '公网' : '局域网'
-        const meta = option.configured
-          ? h('code', { className: 'dm-netAddr' }, displayAddr(option.base))
-          : h('span', { className: 'dm-netUnset' }, '未配置')
-        return h('li', { key: option.kind + ':' + option.base },
-          h('button', {
-            type: 'button',
-            role: 'radio',
-            'aria-checked': active ? 'true' : 'false',
-            className: 'dm-netRow' + (active ? ' dm-netRowActive' : '') + (option.configured ? '' : ' dm-netRowMuted'),
-            'data-base': option.base,
-            'data-kind': option.kind,
-            'data-configured': option.configured ? 'true' : 'false',
-            onClick: () => {
-              if (!option.configured) { setRemoteOpen(true); return }
-              setSelectedBase(option.base)
-              setRemoteOpen(false)
-            },
-          },
-            h('span', { className: 'dm-radio' + (active ? ' dm-radioOn' : '') }),
+        return h('li', { key: option.kind + ':' + option.base, className: 'dm-netItem' },
+          h('label', { className: 'dm-netRow' + (option.configured ? '' : ' dm-netRowUnset') },
+            h('input', {
+              type: 'radio',
+              name: 'dm-connect-net',
+              className: 'dm-netRadio',
+              checked: active,
+              disabled: !option.configured,
+              'data-kind': option.kind,
+              'data-base': option.base,
+              onChange: () => {
+                if (!option.configured) { setRemoteOpen(true); return }
+                setSelectedBase(option.base)
+                setRemoteOpen(false)
+              },
+            }),
             h('span', { className: 'dm-netLabel' }, label),
-            meta,
+            option.configured
+              ? h('code', { className: 'dm-netAddr' }, displayAddr(option.base))
+              : h('span', { className: 'dm-netUnsetText' }, '未配置'),
             option.kind === 'public' && option.configured
               ? h('button', {
                   type: 'button',
                   className: 'dm-netEdit',
-                  title: '修改公网域名',
-                  onClick: (event) => { event.stopPropagation(); setRemoteOpen(true) },
+                  onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
                 }, '编辑')
               : null,
-            option.configured ? null : h('span', { className: 'dm-netChev' }, '›'),
+            option.configured
+              ? null
+              : h('button', {
+                  type: 'button',
+                  className: 'dm-netOpen',
+                  onClick: (event) => { event.preventDefault(); setRemoteOpen(true) },
+                }, '›'),
           ),
         )
       })
 
-      const step1Node = h('div', { className: 'dm-stepBlock' },
-        h('div', { className: 'dm-step' },
-          h('span', { className: 'dm-stepNo' }, '1'),
-          h('span', { className: 'dm-stepLabel' }, '选择网络'),
-        ),
-        h('ul', { className: 'dm-netList' }, netNodes),
-      )
-
-      // ── ② 扫码连接：小二维码 + 右侧一行说明，复制/刷新收在右下角 ──
-      const qrBoxNode = h('div', { className: 'dm-qrBoxSmall', 'data-qr-url': qrText },
-        h('div', { dangerouslySetInnerHTML: { __html: qrSvg(qrText, 140, 8) } }),
-        h('div', { className: 'dm-qrMiniIcons' },
-          h('button', {
-            type: 'button',
-            className: 'dm-qrMini',
-            'aria-label': '刷新二维码',
-            title: '刷新二维码',
-            onClick: regenerate,
-          }, refreshGlyph),
-          h('button', {
-            type: 'button',
-            className: 'dm-qrMini',
-            'aria-label': '复制链接',
-            title: copied === qrText ? '已复制' : '复制链接',
-            'data-copied': copied === qrText ? 'true' : 'false',
-            onClick: () => onCopy(qrText),
-          }, copyGlyph),
-        ),
-      )
-
-      const step2Node = h('div', { className: 'dm-stepBlock' },
-        h('div', { className: 'dm-step' },
-          h('span', { className: 'dm-stepNo' }, '2'),
-          h('span', { className: 'dm-stepLabel' }, '扫码连接'),
-        ),
-        pairingCode && activeBase
-          ? h('div', { className: 'dm-scanRow', 'data-selected-base': activeBase, 'data-selected-kind': isPublicSelected ? 'public' : 'lan' },
-              qrBoxNode,
-              h('p', { className: 'dm-scanHint' }, '扫码自动配对'),
-            )
-          : h('div', { className: 'dm-scanRow dm-scanRowEmpty' },
-              h('p', { className: 'dm-scanHint' }, '选择上方网络后自动生成二维码'),
-            ),
-      )
-
-      // ── 公网域名配置：默认收起；点「公网 · 未配置」或已配置时手动展开 ──
-      const showRemoteForm = remoteOpen
-      const remoteFormNode = showRemoteForm
-        ? h('div', { className: 'dm-remote' },
-            h('p', { className: 'dm-domainHint', style: { marginBottom: 8 } }, '公网域名（反代 / 隧道地址，填好后自动生成二维码）'),
-            h('div', { className: 'dm-urlRow' },
+      const remoteFormNode = remoteOpen
+        ? h('div', { className: 'dm-remoteForm' },
+            h('p', { className: 'dm-remoteHint' }, '公网域名（可选，不在同一局域网时使用）'),
+            h('div', { className: 'dm-remoteRow' },
               h('input', {
                 className: 'dm-input',
                 value: domainDraft,
@@ -653,17 +607,81 @@ window.__ModuleLoader__.load({
               }),
               h('button', {
                 type: 'button',
-                className: 'dm-btn dm-btnSm',
+                className: 'dm-stepBtn',
                 disabled: domainBusy,
                 onClick: () => saveDomain(domainDraft.trim()),
               }, domainBusy ? '保存中…' : '保存'),
               addrs.publicBaseCustom
-                ? h('button', { type: 'button', className: 'dm-ghost dm-btnSm', disabled: domainBusy, onClick: clearDomain }, '清除')
+                ? h('button', { type: 'button', className: 'dm-stepBtn', disabled: domainBusy, onClick: clearDomain }, '清除')
                 : null,
             ),
             domainErr ? h('p', { className: 'dm-err' }, domainErr) : null,
           )
         : null
+
+      const step1Node = h('div', { className: 'dm-page' },
+        h('p', { className: 'dm-stepText' }, '第 1 步 / 共 2 步'),
+        h('p', { className: 'dm-pageTitle' }, '选择手机连接的网络'),
+        h('ul', { className: 'dm-netList' }, netNodes),
+        remoteFormNode,
+        h('div', { className: 'dm-pageActions' },
+          h('button', {
+            type: 'button',
+            className: 'dm-stepBtn',
+            disabled: activeBase === '',
+            onClick: () => setWizardStep(2),
+          }, '下一步'),
+        ),
+      )
+
+      // ── 第 2 页：扫码连接（160px 二维码，1px hairline，无投影）──
+      const qrCardNode = h('div', { className: 'dm-qrCard', 'data-qr-url': qrText },
+        h('div', { dangerouslySetInnerHTML: { __html: qrSvg(qrText, 160) } }),
+      )
+
+      const step2Node = h('div', { className: 'dm-page' },
+        h('p', { className: 'dm-stepText' }, '第 2 步 / 共 2 步'),
+        h('p', { className: 'dm-pageTitle' }, '用手机扫描二维码'),
+        pairingCode && activeBase
+          ? qrCardNode
+          : h('p', { className: 'dm-muted' }, '正在生成二维码…'),
+        h('p', { className: 'dm-scanHint' }, '扫码后自动配对，无需输入配对码'),
+        h('div', { className: 'dm-pageTools' },
+          h('button', {
+            type: 'button',
+            className: 'dm-toolBtn',
+            'aria-label': '复制链接',
+            title: '复制链接',
+            onClick: () => onCopy(qrText),
+          }, copyGlyph, h('span', null, copied === qrText ? '已复制' : '复制链接')),
+          h('button', {
+            type: 'button',
+            className: 'dm-toolBtn',
+            'aria-label': '刷新二维码',
+            title: '刷新二维码',
+            onClick: regenerate,
+          }, '刷新'),
+        ),
+        h('div', { className: 'dm-pageActions' },
+          h('button', { type: 'button', className: 'dm-stepBtn', onClick: () => setWizardStep(1) }, '上一步'),
+          h('button', {
+            type: 'button',
+            className: 'dm-stepBtn dm-stepBtnPrimary',
+            onClick: () => setWizardStep(0),
+          }, '完成'),
+        ),
+      )
+
+      // 完成后：摘要态（可重新进入向导）
+      const summaryNode = h('div', { className: 'dm-page' },
+        h('p', { className: 'dm-pageTitle' }, '连接手机'),
+        h('p', { className: 'dm-summaryLine' }, activeBase ? ('已选择 ' + displayAddr(activeBase)) : '未选择网络'),
+        h('div', { className: 'dm-pageActions' },
+          h('button', { type: 'button', className: 'dm-stepBtn', onClick: () => setWizardStep(1) }, '重新设置'),
+        ),
+      )
+
+      const wizardNode = wizardStep === 1 ? step1Node : wizardStep === 2 ? step2Node : summaryNode
 
       const errNode = err ? h('p', { className: 'dm-err' }, err) : null
 
@@ -714,17 +732,16 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dm-card', 'data-qr-card': '1' },
           h('div', { className: 'dm-cardHead' },
             h('p', { className: 'dm-title' }, '连接手机'),
-            h('span', { className: 'dm-headRight' },
-              h('span', { className: 'dm-help', role: 'note', tabIndex: 0, title: HELP_TEXT, 'aria-label': HELP_TEXT }, '?'),
-              h('span', { className: 'dm-live' },
-                h('span', { className: 'dm-liveDot' + (urls.length ? '' : ' dm-liveDotOff') }),
-                urls.length ? '就绪' : '未监听'),
-            ),
+            h('span', {
+              className: 'dm-help',
+              role: 'note',
+              tabIndex: 0,
+              title: HELP_TEXT,
+              'aria-label': HELP_TEXT,
+            }, '?'),
           ),
-          step1Node,
-          step2Node,
+          wizardNode,
           errNode,
-          remoteFormNode,
         ),
         devicesNode,
       )
