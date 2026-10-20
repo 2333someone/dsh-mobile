@@ -3669,11 +3669,16 @@ button.settings-row:focus-visible {
 }
 
 .chat-turn-tail-badge {
+  /* 徽标不许换行：这一行是「交付文件行 + 已交付 徽标」，路径长时只能在路径上省略，
+     否则「已交付」三个字会被挤成两行（真机可见）。 */
+  flex: none;
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-chip);
   color: var(--accent);
   font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .chat-turn-tail-file-path {
