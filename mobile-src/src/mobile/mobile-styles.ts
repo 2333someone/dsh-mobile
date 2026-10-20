@@ -2467,7 +2467,12 @@ button.settings-row:focus-visible {
 /* 消息内图片的「卡片包裹」：由 markdown-text.tsx 在渲染后包一层 <figure>。
    目的：一眼看出「这是对方发来的图片」，而不是贴在文字里的一块像素。 */
 .chat-md-image {
-  margin: 10px 0;
+  /* 卡片贴合图片：图片多大卡片就多大，最宽不超过气泡宽度；
+     不再让卡片占满整行、图片缩在左边（用户截图里右边空一片就是那个问题）。 */
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px auto;
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 14px;
@@ -2476,7 +2481,11 @@ button.settings-row:focus-visible {
 }
 
 .chat-md-image img {
+  /* 自适应：按可用宽度缩放、保持比例；小图不放大（避免糊）。 */
   display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
   margin: 0;
   padding: 0;
   border: 0;
