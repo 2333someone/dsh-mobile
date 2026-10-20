@@ -254,6 +254,28 @@ export function MarkdownText({ text, pending, forceOpen = false, highlightQuery,
    * own authenticated channel, and `safeUrl` — which deliberately rejects
    * `data:` — only ever sees authored markdown.
    */
+  // 给消息里的图片套一层可见的「图片卡片」：用户反馈图片直接贴在文字流里，
+  // 看不出这是一张图，加载完还会在下方留一圈灰底。React 只管 bodyRef 这一层
+  // （内容来自 dangerouslySetInnerHTML），所以这里在它内部包一层不会打乱协调；
+  // 每次 segments 变化（innerHTML 被重建）后重跑一遍即可。
+  useEffect(() => {
+    const root = bodyRef.current
+    if (root === null) return
+    for (const img of Array.from(root.querySelectorAll<HTMLImageElement>('img'))) {
+      if (img.closest('.chat-md-image') !== null) continue
+      const figure = document.createElement('figure')
+      figure.className = 'chat-md-image'
+      const caption = document.createElement('figcaption')
+      caption.className = 'chat-md-image-cap'
+      caption.textContent = '图片'
+      const parent = img.parentNode
+      if (parent === null) continue
+      parent.insertBefore(figure, img)
+      figure.appendChild(img)
+      figure.appendChild(caption)
+    }
+  }, [segments])
+
   useEffect(() => {
     const root = bodyRef.current
     if (root === null || sessionId === undefined) return

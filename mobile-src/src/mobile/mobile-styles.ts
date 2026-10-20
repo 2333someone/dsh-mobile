@@ -2463,16 +2463,50 @@ button.settings-row:focus-visible {
 .chat-md-body a { color: var(--accent); }
 .chat-md-body hr { border: none; border-top: 1px solid var(--border-subtle); margin: 10px 0; }
 .chat-md-body img { max-width: 100%; border-radius: var(--radius-chip); }
+
+/* 消息内图片的「卡片包裹」：由 markdown-text.tsx 在渲染后包一层 <figure>。
+   目的：一眼看出「这是对方发来的图片」，而不是贴在文字里的一块像素。 */
+.chat-md-image {
+  margin: 10px 0;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-input, #fff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.chat-md-image img {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-md-image-cap {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  text-align: center;
+}
 /* 正文里的本地图（agent 引用的工作区文件）：markdown 只带 data-local-src，
    挂载后经 mobile.readFile 取回 data URL 再填 src（见 local-images.ts）。
    取回前先占住尺寸，避免整段文字在图片到达时跳一下；取不回时给出可见的
    失败态，而不是让浏览器渲染一个破图图标。 */
 .chat-md-body img.md-local-img {
+  /* 加载占位：先占住尺寸，避免文字跳动；外框由 .chat-md-image 卡片负责。 */
   display: block;
   min-width: 96px;
   min-height: 56px;
-  background: var(--surface-subtle, rgba(127, 127, 127, 0.12));
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
   border: 1px dashed var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-subtle, rgba(127, 127, 127, 0.08));
 }
 .chat-md-body img.md-local-img[data-local-state='loading'] {
   /* 内容尚未到达：占位框不显示 alt 文字被浏览器裁断的碎片。 */
@@ -2480,6 +2514,7 @@ button.settings-row:focus-visible {
 }
 .chat-md-body img.md-local-img[data-local-state='loaded'] {
   border: none;
+  background: transparent;
 }
 .chat-md-body img.md-local-img[data-local-state='failed'] {
   min-width: 0;
