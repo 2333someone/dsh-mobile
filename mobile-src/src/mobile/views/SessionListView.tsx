@@ -22,9 +22,9 @@ import type { MuxFrame } from '../../api-proxy-types'
 import type { SessionSummary } from '../../api-proxy-types'
 import type { MuxClient } from '../mux.ts'
 import { archiveSession, createSession, history, listAgentPresets, listSessions, listWorkspaces, previews, searchAll, searchMessages, type SessionSearchHit } from '../api.ts'
-import { SessionActionsSheet, PurgeSessionSheet, SessionFilesSheet, UndoBar } from '../cleanup-sheets.tsx'
+import { SessionActionsSheet, PurgeSessionSheet, SessionFilesSheet, TrashSheet, UndoBar } from '../cleanup-sheets.tsx'
 import {
-  getLocalHidden, hideSessionLocally, onLocalHiddenChange, restoreTrashEntry, unarchiveSession,
+  getLocalHidden, hideSessionLocally, onLocalHiddenChange, readTrash, restoreTrashEntry, unarchiveSession,
   unhideSessionLocally, type PurgeSessionResult,
 } from '../cleanup-api.ts'
 
@@ -409,12 +409,24 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
   const [undo, setUndo] = useState<{ kind: 'archive' | 'local' | 'purge'; sessionId: string; trashId?: string; message: string } | undefined>(undefined)
   /** 撤销/恢复之后重新拉第一页（归档与回收站恢复都要让行回来）。 */
   const [refreshTick, setRefreshTick] = useState(0)
+  /** 回收站入口：有可恢复内容时在列表底部露出来。 */
+  const [trashOpen, setTrashOpen] = useState(false)
+  const [trashCount, setTrashCount] = useState(0)
   const pressTimerRef = useRef<number | undefined>(undefined)
   const pressConsumedRef = useRef<string | undefined>(undefined)
   /** Pinned session ids (local preference, persisted in localStorage). */
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => loadPinnedSessions())
   // 本机隐藏是 localStorage 偏好：别的标签页/页面改了也要同步过来。
   useEffect(() => onLocalHiddenChange((ids) => setHiddenIds(new Set(ids))), [])
+
+  /** 回收站里有多少条可恢复记录（列表底部的入口按它显示）。 */
+  const reloadTrash = useCallback((): void => {
+    void readTrash().then(
+      (result) => setTrashCount(result.stats.entries),
+      () => {},
+    )
+  }, [])
+  useEffect(() => { reloadTrash() }, [reloadTrash, refreshTick])
   /** The session whose delete action is currently swiped open (at most one). */
   const [openSwipeId, setOpenSwipeId] = useState<string | undefined>(undefined)
   /** Active swipe gesture origin (sessionId + start point). */
@@ -952,7 +964,8 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
       ...(result.trashId === undefined ? {} : { trashId: result.trashId }),
       message: `已删除「${row.title || '会话'}」`,
     })
-  }, [collapseRow, dropRow])
+    reloadTrash()
+  }, [collapseRow, dropRow, reloadTrash])
 
   /** 撤销条：归档 → 反归档；本机隐藏 → 取消隐藏；删除 → 恢复回收站记录。 */
   const runUndo = useCallback((entry: { kind: 'archive' | 'local' | 'purge'; sessionId: string; trashId?: string }): void => {
@@ -1208,6 +1221,17 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
             </li>
           )
         })})()}
+        {!searchActive && trashCount > 0 && (
+          <li style={{ listStyle: 'none' }}>
+            <button
+              type="button"
+              className="dm-hidden-toggle dm-trash-entry-btn"
+              onClick={() => setTrashOpen(true)}
+            >
+              回收站 · {trashCount} 项可恢复
+            </button>
+          </li>
+        )}
         {!searchActive && hiddenIds.size > 0 && (
           <li style={{ listStyle: 'none' }}>
             <button
@@ -1389,6 +1413,11 @@ export function SessionListView({ workspace, mux, initialSessionId, initialSearc
           session={{ sessionId: purgeTarget.sessionId, title: purgeTarget.title, running: purgeTarget.running }}
           onClose={() => setPurgeTarget(undefined)}
           onDone={(result) => handlePurgeDone(purgeTarget, result)}
+        />
+      )}
+      {trashOpen && (
+        <TrashSheet
+          onClose={() => { setTrashOpen(false); reloadTrash() }}
         />
       )}
       {undo !== undefined && (
