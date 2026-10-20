@@ -132,6 +132,23 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:19387/m/
 
 归因链保留在 [NOTICE](NOTICE)：dsh-palm → dsh-remote-web-ui（`@linxin666/dsh-remote-web-ui`，Apache-2.0）。`mobile-src/` 的 baseline、构建方式与本地改动见 [`mobile-src/UPSTREAM.md`](mobile-src/UPSTREAM.md)。
 
+## 致谢
+
+这个项目站在别人肩膀上，特别感谢：
+
+- **[dsh-palm](https://github.com/Eternalloveone/dsh-palm)**（© Eternalloveone，Apache-2.0）——
+  手机端 UI 直接来自它的 v1.6.0：React 界面、消息渲染、输入框、代码块、设置页等。
+  我们把它 vendor 到 `mobile-src/` 后做了本地修改（清单见
+  [`mobile-src/UPSTREAM.md`](mobile-src/UPSTREAM.md)），并按 Apache-2.0 保留版权与许可声明。
+- **[dsh-remote-web-ui](https://github.com/zhu1090093659/dsh-web)**（`@linxin666/dsh-remote-web-ui`，
+  © zhu1090093659，Apache-2.0）——dsh-palm 的移动端同样源自它，归因链见 [NOTICE](NOTICE)。
+- **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**（Apache-2.0）——
+  宿主平台与 `@deepseek-ai/dsh-*` 服务；本插件的宿主侧 RPC 按 dsh 原生服务重新实现。
+
+如果你是从本仓库再分叉：请保留 [NOTICE](NOTICE)、[LICENSE-APACHE](LICENSE-APACHE) 与
+[`mobile-src/UPSTREAM.md`](mobile-src/UPSTREAM.md)，这是 Apache-2.0 对派生作品的要求
+（保留版权声明、附带许可证副本、标注修改过的文件）。
+
 ## 安全
 
 公开部署前请阅读 [SECURITY.md](SECURITY.md)：必须 HTTPS 反代、设备 cookie 等同登录态、`/m/shot/` 匿名可读、默认配对码务必修改。

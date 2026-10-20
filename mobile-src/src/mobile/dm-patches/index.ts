@@ -14,7 +14,6 @@ import { CHAT_STATUS_HTML } from './chat-status.ts'
 // 用户会看到重复项。文件先留着，方便需要时对照。
 import { DEVICE_INFO_HTML } from './device-info.ts'
 import { NOTIFY_LAYOUT_HTML } from './notify-layout.ts'
-import { ADD_SHEET_FILTER_HTML } from './add-sheet-filter.ts'
 import { IMAGE_PREVIEW_HTML } from './image-preview.ts'
 import { CHAT_AUTOSCROLL_HTML } from './chat-autoscroll.ts'
 import { LOAD_OLDER_ALIGN_HTML } from './load-older-align.ts'
@@ -27,7 +26,6 @@ const PATCH_ORDER: readonly string[] = [
   CHAT_STATUS_HTML,
   DEVICE_INFO_HTML,
   NOTIFY_LAYOUT_HTML,
-  ADD_SHEET_FILTER_HTML,
   IMAGE_PREVIEW_HTML,
   CHAT_AUTOSCROLL_HTML,
   LOAD_OLDER_ALIGN_HTML

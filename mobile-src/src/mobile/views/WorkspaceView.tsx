@@ -23,11 +23,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 let workspaceRowsCache: WorkspaceRow[] | undefined
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { WorkspaceView as WorkspaceRow } from '../../api-proxy-types'
-import { deleteWorkspace, listWorkspaces, listDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
+import { deleteWorkspace, listWorkspaces, listDirectory, listDirectoryRoots, makeDirectory, createWorkspace, renameWorkspace, searchAll, searchMessages, type DirectoryListing, type DirectoryEntry, type SessionSearchHit } from '../api.ts'
 import { errorText } from './App.tsx'
 import { compactPath, dominantPathPrefix } from '../ui-text.ts'
 import { Sheet } from '../sheet.tsx'
 import { ConfirmDialog, PromptDialog } from '../dialog.tsx'
+import { PurgeWorkspaceSheet } from '../cleanup-sheets.tsx'
 import { toast } from '../toast.tsx'
 import { CheckIcon, ClockIcon, CloseIcon, FolderIcon, FolderPlusIcon, InboxIcon, PinIcon, PlusIcon, SearchIcon } from '../icons.tsx'
 import { HeaderActions } from '../dm-header/index.tsx'
@@ -122,11 +123,96 @@ function removeRecent(ids: readonly string[], id: string): string[] {
 /** Project kind driving icon tint + roster grouping. */
 type WorkspaceKind = 'active' | 'test' | 'code' | 'plain'
 
+/** Explicit project kind picked by the user at creation time (phone-local).
+ *  Keyed by workspaceId; absent means "let the heuristic decide". */
+type ExplicitKind = 'code' | 'test'
+
+const WORKSPACE_KINDS_KEY = 'dsh.palm.workspaceKinds'
+
+function readExplicitKinds(): Record<string, ExplicitKind> {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_KINDS_KEY)
+    const parsed: unknown = raw === null ? {} : JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, ExplicitKind> = {}
+    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (value === 'code' || value === 'test') out[id] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeExplicitKinds(kinds: Record<string, ExplicitKind>): void {
+  try {
+    localStorage.setItem(WORKSPACE_KINDS_KEY, JSON.stringify(kinds))
+  } catch {}
+}
+
+/** 用户自建分类：显示名称 + 顺序都本地保存。 */
+interface WorkspaceCategory {
+  id: string
+  name: string
+}
+
+const CATEGORIES_KEY = 'dsh.palm.workspaceCategories'
+const CATEGORY_MAP_KEY = 'dsh.palm.workspaceCategoryMap'
+
+function readCategories(): WorkspaceCategory[] {
+  try {
+    const raw = localStorage.getItem(CATEGORIES_KEY)
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is { id: string; name: string } => {
+        return item !== null && typeof item === 'object'
+          && typeof (item as { id?: unknown }).id === 'string'
+          && typeof (item as { name?: unknown }).name === 'string'
+          && (item as { name: string }).name.trim() !== ''
+      })
+      .map((item) => ({ id: item.id, name: item.name.trim() }))
+  } catch {
+    return []
+  }
+}
+
+function writeCategories(list: WorkspaceCategory[]): void {
+  try {
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(list))
+  } catch {}
+}
+
+function readCategoryMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(CATEGORY_MAP_KEY)
+    const parsed: unknown = raw === null ? {} : JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, string> = {}
+    for (const [workspaceId, categoryId] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof categoryId === 'string') out[workspaceId] = categoryId
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeCategoryMap(map: Record<string, string>): void {
+  try {
+    localStorage.setItem(CATEGORY_MAP_KEY, JSON.stringify(map))
+  } catch {}
+}
+
 /** Heuristic split: the most-recently opened workspaces (up to
  *  {@link ACTIVE_RECENT_LIMIT}) are "active"; paths that look like test rigs
  *  (test/spec/benchmark segments) group under 测试项目; workspaces without
- *  any session yet stay "plain" gray. */
-export function workspaceKind(workspace: WorkspaceRow, recents: readonly string[]): WorkspaceKind {
+ *  any session yet stay "plain" gray. An explicit kind chosen by the user
+ *  always wins over the heuristic (so a project created under 测试项目 stays
+ *  there instead of jumping to 活跃项目 on first open). */
+export function workspaceKind(workspace: WorkspaceRow, recents: readonly string[], explicit?: Record<string, ExplicitKind>): WorkspaceKind {
+  const preferred = explicit === undefined ? undefined : explicit[workspace.workspaceId]
+  if (preferred === 'code' || preferred === 'test') return preferred
   if (recents.slice(0, ACTIVE_RECENT_LIMIT).includes(workspace.workspaceId)) return 'active'
   if (/\b(test|tests|testing|spec|specs|benchmark|e2e)\b/i.test(workspace.path.replace(/[\\/]+/g, ' '))
     || /\b(test|tests|testing|spec|specs|benchmark|e2e)\b/i.test(workspace.title)) return 'test'
@@ -161,18 +247,34 @@ const GROUP_ORDER: ReadonlyArray<{ kind: WorkspaceKind; placeholder: string | nu
 /** Props for the directory browser. */
 interface DirectoryBrowserProps {
   onCancel(): void
-  onPick(workspace: WorkspaceRow): void
+  onPick(workspace: WorkspaceRow, categoryId?: string): void
+  /** Preset category when the user entered from a category's「新建」. */
+  initialCategory?: string
 }
 
 /**
  * Render the directory browser for creating a new workspace.
  */
-function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
+function DirectoryBrowser({ onCancel, onPick, initialCategory }: DirectoryBrowserProps) {
   const [listing, setListing] = useState<DirectoryListing | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [creating, setCreating] = useState(false)
   const [path, setPath] = useState<string | undefined>(undefined)
   const [reload, setReload] = useState(0)
+  const [folderPrompt, setFolderPrompt] = useState(false)
+  const [folderBusy, setFolderBusy] = useState(false)
+  const [folderError, setFolderError] = useState<string | undefined>(undefined)
+  const [roots, setRoots] = useState<Array<{ name: string; path: string }>>([])
+  const [jumpPrompt, setJumpPrompt] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    void listDirectoryRoots().then(
+      (result) => { if (alive) setRoots(result.roots) },
+      () => {},
+    )
+    return () => { alive = false }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -191,13 +293,30 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
     return () => { cancelled = true }
   }, [path, reload])
 
+  /** 在当前目录下新建一个文件夹（宿主 workspace.create 只接受已存在目录）。 */
+  const handleMakeFolder = async (name: string) => {
+    if (listing === undefined || folderBusy) return
+    setFolderBusy(true)
+    setFolderError(undefined)
+    try {
+      const result = await makeDirectory(listing.path, name)
+      setFolderPrompt(false)
+      // 直接进入新文件夹：目录是空的，确认无误后点「选择此目录」。
+      setPath(result.path)
+    } catch (reason: unknown) {
+      setFolderError(errorText(reason))
+    } finally {
+      setFolderBusy(false)
+    }
+  }
+
   const handleCreate = async () => {
     if (listing === undefined || creating) return
     setCreating(true)
     setError(undefined)
     try {
       const result = await createWorkspace(listing.path)
-      onPick(result.workspace)
+      onPick(result.workspace, initialCategory)
     } catch (reason: unknown) {
       setCreating(false)
       setError(errorText(reason))
@@ -214,6 +333,26 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
         <div className="mobile-headerSlot mobile-headerSlot-right" />
       </header>
 
+      {roots.length > 0 && (
+        <div className="dir-drives" role="toolbar" aria-label="盘符">
+          {roots.map((root) => {
+            const current = listing !== undefined && listing.path.toUpperCase().startsWith(root.path.toUpperCase())
+            return (
+              <button
+                key={root.path}
+                type="button"
+                className={'dir-drive' + (current ? ' dir-drive-on' : '')}
+                onClick={() => { setPath(root.path) }}
+              >
+                {root.name}
+              </button>
+            )
+          })}
+          <button type="button" className="dir-drive dir-drive-jump" onClick={() => { setJumpPrompt(true) }}>
+            跳转…
+          </button>
+        </div>
+      )}
       {listing !== undefined && (
         <div className="dir-crumbs">
           {listing.crumbs.map((crumb, idx) => (
@@ -266,6 +405,15 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
       )}
 
       <div className="dir-select">
+        {folderError !== undefined && <p className="mobile-error" role="alert">{folderError}</p>}
+        <button
+          type="button"
+          className="mobile-button mobile-button-muted"
+          disabled={listing === undefined || creating || folderBusy}
+          onClick={() => { setFolderError(undefined); setFolderPrompt(true) }}
+        >
+          新建文件夹
+        </button>
         <button
           type="button"
           className="mobile-button"
@@ -275,6 +423,29 @@ function DirectoryBrowser({ onCancel, onPick }: DirectoryBrowserProps) {
           {creating ? '创建中…' : '选择此目录'}
         </button>
       </div>
+      {jumpPrompt && listing !== undefined && (
+        <PromptDialog
+          title="跳转到目录"
+          initial={listing.path}
+          confirmLabel="跳转"
+          onCancel={() => { setJumpPrompt(false) }}
+          onConfirm={(value) => {
+            setJumpPrompt(false)
+            const next = value.trim()
+            if (next !== '') setPath(next)
+          }}
+        />
+      )}
+      {folderPrompt && listing !== undefined && (
+        <PromptDialog
+          title="新建文件夹"
+          initial=""
+          confirmLabel={folderBusy ? '创建中…' : '创建'}
+          busy={folderBusy}
+          onCancel={() => { setFolderPrompt(false) }}
+          onConfirm={(value) => { void handleMakeFolder(value) }}
+        />
+      )}
     </div>
   )
 }
@@ -288,6 +459,8 @@ interface MenuTarget {
 
 /** Props for the workspace action menu. */
 interface WorkspaceMenuProps {
+  onMoveCategory(): void
+  onPurge(workspace: WorkspaceRow): void
   target: MenuTarget
   pinned: boolean
   onClose(): void
@@ -297,7 +470,7 @@ interface WorkspaceMenuProps {
 }
 
 /** Long-press menu: pin toggle, rename, delete (bottom sheet, one column). */
-function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDelete }: WorkspaceMenuProps) {
+function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDelete, onPurge, onMoveCategory }: WorkspaceMenuProps) {
   const { workspace } = target
   const actions: Array<{ key: string; label: string; danger?: boolean; run(): void }> = [
     {
@@ -306,7 +479,9 @@ function WorkspaceMenu({ target, pinned, onClose, onPinnedChange, onRename, onDe
       run: () => { onPinnedChange() },
     },
     { key: 'rename', label: '重命名', run: () => { onRename(workspace) } },
-    { key: 'delete', label: '删除工作区', danger: true, run: () => { onDelete(workspace) } },
+    { key: 'move', label: '移动到分类…', run: () => { onMoveCategory() } },
+    { key: 'delete', label: '移除工作区（保留文件）', danger: true, run: () => { onDelete(workspace) } },
+    { key: 'purge', label: '清理工作区…', danger: true, run: () => { onPurge(workspace) } },
   ]
   return (
     <Sheet title={workspace.title} onClose={onClose}>
@@ -394,6 +569,17 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   // Bumped by the retry button to re-run the roster fetch effect.
   const [reload, setReload] = useState(0)
   const [isCreating, setIsCreating] = useState(false)
+  /** Preset category when entering the directory browser from a category. */
+  const [createCategory, setCreateCategory] = useState<string | undefined>(undefined)
+  /** Phone-local explicit kinds (legacy; migrated into categories below). */
+  const [explicitKinds, setExplicitKinds] = useState<Record<string, ExplicitKind>>(() => readExplicitKinds())
+  /** User-defined categories + workspace → category mapping. */
+  const [categories, setCategories] = useState<WorkspaceCategory[]>(() => readCategories())
+  const [categoryMap, setCategoryMap] = useState<Record<string, string>>(() => readCategoryMap())
+  const [categoryPrompt, setCategoryPrompt] = useState(false)
+  const [categoryMenu, setCategoryMenu] = useState<string | undefined>(undefined)
+  const [renamingCategory, setRenamingCategory] = useState<WorkspaceCategory | undefined>(undefined)
+  const [moveTarget, setMoveTarget] = useState<WorkspaceRow | undefined>(undefined)
   // Quick-bar state: search field, pinned-only filter, recent jump.
   const [searchOpen, setSearchOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -427,10 +613,91 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   /** Ordered recent workspace ids (newest first); the first few render as the
    *  活跃项目 group and the jump chip targets the newest. */
   const [recents, setRecents] = useState<readonly string[]>(() => readRecents())
+
+  /** Explicit kind wins; otherwise the original heuristic. */
+  const kindOf = useCallback((workspace: WorkspaceRow): WorkspaceKind => (
+    workspaceKind(workspace, recents, explicitKinds)
+  ), [recents, explicitKinds])
+
+  // 旧版「显式代码/测试项目」迁移成正式分类：一次性的，之后以分类为准。
+  useEffect(() => {
+    if (categories.length > 0) return
+    const entries = Object.entries(explicitKinds)
+    if (entries.length === 0) return
+    const nextCategories: WorkspaceCategory[] = []
+    const nextMap: Record<string, string> = {}
+    for (const [workspaceId, kind] of entries) {
+      const name = kind === 'test' ? '测试项目' : '代码项目'
+      let category = nextCategories.find((item) => item.name === name)
+      if (category === undefined) {
+        category = { id: `cat-${Date.now()}-${nextCategories.length}`, name }
+        nextCategories.push(category)
+      }
+      nextMap[workspaceId] = category.id
+    }
+    setCategories(nextCategories)
+    setCategoryMap(nextMap)
+    writeCategories(nextCategories)
+    writeCategoryMap(nextMap)
+    try { localStorage.removeItem(WORKSPACE_KINDS_KEY) } catch {}
+    setExplicitKinds({})
+    // 只在挂载时迁移一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** 把工作区放进/移出分类。 */
+  const setWorkspaceCategory = useCallback((workspaceId: string, categoryId: string | undefined) => {
+    setCategoryMap((previous) => {
+      const next = { ...previous }
+      if (categoryId === undefined) delete next[workspaceId]
+      else next[workspaceId] = categoryId
+      writeCategoryMap(next)
+      return next
+    })
+  }, [])
+
+  const addCategory = useCallback((name: string) => {
+    const trimmed = name.trim()
+    if (trimmed === '') return
+    setCategories((previous) => {
+      const next = [...previous, { id: `cat-${Date.now()}-${previous.length}`, name: trimmed }]
+      writeCategories(next)
+      return next
+    })
+  }, [])
+
+  const renameCategory = useCallback((id: string, name: string) => {
+    const trimmed = name.trim()
+    if (trimmed === '') return
+    setCategories((previous) => {
+      const next = previous.map((item) => (item.id === id ? { ...item, name: trimmed } : item))
+      writeCategories(next)
+      return next
+    })
+    setRenamingCategory(undefined)
+  }, [])
+
+  const deleteCategory = useCallback((id: string) => {
+    setCategories((previous) => {
+      const next = previous.filter((item) => item.id !== id)
+      writeCategories(next)
+      return next
+    })
+    setCategoryMap((previous) => {
+      const next = { ...previous }
+      for (const [workspaceId, categoryId] of Object.entries(next)) {
+        if (categoryId === id) delete next[workspaceId]
+      }
+      writeCategoryMap(next)
+      return next
+    })
+    setCategoryMenu(undefined)
+  }, [])
   // Long-press menu + confirm/prompt dialogs.
   const [menu, setMenu] = useState<MenuTarget | undefined>(undefined)
   const [renaming, setRenaming] = useState<WorkspaceRow | undefined>(undefined)
   const [deleting, setDeleting] = useState<WorkspaceRow | undefined>(undefined)
+  const [purging, setPurging] = useState<WorkspaceRow | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   // Long-press detection: 500ms touch hold, cancelled on move/end.
   const pressTimerRef = useRef<number | undefined>(undefined)
@@ -690,8 +957,12 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
   if (isCreating) {
     return (
       <DirectoryBrowser
-        onCancel={() => setIsCreating(false)}
-        onPick={pick}
+        initialCategory={createCategory}
+        onCancel={() => { setIsCreating(false); setCreateCategory(undefined) }}
+        onPick={(workspace, categoryId) => {
+          if (categoryId !== undefined) setWorkspaceCategory(workspace.workspaceId, categoryId)
+          pick(workspace)
+        }}
       />
     )
   }
@@ -716,19 +987,55 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
       kind,
       rows: kind === 'active'
         ? ordered
-          .filter(workspace => workspaceKind(workspace, recents) === kind)
+          .filter(workspace => kindOf(workspace) === kind)
           .sort((a, b) => {
             const pinA = pinned.includes(a.workspaceId) ? 0 : 1
             const pinB = pinned.includes(b.workspaceId) ? 0 : 1
             if (pinA !== pinB) return pinA - pinB
             return (recentOrder.get(a.workspaceId) ?? Infinity) - (recentOrder.get(b.workspaceId) ?? Infinity)
           })
-        : ordered.filter(workspace => workspaceKind(workspace, recents) === kind),
+        : ordered.filter(workspace => kindOf(workspace) === kind),
     }))
     .filter(group => group.rows.length > 0)
   const emptyPlaceholders = GROUP_ORDER.filter(({ kind, placeholder }) =>
-    placeholder !== null && !ordered.some(workspace => workspaceKind(workspace, recents) === kind))
+    placeholder !== null && !ordered.some(workspace => kindOf(workspace) === kind))
   const pinnedCount = pinned.length
+
+  // 分类模式：一旦用户建了分类，就用「分类 + 未分类」替换启发式分组。
+  const assignedToCategory = (workspace: WorkspaceRow): boolean =>
+    categories.some((category) => categoryMap[workspace.workspaceId] === category.id)
+  const categoryGroups = categories.map((category) => ({
+    key: category.id,
+    title: category.name,
+    categoryId: category.id as string | undefined,
+    rows: ordered.filter((workspace) => categoryMap[workspace.workspaceId] === category.id),
+    placeholder: '还没有工作区' as string | null,
+  }))
+  const renderGroups: Array<{
+    key: string
+    title: string
+    categoryId: string | undefined
+    rows: WorkspaceRow[]
+    placeholder: string | null
+  }> = categories.length === 0
+    ? groups.map((group) => ({
+      key: group.kind,
+      title: KIND_LABEL[group.kind],
+      categoryId: undefined,
+      rows: group.rows,
+      placeholder: null,
+    }))
+    : [
+      ...categoryGroups,
+      {
+        key: '__none__',
+        title: '未分类',
+        categoryId: undefined,
+        rows: ordered.filter((workspace) => !assignedToCategory(workspace)),
+        placeholder: null,
+      },
+    ]
+  const visibleGroups = renderGroups.filter((group) => group.rows.length > 0 || group.placeholder !== null)
 
   const body = (() => {
     if (error !== undefined) {
@@ -796,11 +1103,52 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
     }
     return (
       <ul className="mobile-list">
-        {groups.map(group => (
-          <li key={group.kind} style={{ listStyle: 'none' }}>
-            <div className="mobile-groupTitle">{KIND_LABEL[group.kind]}</div>
+        {visibleGroups.map(group => (
+          <li key={group.key} style={{ listStyle: 'none' }}>
+            {group.categoryId !== undefined ? (
+              <div className="mobile-groupTitle dm-cat-head">
+                <span
+                  className="dm-cat-name"
+                  onContextMenu={(event) => { event.preventDefault(); setCategoryMenu(group.categoryId) }}
+                >
+                  {group.title}
+                </span>
+                <span className="dm-cat-actions">
+                  <button
+                    type="button"
+                    className="dm-cat-btn"
+                    aria-label={`在「${group.title}」新建工作区`}
+                    onClick={() => { setCreateCategory(group.categoryId); setIsCreating(true) }}
+                  >
+                    <PlusIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="dm-cat-btn"
+                    aria-label="分类操作"
+                    onClick={() => setCategoryMenu(group.categoryId)}
+                  >
+                    ⋯
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div className="mobile-groupTitle">{group.title}</div>
+            )}
+            {group.rows.length === 0 && group.placeholder !== null && (
+              <div className="mobile-empty-group">
+                <span>{group.placeholder}</span>
+                <button
+                  type="button"
+                  className="mobile-empty-groupBtn"
+                  onClick={() => { setCreateCategory(group.categoryId); setIsCreating(true) }}
+                >
+                  新建
+                </button>
+              </div>
+            )}
             {group.rows.map(workspace => {
-              const kind = workspaceKind(workspace, recents)
+              const kind = kindOf(workspace)
               const isPinned = pinned.includes(workspace.workspaceId)
               const count = (workspace.sessionIds ?? []).length
               return (
@@ -829,12 +1177,15 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
             })}
           </li>
         ))}
-        {!pinnedOnly && term === '' && emptyPlaceholders.map(({ kind, placeholder }) => (
+        {categories.length === 0 && !pinnedOnly && term === '' && emptyPlaceholders.map(({ kind, placeholder }) => (
           <li key={`empty-${kind}`} style={{ listStyle: 'none' }}>
             <div className="mobile-groupTitle">{KIND_LABEL[kind]}</div>
             <div className="mobile-empty-group">
               <span>{placeholder}</span>
-              <button type="button" className="mobile-empty-groupBtn" onClick={() => setIsCreating(true)}>创建</button>
+              <button type="button" className="mobile-empty-groupBtn" onClick={() => {
+                setCreateCategory(undefined)
+                setIsCreating(true)
+              }}>创建</button>
             </div>
           </li>
         ))}
@@ -888,9 +1239,13 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
         )}
         {!pinnedOnly && term === '' && (
           <li style={{ listStyle: 'none' }}>
-            <button type="button" className="mobile-createCard" onClick={() => setIsCreating(true)}>
+            <button type="button" className="mobile-createCard" onClick={() => { setCreateCategory(undefined); setIsCreating(true) }}>
               <PlusIcon />
               新建工作区
+            </button>
+            <button type="button" className="mobile-createCard mobile-createCategory" onClick={() => setCategoryPrompt(true)}>
+              <PlusIcon />
+              新建分类
             </button>
           </li>
         )}
@@ -991,7 +1346,100 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
           onPinnedChange={() => { togglePin(menu.workspace) }}
           onRename={(workspace) => { setMenu(undefined); setRenaming(workspace) }}
           onDelete={(workspace) => { setMenu(undefined); setDeleting(workspace) }}
+          onPurge={(workspace) => { setMenu(undefined); setPurging(workspace) }}
+          onMoveCategory={() => {
+            const workspace = menu?.workspace
+            setMenu(undefined)
+            if (workspace !== undefined) setMoveTarget(workspace)
+          }}
         />
+      )}
+      {categoryPrompt && (
+        <PromptDialog
+          title="新建分类"
+          initial=""
+          confirmLabel="创建"
+          onCancel={() => { setCategoryPrompt(false) }}
+          onConfirm={(value) => { setCategoryPrompt(false); addCategory(value) }}
+        />
+      )}
+      {categoryMenu !== undefined && (
+        <Sheet
+          title={categories.find((item) => item.id === categoryMenu)?.name ?? '分类'}
+          onClose={() => { setCategoryMenu(undefined) }}
+        >
+          <div role="menu" aria-label="分类操作">
+            <button
+              type="button"
+              role="menuitem"
+              className="sheet-option"
+              onClick={() => {
+                const category = categories.find((item) => item.id === categoryMenu)
+                setCategoryMenu(undefined)
+                if (category !== undefined) setRenamingCategory(category)
+              }}
+            >
+              <span className="sheet-option-copy"><span className="sheet-option-title">重命名分类</span></span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="sheet-option"
+              onClick={() => { if (categoryMenu !== undefined) deleteCategory(categoryMenu) }}
+            >
+              <span className="sheet-option-copy">
+                <span className="sheet-option-title" style={{ color: 'var(--danger)' }}>删除分类（工作区回到未分类）</span>
+              </span>
+            </button>
+          </div>
+        </Sheet>
+      )}
+      {renamingCategory !== undefined && (
+        <PromptDialog
+          title="重命名分类"
+          initial={renamingCategory.name}
+          confirmLabel="保存"
+          onCancel={() => { setRenamingCategory(undefined) }}
+          onConfirm={(value) => { renameCategory(renamingCategory.id, value) }}
+        />
+      )}
+      {moveTarget !== undefined && (
+        <Sheet title="移动到分类" onClose={() => { setMoveTarget(undefined) }}>
+          <div role="menu" aria-label="移动到分类">
+            {categories.map((category) => (
+              <button
+                key={category.id}
+                type="button"
+                role="menuitem"
+                className="sheet-option"
+                onClick={() => {
+                  setWorkspaceCategory(moveTarget.workspaceId, category.id)
+                  setMoveTarget(undefined)
+                  toast(`已移动到「${category.name}」`)
+                }}
+              >
+                <span className="sheet-option-copy"><span className="sheet-option-title">{category.name}</span></span>
+              </button>
+            ))}
+            <button
+              type="button"
+              role="menuitem"
+              className="sheet-option"
+              onClick={() => {
+                setWorkspaceCategory(moveTarget.workspaceId, undefined)
+                setMoveTarget(undefined)
+                toast('已移出分类')
+              }}
+            >
+              <span className="sheet-option-copy">
+                <span className="sheet-option-title" style={{ color: 'var(--text-tertiary)' }}>未分类</span>
+              </span>
+            </button>
+            {categories.length === 0 && (
+              <p className="settings-note">还没有分类，先点「新建分类」。</p>
+            )}
+          </div>
+        </Sheet>
       )}
       {renaming !== undefined && (
         <PromptDialog
@@ -1012,6 +1460,22 @@ export function WorkspaceView({ initialWorkspaceId, onPick, onOpenSettings, onLo
           busy={busy}
           onCancel={() => { setDeleting(undefined) }}
           onConfirm={() => { void handleDelete(deleting) }}
+        />
+      )}
+      {purging !== undefined && (
+        <PurgeWorkspaceSheet
+          workspace={{
+            workspaceId: purging.workspaceId,
+            title: purging.title,
+            path: purging.path,
+            sessionCount: (purging.sessionIds ?? []).length,
+          }}
+          onClose={() => { setPurging(undefined) }}
+          onDone={() => {
+            setItems(previous => previous?.filter(row => row.workspaceId !== purging.workspaceId) ?? previous)
+            setRecents(previous => removeRecent(previous, purging.workspaceId))
+            setPurging(undefined)
+          }}
         />
       )}
     </div>

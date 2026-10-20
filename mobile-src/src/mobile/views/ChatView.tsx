@@ -18,13 +18,16 @@ import type { MuxFrame } from '../../api-proxy-types'
 import { loadChatPage, prompt, type ChatPageResult, type SessionView } from './App.tsx'
 import { dropSessionFromCaches, loadDraft, loadReadingTurn, removeDraft, removeReadingTurn, saveDraft, saveReadingTurn } from '../list-persist.ts'
 import { usePageVisible } from '../foreground.ts'
+import { buzz } from '../display-prefs.ts'
 import { loadCachedHistory } from '../history-cache.ts'
 import { errorText, staleHostHint } from './App.tsx'
-import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, listSessions, history, type CommandDescriptor } from '../api.ts'
+import { fetchMobilePreferences, models, renameSession, selectModel, sendCommand, cancelSession, archiveSession, fetchPending, listCommands, listSessions, history, saveFile, type CommandDescriptor } from '../api.ts'
 import type { SessionModels } from '../../api-proxy-types'
 import type { PendingApproval, PendingQuestionItem } from '../api.ts'
 import { buildPromptParts, compressImageFile, imageFromClipboard, MAX_ATTACHED_IMAGES, type AttachedImage, type PromptPart } from '../image.ts'
-import { coalesceTurnMessages, EventFolder, foldEvents, parseTodoList, type RenderMessage, type TodoSnapshot, type WireEvent } from '../messages.ts'
+import { coalesceTurnMessages, EventFolder, foldEvents, parseTodoList, type RenderMessage, type TodoSnapshot, type WireEvent,
+  isHiddenInjectedRow,
+} from '../messages.ts'
 import { perfMark } from '../perf.ts'
 import { adoptPolledQuestions, answeredQuestionsFor, noteAnsweredQuestion } from '../question-batches.ts'
 import { adoptPolledApprovals, answeredApprovalsFor, noteAnsweredApproval } from '../approval-batches.ts'
@@ -89,6 +92,32 @@ import { TurnScrubber } from '../turn-scrubber.tsx'
 import { TaskStatusBar } from '../task-status.tsx'
 import type { JobView } from '../../api-proxy-types'
 import { SUBAGENT_POLL_MS, fetchSubagentsFlat, type SubagentFlatNode } from '../subagent-tree.ts'
+
+/**
+ * 让一个「按条件渲染」的浮层在**出现与消失**时都有淡入淡出，而不是硬切。
+ *
+ * show 变 true 立刻挂载并加 chat-float-in；变 false 先加 chat-float-out，
+ * 持续 ms 毫秒后再真正卸载（否则 React 一卸载，CSS 动画根本没机会跑）。
+ */
+function useFadePresence(show: boolean, ms = 160): { mounted: boolean; leaving: boolean } {
+  const [mounted, setMounted] = useState(show)
+  const [leaving, setLeaving] = useState(false)
+  useEffect(() => {
+    if (show) {
+      setMounted(true)
+      setLeaving(false)
+      return undefined
+    }
+    if (!mounted) return undefined
+    setLeaving(true)
+    const timer = window.setTimeout(() => {
+      setMounted(false)
+      setLeaving(false)
+    }, ms)
+    return () => { window.clearTimeout(timer) }
+  }, [show, mounted, ms])
+  return { mounted, leaving }
+}
 
 /** D1 handle-gesture tunables: the travel (px) a press must exceed before it
  *  counts as a scrub drag, and the horizontal inset of the scrub card's track
@@ -156,15 +185,6 @@ function compactModelName(id: string): string {
   return parts.length <= 2 ? id : parts.slice(-2).join('-')
 }
 
-/** Permission tone for the shield pill: read = neutral, write = accent,
- *  full access = danger (the human-vision status channel). */
-function permissionTone(value: string): 'read' | 'write' | 'full' | undefined {
-  if (value === 'danger-full-access') return 'full'
-  if (value.includes('write')) return 'write'
-  if (value.includes('read')) return 'read'
-  return undefined
-}
-
 /**
  * Distance from the bottom (px) within which streaming output still auto-follows.
  * A reader who scrolled farther up than this is left alone while new chunks
@@ -205,8 +225,15 @@ export const LOAD_OLDER_TIMEOUT_MS = 15_000
    every scroll re-locates from the scroll position, so errors never
    accumulate into drift. */
 
-/** Message count above which the chat renders windowed instead of in full. */
-export const WINDOW_THRESHOLD = 120
+/**
+ * Message count above which the chat renders windowed instead of in full.
+ *
+ * 300 而不是 120：窗口化（只渲染可视区、用估算高度撑开）是所有滚动跳动的来源，
+ * 而「几百行 DOM」对手机浏览器毫无压力（浏览器还有 content-visibility 兜底）。
+ * 提到 300 后绝大多数会话根本不进窗口化，滚动就是原生平顺的；只有上千条的
+ * 大会话才需要它。
+ */
+export const WINDOW_THRESHOLD = 300
 /**
  * Rows at the tail that always render with real layout (no content-visibility)
  * in the non-windowed path. The auto-follow reads `el.scrollHeight` to pin the
@@ -220,8 +247,8 @@ export const CONTENT_VISIBILITY_KEEP_BOTTOM = 30
 // Search can scan deep history (mobile-api SEARCH_MESSAGES_PAGES). Keep locate
 // paging bounded, but large enough to reach any result that search can return.
 export const FOCUS_MAX_PAGES = 4096
-/** Messages rendered ahead of / behind the located row. */
-export const WINDOW_OVERSCAN = 20
+/** Messages rendered ahead of / behind the located row (40: 抖动更少、窗口搬得更少). */
+export const WINDOW_OVERSCAN = 40
 /** Target visible message rows per window. */
 export const WINDOW_VISIBLE = 24
 
@@ -296,6 +323,12 @@ export function ChatView({
   initialFocusQuery,
 }: ChatViewProps) {
   const [messages, setMessages] = useState<RenderMessage[]>([])
+  /**
+   * 本轮**新出现**的消息 id（只有它们挂入场动画）。
+   *
+   * 关键：动画只给新增行，滚动重挂载/窗口搬动都不会重播 —— 否则长会话上下滑
+   * 会看到消息反复“闪一下”。首屏（第一次拿到消息）不做动画，避免整屏一起淡入。
+   */
   // Foreground gate for every poll on this view: a frozen background PWA must
   // not keep issuing RPCs (the stream and the host-side follow are released by
   // App's observe effect; returning resyncs them).
@@ -315,6 +348,12 @@ export function ChatView({
   const loadOlderRef = useRef<(silent?: boolean, beforeSeq?: number) => void>(() => {})
   // One silent auto-extend per session open (see the tail-load effect).
   const autoExtendedRef = useRef(false)
+  /**
+   * 首屏「贴底稳定器」：进入会话后的一小段时间里，图片/代码高亮等会把内容撑高，
+   * 底部会往下跑。这里在用户还没自己滚走的前提下，持续把视口钉回最底，
+   * 保证「点进去就在最新消息处」。用户一滚动（gap 变大/手指按下）立刻停。
+   */
+  const settleBottomTimerRef = useRef<number | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | undefined>(undefined)
   const [input, setInput] = useState(() => loadDraft(session.sessionId))
@@ -468,6 +507,8 @@ export function ChatView({
   const [plusOpen, setPlusOpen] = useState(false)
   /** Images picked or pasted into the composer, awaiting send (community-style attach). */
   const [attachImages, setAttachImages] = useState<AttachedImage[]>([])
+  /** 已上传到工作区的文件（发送时把路径写进 prompt 文本）。 */
+  const [attachFiles, setAttachFiles] = useState<Array<{ name: string; path: string; bytes: number }>>([])
   /** Live mirror of attachImages for the async addImage cap check (no stale closure). */
   const attachImagesRef = useRef(attachImages)
   useEffect(() => { attachImagesRef.current = attachImages }, [attachImages])
@@ -495,6 +536,7 @@ export function ChatView({
   }, [session.sessionId])
   /** Hidden file chooser backing the + menu's 图片 entry. */
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const docInputRef = useRef<HTMLInputElement | null>(null)
   /** Hidden camera capture input backing the + menu's 拍照 entry (mobile
    *  `capture` attribute opens the device camera directly). */
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
@@ -511,6 +553,10 @@ export function ChatView({
   const [queuedEntries, setQueuedEntries] = useState<OutboxEntry[]>([])
   /** Pinch-zoom state for code blocks (one active gesture at a time). */
   const pinchRef = useRef<{ block: HTMLElement; dist0: number; scale0: number } | undefined>(undefined)
+  /** Approval ids / question batch rpcIds this phone already buzzed for, so
+   * mux replays (re-subscribe, session switch back) never double-buzz. */
+  const buzzedApprovalsRef = useRef<Set<string>>(new Set())
+  const buzzedQuestionsRef = useRef<Set<string>>(new Set())
   /**
    * Composer preference from the plugin's host settings (default true keeps
    * the legacy Enter-to-send behavior until the preference loads).
@@ -912,6 +958,9 @@ export function ChatView({
     // The clock anchor is unknown here (turn/start may sit outside the
     // window) — null falls back to mount time, like the desktop TurnStatus.
     setRunning(session.running === true)
+    // 换会话：上一条会话的审批/提问去重表清掉（id 全局唯一，清了也不会重复震）。
+    buzzedApprovalsRef.current.clear()
+    buzzedQuestionsRef.current.clear()
     // 会话切换：上一轮的轮号绝不能留给下一场（名单恢复的 running 会把它当成
     // 活跃轮次，把上一场那一轮的卡片误判成运行中）。
     setRunningTurn(undefined)
@@ -957,10 +1006,8 @@ export function ChatView({
         // first screen shows ~50 messages without a manual tap. Best-effort —
         // a failure keeps the loaded tail and the manual button. Skipped on a
         // cache hit (the cached tail already painted; one less page + re-render).
-        if (page.hasMore && !autoExtendedRef.current && !cacheHit) {
-          autoExtendedRef.current = true
-          loadOlderRef.current(true)
-        }
+        // 首屏不做静默补页：用户要求「点进去就已经加载好、别再有二次加载」。
+        // 更早的内容通过「加载更早的消息」手动取。
         setLoading(false)
         // Restore the turn-clock anchor from the tail window (desktop
         // parity): the window carries the open turn/start's logged time when
@@ -1097,6 +1144,10 @@ export function ChatView({
             setTurnStartAt(null)
             // Mirror the host's turn/end normalization (see normalizeTurnEndTodo).
             normalizeTurnEndTodo()
+            // 震动（前台）：任务完成轻震一下。后台/锁屏时浏览器会忽略
+            // navigator.vibrate（Chrome 只在可见页面允许震动），那条路只能靠
+            // 系统通知（Web Push / 第三方通道）由系统去震。
+            if (document.visibilityState === 'visible') buzz()
           }
           // todo/write is a full-list snapshot (last-write-wins): adopt it
           // into the plan strip. It keeps flowing into the fold below, which
@@ -1174,15 +1225,21 @@ export function ChatView({
       // Approval/question frames for this session (#1025).
       if (!('sessionId' in frame) || frame.sessionId !== session.sessionId) return
       if (frame.type === 'approval/requested') {
+        const approvalId = frame.approvalId as string
+        // 审批到达（前台）轻震一下；按 approvalId 去重，mux 重放不再重复震。
+        if (document.visibilityState === 'visible' && approvalId !== '' && !buzzedApprovalsRef.current.has(approvalId)) {
+          buzzedApprovalsRef.current.add(approvalId)
+          buzz()
+        }
         startTransition(() => {
           setPendingApprovals(previous => {
             // This phone already answered it: the host replays what it still
             // holds, and a replay must never resurrect an answered panel.
-            if (answeredApprovalsFor(session.sessionId).has(frame.approvalId as string)) return previous
-            if (previous.some(a => a.approvalId === frame.approvalId)) return previous
+            if (answeredApprovalsFor(session.sessionId).has(approvalId)) return previous
+            if (previous.some(a => a.approvalId === approvalId)) return previous
             return [...previous, {
               rpcId: frameRpcId ?? '',
-              approvalId: frame.approvalId as string,
+              approvalId,
               toolName: frame.toolName,
               callId: frame.callId as string | undefined,
               reason: frame.reason,
@@ -1198,6 +1255,12 @@ export function ChatView({
         return
       }
       if (frame.type === 'question/requested') {
+        // 提问到达（前台）轻震一下；一批提问用一个 rpcId，去重按批。
+        const questionBatchId = frameRpcId ?? ''
+        if (document.visibilityState === 'visible' && questionBatchId !== '' && !buzzedQuestionsRef.current.has(questionBatchId)) {
+          buzzedQuestionsRef.current.add(questionBatchId)
+          buzz()
+        }
         const items = (frame.questions as Array<{
           id: string; question: string; detail?: string; header?: string
           options?: Array<{ label: string; description?: string }>; multiSelect?: boolean
@@ -1569,7 +1632,26 @@ export function ChatView({
   }
 
 
-  const handleScroll = useCallback(() => {
+  const scrollFrameRef = useRef<number | undefined>(undefined)
+  /**
+   * 手指是否正按在聊天区上。
+   *
+   * 用户在列表最底部继续拖（浏览器的 overscroll 回弹）时，如果我们在同一时刻
+   * 写 scrollTop（自动贴底、钉住真实底部），浏览器会立刻取消回弹并把内容「拽回」底部
+   * —— 现象就是「往上拖的一瞬间就弹回下面」。手势期间一律不写 scrollTop。
+   */
+  const touchActiveRef = useRef(false)
+  /**
+   * 底部越界提示：只在「已经到底、手指还想继续往上拖」时点亮点一圈紫色光晕。
+   *
+   * 不移动内容、不做回弹（用户明确否掉了果冻动效）——内容只固定不动，
+   * 光晕淡入淡出各 200ms。
+   */
+  const [bottomGlow, setBottomGlow] = useState(false)
+  const pullRef = useRef<{ startY: number; atBottom: boolean } | null>(null)
+
+  /** 一帧只跑一次滚动处理（下面 handleScroll 只是它的节流壳）。 */
+  const runScrollUpdate = useCallback(() => {
     const el = scrollRef.current
     if (el === undefined) return
     scrollTopRef.current = el.scrollTop
@@ -1626,7 +1708,20 @@ export function ChatView({
     scheduleLocate()
   }, [markSeen, scheduleLocate])
 
+  /**
+   * 滚动事件入口：手指甩动时一帧会来好几个 scroll，逐个跑状态更新会让主线程忙到掉帧，
+   * 这里按帧合并成一次。
+   */
+  const handleScroll = useCallback(() => {
+    if (scrollFrameRef.current !== undefined) return
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = undefined
+      runScrollUpdate()
+    })
+  }, [runScrollUpdate])
+
   useEffect(() => () => {
+    if (settleBottomTimerRef.current !== undefined) window.clearInterval(settleBottomTimerRef.current)
     if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
     if (eventFlushRafRef.current !== undefined) cancelAnimationFrame(eventFlushRafRef.current)
   }, [])
@@ -1667,10 +1762,44 @@ export function ChatView({
     scrollTopRef.current = el.scrollTop
   }, [])
 
+  /**
+   * 平滑滚动到指定位置（自定义时长 + easeOutCubic）。
+   *
+   * 浏览器原生的 `scrollTo({behavior:'smooth'})` 时长由浏览器决定（Android 上偏快，
+   * 有时几乎是瞬移），这里自己用 rAF 跑，快慢可以直接调 —— 用户要求「进会话时整屏
+   * 滑上去」「点回到最底部时整屏滑下去」都是这条路径。
+   */
+  const animateScrollTo = useCallback((el: HTMLDivElement, target: number, duration = 340): void => {
+    const reduce = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const start = el.scrollTop
+    const delta = target - start
+    if (reduce || Math.abs(delta) < 2) {
+      setScrollTopProgrammatically(el, target)
+      return
+    }
+    programmaticScrollRef.current = true
+    const t0 = performance.now()
+    const ease = (t: number): number => 1 - Math.pow(1 - t, 3)
+    const step = (now: number): void => {
+      const progress = Math.min(1, (now - t0) / duration)
+      el.scrollTop = start + delta * ease(progress)
+      scrollTopRef.current = el.scrollTop
+      if (progress < 1) window.requestAnimationFrame(step)
+      else setScrollTopProgrammatically(el, target)
+    }
+    window.requestAnimationFrame(step)
+  }, [setScrollTopProgrammatically])
+
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
     if (el === undefined) return
-    setScrollTopProgrammatically(el, el.scrollHeight)
+    // 手指在屏幕上时不要抢滚动（overscroll 回弹会被打断成「拽回底部」）。
+    if (!touchActiveRef.current) {
+      const maxTop = el.scrollHeight - el.clientHeight
+      // 已经在最底部（含 overscroll 期间）就别再写：重复赋同一个值会取消回弹。
+      if (Math.abs(el.scrollTop - maxTop) > 1) setScrollTopProgrammatically(el, el.scrollHeight)
+    }
     // Windowed mode: pin the window to the tail right away. The follow-up
     // rAF locate would land on the current scroll position, which can still
     // be 0 here (jsdom, or the very first frames) — the chat opens at the
@@ -1693,6 +1822,7 @@ export function ChatView({
    * correction is refreshed alongside it (see the height-correction effect).
    * Non-windowed sessions render in full, so the exact DOM value is used. */
   const pinToRealBottom = useCallback(() => {
+    if (touchActiveRef.current) return
     const el = scrollRef.current
     if (el === undefined) return
     const prefix = prefixRef.current
@@ -1718,6 +1848,10 @@ export function ChatView({
   const followedBottomRef = useRef(false)
   /** Whether the reader scrolled away from the bottom (jump-to-latest button). */
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  // 轮次药丸与「回到最下方」都要淡入淡出（用户要求：不要直接闪烁出现）。
+  const jumpPresence = useFadePresence(showJumpToLatest)
+  // 轮次药丸进会话就该在（用户反馈「突然出现」）；只有不足 2 轮时没有意义才隐藏。
+  const turnsPresence = useFadePresence(turnEntries.length >= 2)
   /** New turns that arrived while the reader was away (badge count). One
    * agent reply — however many messages and tool calls it spans — counts as
    * one, so the badge grows at reply pace, not message pace. */
@@ -1730,8 +1864,11 @@ export function ChatView({
     bottomGapAtUserScrollRef.current = 0
     setShowJumpToLatest(false)
     markSeen()
-    scrollToBottom()
-  }, [markSeen, scrollToBottom])
+    const el = scrollRef.current
+    if (el === undefined) return
+    // 用户要求：点「回到最底部」时整屏滑下去，不要瞬移到底。
+    animateScrollTo(el, el.scrollHeight, 360)
+  }, [animateScrollTo, markSeen])
 
   /** Locate one message row for a jump, reusing the search-hit locate machinery
    *  (focusMsgId + focusTargetRef + the layout-effect scroll): sets the same
@@ -1907,12 +2044,32 @@ export function ChatView({
     const el = scrollRef.current
     if (el === undefined) return
     if (!followedBottomRef.current) {
-      // First tail of this session: always follow (the chat opens at the
-      // newest message, whatever the scroll position left by a previous
-      // session). The opening baseline also seeds the unread tally.
+      // First tail of this session: land on the reader's own last question
+      // (bubble at the top, reply below) when that reply already finished;
+      // while it is still streaming, follow the tail as before.
       followedBottomRef.current = true
       lastSeenTurnRef.current = last.turn ?? 0
+      // 用户要求：点进会话直接显示最新记录（最底部），不做任何对齐。
       scrollToBottom()
+      if (settleBottomTimerRef.current !== undefined) window.clearInterval(settleBottomTimerRef.current)
+      const settleStart = Date.now()
+      settleBottomTimerRef.current = window.setInterval(() => {
+        const s = scrollRef.current
+        if (s === undefined) return
+        // 用户已经自己滚走 / 手指按着：立刻收手。
+        if (touchActiveRef.current || bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) {
+          window.clearInterval(settleBottomTimerRef.current)
+          settleBottomTimerRef.current = undefined
+          return
+        }
+        if (Date.now() - settleStart > 2500) {
+          window.clearInterval(settleBottomTimerRef.current)
+          settleBottomTimerRef.current = undefined
+          return
+        }
+        const max = s.scrollHeight - s.clientHeight
+        if (Math.abs(s.scrollTop - max) > 2) s.scrollTop = max
+      }, 120)
       return
     }
     // Unread tally: count turns that arrived after the reader's last seen
@@ -2301,7 +2458,12 @@ export function ChatView({
         clearTimeout(timeout)
         pendingRef.current = false
         if (!silent) setLoading(false)
-        const older = coalesceTurnMessages(page.rows)
+        // 兜底：窗口开头若仍是「客户端会隐藏的注入行」（time-context / skill-catalog /
+        // 插件注入的 user/message），去掉它们再 prepend —— 否则「加载更早」下方第一行
+        // 会直接是思考/过程卡，用户自己的气泡看不见。宿主侧已按可见用户消息对齐，
+        // 这里再挡一次，历史里任何异常页都不会漏。
+        let older = coalesceTurnMessages(page.rows)
+        while (older.length > 1 && isHiddenInjectedRow(older[0]!)) older = older.slice(1)
         const folder = folderRef.current
         if (folder === undefined) {
           setMessages(previous => coalesceTurnMessages([...older, ...previous]))
@@ -2705,11 +2867,38 @@ export function ChatView({
     })
   }, [])
 
+  /**
+   * 「文件」：读成 base64 交给宿主落到会话工作区 `.dsh-uploads/`，拿到相对路径后
+   * 显示成待发送的胶囊；发送时把这些路径写进 prompt 文本，agent 用文件工具直接读。
+   */
+  const addFile = useCallback((file: File) => {
+    const MAX = 24 * 1024 * 1024
+    if (file.size > MAX) {
+      toast(`文件超过 ${Math.round(MAX / 1024 / 1024)}MB，无法上传`)
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => { toast('读取文件失败') }
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      const comma = result.indexOf(',')
+      const dataBase64 = comma >= 0 ? result.slice(comma + 1) : ''
+      if (dataBase64 === '') { toast('读取文件失败'); return }
+      void saveFile(session.sessionId, file.name, dataBase64).then(
+        (saved) => {
+          setAttachFiles(previous => [...previous, { name: saved.name, path: saved.path, bytes: saved.bytes }])
+        },
+        (reason: unknown) => { toast(`上传失败：${errorText(reason)}`) },
+      )
+    }
+    reader.readAsDataURL(file)
+  }, [session.sessionId])
+
   /** Send the drafted prompt (the echoed user/message arrives over mux).
    * Offline: queue in IndexedDB instead — the reconnect effect drains it. */
   const send = useCallback(() => {
     const text = input.trim()
-    if ((text === '' && attachImages.length === 0) || sending) return
+    if ((text === '' && attachImages.length === 0 && attachFiles.length === 0) || sending) return
     // Offline: images can't queue (too big for the outbox), text can.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       if (text === '') {
@@ -2739,7 +2928,7 @@ export function ChatView({
     // registry (session.prompt would deliver it to the model verbatim).
     // Quotes and image attachments compose a prompt, so they keep prompt
     // semantics even when the text starts with '/'.
-    if (text.startsWith('/') && quoted === undefined && attachImages.length === 0) {
+    if (text.startsWith('/') && quoted === undefined && attachImages.length === 0 && attachFiles.length === 0) {
       setSending(true)
       void runCommand(text).then(
         () => {
@@ -2754,15 +2943,22 @@ export function ChatView({
     setSending(true)
     // A quoted draft composes the citation banner INTO the text part and
     // still carries the attached images (buildPromptParts appends them).
-    const body: PromptPart[] = quoted !== undefined && text !== ''
-      ? buildPromptParts(`引用消息：\n> ${quoted.replace(/\n+/g, ' ')}\n\n${text}`, attachImages)
-      : buildPromptParts(input, attachImages)
+    // 文件以「路径清单」的形式并进文本：消息协议没有通用附件类型，而 agent 读文件
+    // 本来就是按路径读，所以上传到工作区 + 写路径是最稳的。
+    const fileNote = attachFiles.length === 0
+      ? ''
+      : `\n\n已上传文件（可直接用文件工具读取）：\n${attachFiles.map(item => `- ${item.path}`).join('\n')}`
+    const baseText = quoted !== undefined && text !== ''
+      ? `引用消息：\n> ${quoted.replace(/\n+/g, ' ')}\n\n${text}`
+      : input
+    const body: PromptPart[] = buildPromptParts(baseText + fileNote, attachImages)
     void prompt(session.sessionId, body).then(
       () => {
         setSending(false)
         setInput('')
         removeDraft(session.sessionId)
         setAttachImages([])
+        setAttachFiles([])
         setQuoted(undefined)
         // Fresh activity just started: drop the poll backoff so the mux
         // fallback picks the reply up immediately, not after the stall window.
@@ -2802,10 +2998,6 @@ export function ChatView({
   }, [stopping, session.sessionId])
 
   const modelLabel = currentModel?.model ?? '模型'
-  const permissionLabel = permissions === undefined
-    ? undefined
-    : permissions.options.find(option => option.value === permissions.currentValue)?.name
-      ?? displayName(permissions.currentValue)
 
   // Context usage chip: the host's context-pressure projection (token-meter)
   // is the authoritative per-session occupancy source — it is computed for
@@ -2939,11 +3131,9 @@ export function ChatView({
     if (!followedBottomRef.current) return
     if (!autoScroll) return
     if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
-    const frame = requestAnimationFrame(() => {
-      if (bottomGapAtUserScrollRef.current > BOTTOM_FOLLOW_THRESHOLD_PX) return
-      pinToRealBottom()
-    })
-    return () => cancelAnimationFrame(frame)
+    // 同一帧内直接重钉：放到 rAF 里会先让浏览器画一帧「内容被拉起」再回弹。
+    if (bottomGapAtUserScrollRef.current <= BOTTOM_FOLLOW_THRESHOLD_PX) pinToRealBottom()
+    return undefined
   }, [messages, measuredTick, pinToRealBottom, autoScroll, windowed])
   // The top spacer carries the height correction measured on the last full
   // render frame, so the windowed total height equals the real content
@@ -3001,12 +3191,13 @@ export function ChatView({
   // spacer's DOM height is rendered from it — a ref write alone would
   // leave the rendered height stale, so correctionTick forces the
   // re-render. jsdom reports no layout (scrollHeight 0), correction 0.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current
     if (el === undefined) return
     const estimated = prefixRef.current?.[messages.length] ?? 0
     const correction = el.scrollHeight === 0 ? 0 : el.scrollHeight - estimated
-    if (correction === heightCorrectionRef.current) return
+    // 死区：几十毫秒内估算值会抖动 1~2px，每次都重排会让底部内容「被拉一下又弹回」。
+    if (Math.abs(correction - heightCorrectionRef.current) < 4) return
     heightCorrectionRef.current = correction
     setCorrectionTick(tick => tick + 1)
     // The opening scrollToBottom ran BEFORE this measurement (the follower
@@ -3108,6 +3299,8 @@ export function ChatView({
           }
         }}
         onTouchStart={(event) => {
+          // 手势期间禁止程序化写 scrollTop（否则底部 overscroll 回弹会被拽回）。
+          touchActiveRef.current = true
           // Two fingers on a code block = pinch zoom; single finger keeps the
           // long-press menu gesture.
           if (event.touches.length >= 2) {
@@ -3129,6 +3322,12 @@ export function ChatView({
           pinchRef.current = undefined
           const touch = event.touches[0]
           if (touch === undefined) return
+          // 记录按下时是否已经在最底部；拖动时据此点亮底部光晕。
+          const scrollEl = scrollRef.current
+          if (scrollEl !== undefined) {
+            const gap = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
+            pullRef.current = { startY: touch.clientY, atBottom: gap <= 1 }
+          }
           const target = event.target instanceof Element ? event.target : null
           if (target === null || target.closest('.chat-msg') === null) return
           // 代码块/图片可选中或可长按：交给系统（文字选择 / 图片菜单），
@@ -3142,6 +3341,15 @@ export function ChatView({
           longPressRef.current = { timer, x: clientX, y: clientY }
         }}
         onTouchMove={(event) => {
+          const pull = pullRef.current
+          if (pull !== null && pull.atBottom && event.touches.length === 1) {
+            const touch = event.touches[0]
+            if (touch !== undefined) {
+              const dy = pull.startY - touch.clientY // 手指上拖 → 正数
+              if (dy > 10) setBottomGlow(true)
+              else if (dy < 4) setBottomGlow(false)
+            }
+          }
           if (pinchRef.current !== undefined && event.touches.length >= 2) {
             const dist = pinchDistance(event.touches)
             if (dist > 0) applyPinch(pinchRef.current.scale0 * dist / pinchRef.current.dist0)
@@ -3150,10 +3358,16 @@ export function ChatView({
           cancelLongPress()
         }}
         onTouchEnd={(event) => {
+          touchActiveRef.current = event.touches.length > 0
+          pullRef.current = null
+          setBottomGlow(false)
           if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
           cancelLongPress()
         }}
         onTouchCancel={(event) => {
+          touchActiveRef.current = event.touches.length > 0
+          pullRef.current = null
+          setBottomGlow(false)
           if (pinchRef.current !== undefined && event.touches.length < 2) pinchRef.current = undefined
           cancelLongPress()
         }}
@@ -3190,16 +3404,11 @@ export function ChatView({
           </>
         ) : (
           messages.map((message, index) => {
-            // Non-windowed path: let the browser skip layout/paint of rows far
-            // above the viewport via content-visibility, with the existing
-            // height estimate as the contain-intrinsic-size fallback. The tail
-            // (CONTENT_VISIBILITY_KEEP_BOTTOM rows) stays real so the
-            // auto-follow's scrollHeight read stays exact. `auto` remembers a
-            // row's real size once it has been laid out, so the estimate only
-            // stands in for rows never scrolled into view.
-            const cv = index < messages.length - CONTENT_VISIBILITY_KEEP_BOTTOM
-              ? { contentVisibility: 'auto' as const, containIntrinsicSize: `auto ${estimateMessageHeight(message)}px` }
-              : undefined
+            // 不再用 content-visibility：它会把尚未渲染的行按**估算高度**撑开，
+            // 一旦滚进视口换成真实高度，整页高度就变、内容「突然一跳」。窗口化
+            // 阈值已经提到 300（绝大多数会话根本不进窗口化），普通会话全量真实
+            // 渲染完全扛得住，宁可多渲染也不要跳。
+            const cv = undefined
             return (
               <MessageRow
                 key={messageKey(message)}
@@ -3220,7 +3429,16 @@ export function ChatView({
             )
           })
         )}
-        {loading && messages.length === 0 && <p className="chat-typing">加载中…</p>}
+        {loading && messages.length === 0 && (
+          <div className="chat-loading" role="status" aria-live="polite">
+            <div className="chat-loading-rows" aria-hidden="true">
+              <span className="chat-loading-bar" style={{ width: '58%' }} />
+              <span className="chat-loading-bar" style={{ width: '86%' }} />
+              <span className="chat-loading-bar" style={{ width: '44%' }} />
+            </div>
+            <p className="chat-loading-text">正在加载会话…</p>
+          </div>
+        )}
         {!loading && messages.length === 0 && <p className="chat-typing">还没有消息，发一句话开始吧</p>}
         {running && (
           <div className="chat-turn-status" role="status" aria-label={hostLost ? '连接中断' : turnQuiet ? '后台处理中' : '输出中'}>
@@ -3248,48 +3466,6 @@ export function ChatView({
             }}
           />
         )}
-        {showJumpToLatest && turnEntries.length >= 2 && (
-          <button
-            type="button"
-            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')}
-            aria-label="轮次导航：轻点开清单，按住拖动刮擦"
-            onPointerDown={startScrub}
-            onPointerMove={moveScrub}
-            onPointerUp={endScrub}
-            onPointerCancel={cancelScrub}
-            onLostPointerCapture={cancelScrub}
-            onClick={(event) => { if (event.detail === 0) setTurnListOpen(true) }}
-          >
-            <span className="chat-jump-turns-label">{shownTurn}/{maxTurn}</span>
-          </button>
-        )}
-        {/* 「回到上次」 is ENTRY-TIME intent: it must be offered as soon as an
-            open finds a bookmark, so it is deliberately NOT gated on
-            showJumpToLatest. A bookmark that no longer differs from the newest
-            turn is not a "last read" spot at all — checked against the stable
-            host-outline newest turn AND the locally-merged one, so neither a
-            late-landing projection nor a locally-newer turn can render it. */}
-        {lastReadTurn !== undefined && lastReadTurn !== newestTurn && lastReadTurn !== maxTurn && maxTurn >= 2 && (
-          <button
-            type="button"
-            className="chat-jump-lastread"
-            aria-label="回到上次读到的轮次"
-            onClick={jumpToLastRead}
-          >
-            回到上次 · 第 {lastReadTurn} 轮
-          </button>
-        )}
-        {showJumpToLatest && (
-          <button
-            type="button"
-            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')}
-            aria-label="回到最新消息"
-            onClick={jumpToLatest}
-          >
-            <ChevronDownIcon width={20} height={20} />
-            {unreadCount > 0 && <span className="chat-jump-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
-          </button>
-        )}
       </div>
       <RunStatusBar
         todo={todo}
@@ -3314,19 +3490,6 @@ export function ChatView({
             <span className="chat-pill-name">{currentModel === undefined ? '模型' : compactModelName(currentModel.model)}</span>
             <span className="chat-pill-chevron" aria-hidden>▾</span>
           </button>
-          {permissionLabel !== undefined && permissions !== undefined && (
-            <button
-              type="button"
-              className={'chat-pill chat-pill-perm chat-pill-perm-' + (permissionTone(permissions.currentValue) ?? 'read')}
-              onClick={openPermissionPicker}
-              aria-haspopup="listbox"
-              aria-label={`切换权限：${permissionLabel}`}
-              title={permissionLabel}
-            >
-              <ShieldIcon width={16} height={16} />
-              <span className="chat-pill-name">{permissionLabel}</span>
-            </button>
-          )}
         </div>
         <div
           className={"chat-context" + (contextUsage !== undefined && contextUsage.pct >= 80 ? " chat-context-warn" : "")}
@@ -3507,6 +3670,63 @@ export function ChatView({
         />
       )}
       <div className="chat-composer">
+        <div className={'chat-pull-glow' + (bottomGlow ? ' chat-pull-glow-on' : '')} aria-hidden="true" />
+        {/* 浮层（轮次药丸 / 回到最下方）挪出滚动内容：放进去会撑高列表 → 往上拖时
+            内容突然跳一下、底部还会多一块空白。这里是绝对定位覆盖层，不参与布局。 */}
+        <div className="chat-float-layer">
+        {turnsPresence.mounted && (
+          <button
+            type="button"
+            className={'chat-jump-turns' + (scrubIndex !== undefined ? ' chat-jump-turns-live' : '')
+              + (turnsPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
+            aria-label="轮次导航：轻点开清单，按住拖动刮擦"
+            onPointerDown={startScrub}
+            onPointerMove={moveScrub}
+            onPointerUp={endScrub}
+            onPointerCancel={cancelScrub}
+            onLostPointerCapture={cancelScrub}
+            onClick={(event) => { if (event.detail === 0) setTurnListOpen(true) }}
+          >
+            {/* 直接在 React 里输出「当前 / 横线 / 总数」的结构：
+                以前是 bundle 先渲染 "x/y" 文本、再由 DOM 补丁事后包成竖排，
+                于是从出现到补丁生效之间会「先横后竖」闪一下。这里一次渲染成型，
+                补丁看到 .dm-turn-sep 已存在会直接跳过（幂等）。 */}
+            <span className="chat-jump-turns-label">
+              <span className="dm-turn-cur">{shownTurn}</span>
+              <span className="dm-turn-sep" aria-hidden="true" />
+              <span className="dm-turn-total">{maxTurn}</span>
+            </span>
+          </button>
+        )}
+        {/* 「回到上次」 is ENTRY-TIME intent: it must be offered as soon as an
+            open finds a bookmark, so it is deliberately NOT gated on
+            showJumpToLatest. A bookmark that no longer differs from the newest
+            turn is not a "last read" spot at all — checked against the stable
+            host-outline newest turn AND the locally-merged one, so neither a
+            late-landing projection nor a locally-newer turn can render it. */}
+        {lastReadTurn !== undefined && lastReadTurn !== newestTurn && lastReadTurn !== maxTurn && maxTurn >= 2 && (
+          <button
+            type="button"
+            className="chat-jump-lastread"
+            aria-label="回到上次读到的轮次"
+            onClick={jumpToLastRead}
+          >
+            回到上次 · 第 {lastReadTurn} 轮
+          </button>
+        )}
+        {jumpPresence.mounted && (
+          <button
+            type="button"
+            className={'chat-jump-latest' + (unreadCount > 0 ? ' chat-jump-latest-hot' : '')
+              + (jumpPresence.leaving ? ' chat-float-out' : ' chat-float-in')}
+            aria-label="回到最新消息"
+            onClick={jumpToLatest}
+          >
+            <ChevronDownIcon width={20} height={20} />
+            {unreadCount > 0 && <span className="chat-jump-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+          </button>
+        )}
+        </div>
         <QueueDock
           items={queueItems}
           running={running}
@@ -3532,6 +3752,22 @@ export function ChatView({
                   className="chat-attach-remove"
                   aria-label="移除图片"
                   onClick={() => { setAttachImages(previous => previous.filter((_, i) => i !== index)) }}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {attachFiles.length > 0 && (
+          <div className="chat-attach-files" role="list" aria-label="待发送文件">
+            {attachFiles.map((item, index) => (
+              <div key={`${item.path}-${String(index)}`} className="chat-attach-file" role="listitem">
+                <span className="chat-attach-file-name">{item.name}</span>
+                <span className="chat-attach-file-size">{Math.max(1, Math.round(item.bytes / 1024))} KB</span>
+                <button
+                  type="button"
+                  className="chat-attach-file-remove"
+                  aria-label="移除文件"
+                  onClick={() => { setAttachFiles(previous => previous.filter((_, i) => i !== index)) }}
                 >×</button>
               </div>
             ))}
@@ -3591,13 +3827,9 @@ export function ChatView({
       </div>
       {plusOpen && (
         <PlusSheet
-          commands={commands}
           onPickImage={() => { setPlusOpen(false); fileInputRef.current?.click() }}
+          onPickFile={() => { setPlusOpen(false); docInputRef.current?.click() }}
           onPickCamera={() => { setPlusOpen(false); cameraInputRef.current?.click() }}
-          onPickCommand={(line) => {
-            setPlusOpen(false)
-            void runCommand(line).catch(() => { /* runCommand already surfaced the error */ })
-          }}
           onClose={() => { setPlusOpen(false) }}
         />
       )}
@@ -3622,6 +3854,17 @@ export function ChatView({
         onChange={(event) => {
           const files = [...(event.target.files ?? [])]
           for (const file of files) addImage(file)
+          event.target.value = ''
+        }}
+      />
+      <input
+        ref={docInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])]
+          for (const file of files) addFile(file)
           event.target.value = ''
         }}
       />

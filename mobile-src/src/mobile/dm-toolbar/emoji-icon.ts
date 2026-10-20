@@ -30,10 +30,9 @@ export const EMOJI_ICON_HTML = `<script>
       stopped: '<rect x="5.6" y="5.6" width="12.8" height="12.8" rx="2.4"/>',
       done: '<path d="M5 12.7 9.4 17 19 6.8"/>',
       warning: '<path d="M12 4.7 20.2 19H3.8z"/><path d="M12 10.1v3.4"/><path d="M12 16.3v.5"/>',
-      // 思考中（原 💭 emoji）：云朵状思维气泡 + 三个实心点。
-      // 与其它工具图标同一套 24×24 / stroke=currentColor / 1.8 / 圆头风格，
-      // 但要把「这是思考」和「这是某个工具」在形状上区分开。
-      thinking: '<path d="M8.3 16.5h7.6a3.6 3.6 0 0 0 .5-7.1 4.9 4.9 0 0 0-9.3-1 3.4 3.4 0 0 0 1.2 8.1Z"/><circle cx="9.5" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="12.3" cy="12.7" r=".9" fill="currentColor" stroke="none"/><circle cx="15.1" cy="12.7" r=".9" fill="currentColor" stroke="none"/>',
+      // 思考中（原 💭 emoji）：**四角星**。用户指定这个形状——它和工具图标
+      // （扳手/文件夹/齿轮…）在轮廓上完全区分开，24px 下也一眼可辨。
+      thinking: '<path d="M12 3.1 13.8 9.2 20.4 11.2 13.8 13.2 12 19.3 10.2 13.2 3.6 11.2 10.2 9.2Z"/>',
       // ── 宿主唤醒消息卡（.chat-trigger-icon）用的 8 个 emoji ──
       // bundle 的 wt 表：agent-message 📨 / team-message 👥 / subagent-settled 🧩 /
       // webhook 🔔 / schedule ⏰ / tool-jobs ⚙️ / cordis-host-runner 🔌 / goal 🎯。
@@ -304,6 +303,10 @@ export const EMOJI_ICON_HTML = `<script>
         walk(document.body);
       } catch (e) {}
     }
+    // 供其它补丁（chat-status 的过程卡头行）在同一个 rAF 里主动刷新：
+    // 文字与图标必须同一拍更新，否则会看到「命令换了、图标还停在上一个」的滞后感。
+    try { window.__dmEmojiFlush = flush; } catch (e) {}
+
     function schedule() {
       if (queued) return;
       queued = true;

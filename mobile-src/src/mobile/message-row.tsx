@@ -52,6 +52,50 @@ import { CollapsibleText, MarkdownText } from './markdown-text.tsx'
 import { diffTallyOf, formatDuration, isRowRunning, processErrorsText, processFilesText, processHeadText, processModel, processStateText, processStepsText, processTimeText, toolDiffLines, visibleRowCount, type ProcessModel, type ProcessOutcome, type ProcessReasoningRow } from './process-rows.ts'
 import { stepModel, type StepVariant } from './step-view.ts'
 
+/**
+ * 用户消息里的「已上传文件」块：发送时我们把工作区路径写进 prompt（见 ChatView.send），
+ * 回显出来的 user/message 是一段纯文本。这里把那段拎出来渲染成可点的文件胶囊，
+ * 正文只保留用户自己写的话 —— 否则一串 `.dsh-uploads/…` 只能看着，没法预览/下载。
+ */
+const UPLOAD_BLOCK_RE = /\n*已上传文件（可直接用文件工具读取）：\n((?:- [^\n]+\n?)+)/
+
+function splitUploadedFiles(text: string): { body: string; files: string[] } {
+  const match = UPLOAD_BLOCK_RE.exec(text)
+  if (match === null) return { body: text, files: [] }
+  const files = match[1]!
+    .split('\n')
+    .map(line => line.replace(/^-\s*/, '').trim())
+    .filter(line => line !== '')
+  return { body: text.replace(UPLOAD_BLOCK_RE, '').trimEnd(), files }
+}
+
+function fileNameOf(path: string): string {
+  const parts = path.split(/[\/]/).filter(part => part !== '')
+  const last = parts[parts.length - 1] ?? path
+  // 上传时加了 `<时间戳>-` 前缀，展示时去掉，回到用户选的原文件名。
+  return last.replace(/^\d{10,}-/, '')
+}
+
+/** 失败原因卡片：显示宿主 turn/end 带回来的 error.message / code（可展开长文本）。 */
+function FailureDetail({ failure }: { failure: { message: string; code?: string } }): ReactNode {
+  const [open, setOpen] = useState(false)
+  const long = failure.message.length > 140 || failure.message.split('\n').length > 3
+  return (
+    <div className={'chat-msg-failure' + (open ? ' chat-msg-failure-open' : '')}>
+      <div className="chat-msg-failure-head">
+        <span className="chat-msg-failtag">本次回复失败</span>
+        {failure.code !== undefined && <span className="chat-msg-failure-code">{failure.code}</span>}
+      </div>
+      <p className="chat-msg-failure-text">{failure.message}</p>
+      {long && (
+        <button type="button" className="chat-msg-failure-toggle" onClick={() => { setOpen(value => !value) }}>
+          {open ? '收起' : '展开详情'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export const MessageRow = memo(function MessageRow({ message, sessionId, showToolCalls, showSystemMessages, showTime = true, focused = false, focusedQuery, style, onRegenerate, onOpenFile, clockOffsetMs, liveTurnStartAt, liveTurn }: {
   message: RenderMessage
   /**
@@ -205,6 +249,7 @@ export const MessageRow = memo(function MessageRow({ message, sessionId, showToo
       </div>
     )
   }
+  const uploaded = message.kind === 'user' ? splitUploadedFiles(message.text) : { body: message.text, files: [] }
   const hasReasoning = message.kind === 'assistant' && message.reasoning !== undefined && message.reasoning !== ''
   const hasTools = showToolCalls && message.kind === 'assistant' && message.tools !== undefined && message.tools.length > 0
   const hasText = message.text !== ''
@@ -233,13 +278,38 @@ export const MessageRow = memo(function MessageRow({ message, sessionId, showToo
         <AssistantBody message={message} showToolCalls={showToolCalls} forceOpen={focused} focusedQuery={focused ? focusedQuery : undefined} sessionId={sessionId} clockOffsetMs={clockOffsetMs} liveTurnStartAt={liveTurnStartAt} liveTurn={liveTurn} />
       ) : (
         <>
-          <CollapsibleText text={message.text} forceOpen={focused} highlightQuery={focused ? focusedQuery : undefined} />
+          {uploaded.files.length === 0 ? (
+            <CollapsibleText text={message.text} forceOpen={focused} highlightQuery={focused ? focusedQuery : undefined} />
+          ) : (
+            <>
+              {uploaded.body !== '' && (
+                <CollapsibleText text={uploaded.body} forceOpen={focused} highlightQuery={focused ? focusedQuery : undefined} />
+              )}
+              <div className="chat-msg-files" role="list" aria-label="已上传文件">
+                {uploaded.files.map((file, index) => (
+                  <a
+                    key={`${file}-${String(index)}`}
+                    className="chat-msg-file file-link"
+                    data-path={file}
+                    role="listitem"
+                    href="#"
+                    onClick={(event) => { event.preventDefault() }}
+                  >
+                    <span className="chat-msg-file-name">{fileNameOf(file)}</span>
+                    <span className="chat-msg-file-hint">查看 / 下载</span>
+                  </a>
+                ))}
+              </div>
+            </>
+          )}
           {images !== undefined && sessionId !== undefined && (
             <MessageImages sessionId={sessionId} images={images} />
           )}
         </>
       )}
-      {message.failed === true && <span className="chat-msg-failtag">本次回复失败</span>}
+      {message.failed === true && (message.failure === undefined
+        ? <span className="chat-msg-failtag">本次回复失败</span>
+        : <FailureDetail failure={message.failure} />)}
       {message.maxTokens === true && <div className="chat-msg-maxtokens">已达到输出 token 上限，回答被截断。发送“继续”可让模型接着输出。</div>}
       <span className="chat-msg-footer">
         {showTime && <span className="chat-msg-time">{formatTime(message.time)}</span>}
@@ -636,6 +706,12 @@ function ProcessRows({ message, model, showToolCalls, focusedQuery, sessionId }:
       continue
     }
     if (row.kind === 'tool') {
+      // 提问不走工具行：它有自己的「提问 · N/M 已回答」记录（QuestionRecords），
+      // 原始行只会在记录上方再放一遍 JSON 参数，纯噪音（桌面同样只留卡）。
+      if (row.tool.name === 'ask_user_question' && row.tool.question !== undefined) {
+        flush()
+        continue
+      }
       // 工具行跟着开关走；diff 卡不跟 —— 卡是这一轮的产出（改了哪些文件），
       // 关掉"显示工具调用"是想少看过程噪音，不是想看不到改动。
       if (showToolCalls) nodes.push(<ToolStep key={row.key} tool={row.tool} />)
@@ -759,11 +835,26 @@ function AssistantBody({ message, showToolCalls, forceOpen, focusedQuery, sessio
   // 有过程行，或者至少有一枚回合时钟（纯文本回复也要显示"本轮用了 X"）。
   // 注意：这个开关只挡工具行，不挡整组 —— 关掉工具调用不该连带丢掉思考与用时。
   const visibleRows = visibleRowCount(model, showToolCalls)
-  const showGroup = visibleRows > 0 || message.durationMs !== undefined || message.turnStartAt !== undefined
+  // 提问记录：ask_user_question 的问答历史（不跟「显示工具调用」开关，它是对话内容）
+  // 同一 callId 只留一份（合并/回放可能给出重复条目），避免记录被算两遍。
+  const questionTools = (() => {
+    const seen = new Set<string>()
+    const out: ToolCallInfo[] = []
+    for (const tool of message.tools ?? []) {
+      if (tool.question === undefined || seen.has(tool.callId)) continue
+      seen.add(tool.callId)
+      out.push(tool)
+    }
+    return out
+  })()
+  // 一轮里只有提问时，过程组没有行可显示：留着只剩「思考中 / 未改动文件」的空壳，纯噪音。
+  const questionOnly = visibleRows === 0 && questionTools.length > 0
+  const showGroup = !questionOnly && (visibleRows > 0 || message.durationMs !== undefined || message.turnStartAt !== undefined)
   const answer = model.answer
   return (
     <>
       {showGroup && <ProcessGroup message={message} model={model} showToolCalls={showToolCalls} focusedQuery={focusedQuery} sessionId={sessionId} clockOffsetMs={clockOffsetMs} liveTurnStartAt={liveTurnStartAt} liveTurn={liveTurn} />}
+      {questionTools.length > 0 && <QuestionRecords tools={questionTools} />}
       {answer !== undefined && answer !== '' && (model.answerSeq === undefined ? (
         <MarkdownText text={answer} pending={message.pending === true} forceOpen={forceOpen} highlightQuery={focusedQuery} sessionId={sessionId} />
       ) : (
@@ -772,6 +863,70 @@ function AssistantBody({ message, showToolCalls, forceOpen, focusedQuery, sessio
         </div>
       ))}
     </>
+  )
+}
+
+/**
+ * 聊天历史里的「提问 · N/M 已回答」记录。
+ *
+ * 桌面端由 `dsh-client-ui-user-questions` 渲染成一张卡（读宿主投影）。手机端没有那条
+ * 渲染路径，而本部署的 `userQuestions` 投影并不产出 settled，所以这里直接读
+ * `messages.ts` 从 tool/call + tool/result 事件折出来的记录：折叠时只显示计数，
+ * 展开才逐条列出「问了什么 / 选了什么」。
+ */
+function QuestionRecords({ tools }: { tools: ToolCallInfo[] }) {
+  const items = tools.flatMap(tool => tool.question?.items ?? [])
+  const total = items.length
+  const answered = items.filter(item => item.selected.length > 0 || item.custom !== undefined).length
+  // 条目多时才折叠，常用的 1~2 条直接铺开：用户要的是"一眼看到问题和我选了什么"，
+  // 而不是点开才知道。（桌面的那张卡也是把问题与答案直接列出来的。）
+  const [open, setOpen] = useState(items.length <= 2)
+  if (total === 0) return null
+  const pending = total - answered
+  return (
+    <div className="chat-qa">
+      <div className="chat-qa-head">
+        <span className="chat-qa-icon" aria-hidden>?</span>
+        <span className="chat-qa-title">提问</span>
+        <span className={`chat-qa-count${pending > 0 ? ' chat-qa-count-pending' : ''}`}>
+          {answered}/{total} {pending > 0 ? '待回答' : '已回答'}
+        </span>
+        {items.length > 2 && (
+          <button
+            type="button"
+            className="chat-qa-toggle"
+            onClick={() => setOpen(value => !value)}
+            aria-expanded={open}
+          >
+            {open ? '收起' : `展开 ${String(items.length)} 条`}
+          </button>
+        )}
+      </div>
+      {open && (
+        <ul className="chat-qa-list">
+          {items.map((item, index) => {
+            const answeredText = item.selected.length > 0
+              ? item.selected.join('、')
+              : (item.custom !== undefined ? item.custom : '')
+            return (
+              <li key={`${item.id}-${String(index)}`} className="chat-qa-item">
+                <div className="chat-qa-q">
+                  {item.header === undefined ? item.question : <><span className="chat-qa-header">{item.header}</span>{item.question}</>}
+                </div>
+                {answeredText === ''
+                  ? <div className="chat-qa-a chat-qa-a-empty">未回答</div>
+                  : (
+                    <div className="chat-qa-a">
+                      <span className="chat-qa-a-label">选</span>
+                      <span className="chat-qa-a-value">{answeredText}</span>
+                    </div>
+                  )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
   )
 }
 

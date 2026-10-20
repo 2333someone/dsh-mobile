@@ -307,6 +307,9 @@ export const CHAT_STATUS_HTML = `<script>
         }
         if (!line || line.nodeType !== 1) line = null;
         var target = line || state;
+        // 回合已结束（状态词是「已完成 / 失败 / 中断」）却还留着当前步骤行时，
+        // 藏掉那条动态行、把「✓ 已完成 · 用时 N 秒」露出来。
+        // 否则删掉工具行之后（例如只有一次提问的一轮）会停在「思考中」，看着像还在跑。
         if (cur && !target.classList.contains(DUP)) target.classList.add(DUP);
         else if (!cur && target.classList.contains(DUP)) target.classList.remove(DUP);
       }
@@ -406,6 +409,23 @@ export const CHAT_STATUS_HTML = `<script>
       return '思考中';
     }
 
+    /**
+     * 就地改文字时给一个 140ms 的淡入过渡。
+     *
+     * 思考/工具那一行动态改文案（「思考中」→「已完成 · 用时 5 秒」、工具描述变化）
+     * 是就地把文本节点改掉，不触发任何挂载动画，看起来就是「啪」地换了。
+     * 这里在改完之后跑一个很短的透明度过渡：够轻，不会闪。
+     */
+    function softFade(el) {
+      if (!el || typeof el.animate !== 'function') return;
+      try {
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      } catch (e) { /* 忽略 */ }
+      try {
+        el.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
+      } catch (e) { /* 老内核忽略 */ }
+    }
+
     function progressiveStep() {
       var nodes = document.querySelectorAll(STEP_TEXT);
       for (var i = 0; i < nodes.length; i++) {
@@ -424,12 +444,27 @@ export const CHAT_STATUS_HTML = `<script>
           }
         }
         raw = trim(raw);
+        // 回合已结束（head 里有「用时 N 秒」）：这一轮可能已经没有工具行可显示
+        // （唯一的工具被「提问」卡片取代），动态行会停在「思考中」。这里直接写
+        // 「已完成 · 用时 N 秒」，与折叠头那句一致。
+        var headEl = el;
+        while (headEl && headEl.nodeType === 1 && !headEl.classList.contains('chat-proc-head')) headEl = headEl.parentNode;
+        var timeEl = headEl && headEl.nodeType === 1 ? headEl.querySelector('.chat-proc-time') : null;
+        if (timeEl) {
+          var doneText = '已完成 · ' + trim(timeEl.textContent || '');
+          if (textNode !== null) {
+            if (textNode.nodeValue !== doneText) { textNode.nodeValue = doneText; softFade(el); }
+          } else {
+            el.appendChild(document.createTextNode(doneText));
+          }
+          continue;
+        }
         // 思考阶段：固定状态词（有思考段时镜像它的行数文案）。
         if (isThinkingStep(el)) {
           var thinkText = thinkingLabelOf(el);
           var nextThink = thinkText === '' ? '思考中' : thinkText;
           if (textNode !== null) {
-            if (textNode.nodeValue !== nextThink) textNode.nodeValue = nextThink;
+            if (textNode.nodeValue !== nextThink) { textNode.nodeValue = nextThink; softFade(el); }
           } else {
             el.appendChild(document.createTextNode(nextThink));
           }
@@ -440,7 +475,7 @@ export const CHAT_STATUS_HTML = `<script>
         // 保证这一行任何时刻都不是空的。
         if (raw === '') {
           var fallback = toolLabelOf(el);
-          if (textNode !== null) textNode.nodeValue = fallback;
+          if (textNode !== null) { textNode.nodeValue = fallback; softFade(el); }
           else el.appendChild(document.createTextNode(fallback));
         }
       }
@@ -465,11 +500,13 @@ export const CHAT_STATUS_HTML = `<script>
             es.addEventListener('message', function (ev) {
               var data = ev && ev.data;
               if (typeof data !== 'string') return;
-              if (data.indexOf('turn/end') < 0 && data.indexOf('turn/start') < 0) return;
               var msg;
               try { msg = JSON.parse(data); } catch (e) { return; }
-              var event = msg && msg.event;
-              if (!event || msg.type !== 'session/event') return;
+              // mux 帧是 {type:'server-request', payload: frame} 信封；兼容直接帧。
+              var frame = msg && msg.type === 'server-request' ? msg.payload : msg;
+              if (!frame || typeof frame !== 'object') return;
+              if (frame.type !== 'session/event' || !frame.event) return;
+              var event = frame.event;
               if (event.type === 'turn/start') {
                 turnStart = Date.now();
                 if (TURN_ENDED) { TURN_ENDED = false; schedule(); }
@@ -545,20 +582,28 @@ export const CHAT_STATUS_HTML = `<script>
       var runs = document.querySelectorAll('.chat-proc-think-run');
       for (var i = 0; i < runs.length; i++) {
         var el = runs[i];
-        // 跑马灯是「首尾两份」实现无缝循环：aria-hidden 那份是副本。头行改成静态
-        // 单行后副本只会变成重复字，清空它（CSS 里也直接隐藏了）。
+        var thinking = isThinkingStep(el);
+        // 思考阶段：**保留 bundle 的思考原文，并让它继续跑马灯滚动**（用户明确要求）。
+        // 但若上一拍工具阶段被我们写成了工具描述（图标已经翻回思考、文字却还是工具名
+        // ——就是用户说的「图标和命令不同步」），这里把它还原回原文再交给跑马灯。
+        if (thinking) {
+          if (el.__dmWrote !== undefined && el.__dmOrig !== undefined) {
+            setRunText(el, el.__dmOrig);
+            el.__dmWrote = undefined;
+          }
+          continue;
+        }
+        // 跑马灯是「首尾两份」实现无缝循环：aria-hidden 那份是副本。工具阶段头行改成
+        // 静态单行（放不下省略号、不滚动），副本只会变成重复字，清空它。
         var dup = el.getAttribute && el.getAttribute('aria-hidden') === 'true';
         if (dup) {
           setRunText(el, '');
           continue;
         }
-        var thinking = isThinkingStep(el);
         // 上一版这里还会把原文累计到卡片下方（§6），已按用户要求回退，只保留归一。
         var card = el.closest ? el.closest('.chat-proc') : null;
         var label;
-        if (thinking) {
-          label = '思考中';
-        } else if (card && card.classList.contains('chat-proc-running')) {
+        if (card && card.classList.contains('chat-proc-running')) {
           // 工具阶段：显示 bundle 计算好的整行描述（工具名 + 参数摘要）。
           // 它只在 React 的 props 里（头行被跑马灯占着），运行中的卡每帧对一次。
           var info = reactCurrentOf(el);
@@ -568,6 +613,9 @@ export const CHAT_STATUS_HTML = `<script>
           label = el.__dmWrote || phaseLabelOf(el);
         }
         if (label === '') label = '调用工具中';
+        // 第一次覆盖前把原文留一份：切回思考阶段时用它还原，避免「工具名」粘在
+        // 思考步骤上（跑马灯也就没法显示真正的思考原文）。
+        if (el.__dmWrote === undefined) el.__dmOrig = el.textContent;
         el.__dmWrote = label;
         setRunText(el, label);
         // CSS 已经用 transform:none !important 把跑马灯按住；再把 bundle 用
@@ -605,10 +653,11 @@ export const CHAT_STATUS_HTML = `<script>
         // 我们把文本换成状态词/工具描述后它仍在跑（还会把 32px 间隔转到可视区），
         // 这就是「空药丸」的来源。这里用 !important 盖掉动画（动画在层叠里低于
         // author !important），并把第二份副本直接藏掉。
-        '.chat-proc-think{overflow:hidden!important;min-width:0!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
-        '.chat-proc-think-track{display:block!important;max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;animation:none!important;transform:none!important;will-change:auto!important;}',
-        '.chat-proc-think-run{display:block!important;max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
-        '.chat-proc-think-scroll .chat-proc-think-run+.chat-proc-think-run{display:none!important;}',
+        // 思考阶段的头行是源码里的 ThinkMarquee（WAAPI 平移 .chat-proc-think-track）。
+        // 之前为了「静态单行」把 track 的 animation/transform 全 !important 按住，
+        // 等于把跑马灯掐死；用户要求思考文字继续滚，这里不再覆盖这几条，只保留
+        // 单行与省略号所需的最小约束。
+        '.chat-proc-think{overflow:hidden!important;min-width:0!important;white-space:nowrap!important;}',
         '.chat-proc-current-text{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}',
         // ── 折叠栏「第二行闪现」────────────────────────────────────────────
         // 头行有两行：.chat-proc-label（状态词 + 用时）与 .chat-proc-current（当前步骤）。
@@ -621,11 +670,33 @@ export const CHAT_STATUS_HTML = `<script>
       (document.head || document.documentElement).appendChild(style);
     }
 
+    // 思考步骤的图标是 bundle 自己画的「云朵」SVG（不是 emoji，emoji→SVG 的映射
+    // 碰不到它），而用户指定思考中要用**四角星**。这里直接把那条 path 的 d 换掉，
+    // 并在 flush 里与文字同一拍执行（否则会出现「文字已换、图标还停在云朵」的滞后）。
+    // 用户给的参考：**实心四角星（凹边 sparkle）**，不是描边星形。
+    // 24×24 视框、四条边向中心内凹的贝塞尔曲线，fill=currentColor、无描边 ——
+    // 在 18px 下与其它步骤图标同重量，且和「工具」类图标一眼区分。
+    var THINK_STAR_PATH = 'M12 3C12.9 8.1 15.9 11.1 21 12 15.9 12.9 12.9 15.9 12 21 11.1 15.9 8.1 12.9 3 12 8.1 11.1 11.1 8.1 12 3Z';
+
+    function paintStar(path) {
+      if (path.getAttribute('d') !== THINK_STAR_PATH) path.setAttribute('d', THINK_STAR_PATH);
+      if (path.getAttribute('fill') !== 'currentColor') path.setAttribute('fill', 'currentColor');
+      if (path.getAttribute('stroke') !== 'none') path.setAttribute('stroke', 'none');
+    }
+
+    function overrideThinkGlyph() {
+      var paths = document.querySelectorAll('.chat-step-icon-thinking svg path, .chat-proc-lead-running svg path');
+      for (var i = 0; i < paths.length; i++) paintStar(paths[i]);
+    }
+
     function flush() {
       queued = false;
       try { renameProcState(); } catch (e) {}
       try { dedupeProcCurrent(); } catch (e) {}
       try { progressiveStep(); } catch (e) {}
+      try { overrideThinkGlyph(); } catch (e) {}
+      // 文字改完立刻同步图标（emoji→SVG 的替换在另一个注入脚本里），避免图标比文字慢一拍。
+      try { if (window.__dmEmojiFlush) window.__dmEmojiFlush(); } catch (e) {}
       try { normalizeProcThink(); } catch (e) {}
       try { renameTurnText(); } catch (e) {}
       try { syncElapsed(); } catch (e) {}

@@ -26,6 +26,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { escapeHtml, parseSegments, parseStreamPrefix, safeUrl, type MarkdownSegment, type StreamBlock } from './markdown.ts'
 import { loadLocalImageUrl } from './local-images.ts'
+
+/**
+ * 图片宽高比缓存（按 data-local-src 记住）。
+ *
+ * 图片是异步读回来的：加载前只能占一个 56px 的占位，加载完高度突变 —— 回滚历史时
+ * 每张图都会让整屏内容跳一下。记住过一次的比例后，重挂载时先按 aspect-ratio 占位，
+ * 高度从第一帧就是对的，滚动不再抖。
+ */
+const imageRatioCache = new Map<string, string>()
 import { CodeBlock } from './code-block.tsx'
 import { DiffView } from './diff-view.tsx'
 import { ChevronUpIcon, SearchIcon } from './icons.tsx'
@@ -254,6 +263,31 @@ export function MarkdownText({ text, pending, forceOpen = false, highlightQuery,
    * own authenticated channel, and `safeUrl` — which deliberately rejects
    * `data:` — only ever sees authored markdown.
    */
+  // 给消息里的图片套一层可见的「图片卡片」：用户反馈图片直接贴在文字流里，
+  // 看不出这是一张图，加载完还会在下方留一圈灰底。React 只管 bodyRef 这一层
+  // （内容来自 dangerouslySetInnerHTML），所以这里在它内部包一层不会打乱协调；
+  // 每次 segments 变化（innerHTML 被重建）后重跑一遍即可。
+  useEffect(() => {
+    const root = bodyRef.current
+    if (root === null) return
+    for (const img of Array.from(root.querySelectorAll<HTMLImageElement>('img'))) {
+      if (img.closest('.chat-md-image') !== null) continue
+      const figure = document.createElement('figure')
+      figure.className = 'chat-md-image'
+      const caption = document.createElement('figcaption')
+      caption.className = 'chat-md-image-cap'
+      caption.textContent = '图片'
+      const parent = img.parentNode
+      if (parent === null) continue
+      const localSrc = img.getAttribute('data-local-src')
+      const knownRatio = localSrc === null ? undefined : imageRatioCache.get(localSrc)
+      if (knownRatio !== undefined) img.style.aspectRatio = knownRatio
+      parent.insertBefore(figure, img)
+      figure.appendChild(img)
+      figure.appendChild(caption)
+    }
+  }, [segments])
+
   useEffect(() => {
     const root = bodyRef.current
     if (root === null || sessionId === undefined) return
@@ -271,7 +305,39 @@ export function MarkdownText({ text, pending, forceOpen = false, highlightQuery,
           return
         }
         image.dataset['localState'] = 'loaded'
+        // 图片加载会让它所在行突然长高：如果这张图在视口**上方**，整屏内容会被
+        // 顶下去（用户看到的「突然一跳」）。这里记下加载前高度，加载完成后按差值
+        // 补偿 scrollTop，视野保持不动；同时记住宽高比，重挂载时第一帧就占对位置。
+        const heightBefore = image.getBoundingClientRect().height
         image.src = url
+        const settle = (): void => {
+          const w = image.naturalWidth
+          const h = image.naturalHeight
+          if (w > 0 && h > 0) {
+            const ratio = `${String(w)} / ${String(h)}`
+            imageRatioCache.set(path, ratio)
+            image.style.aspectRatio = ratio
+          }
+          try {
+            const scroller = image.closest('.chat-scroll')
+            if (scroller === null) return
+            const delta = image.getBoundingClientRect().height - heightBefore
+            if (delta <= 1) return
+            const imgRect = image.getBoundingClientRect()
+            const scRect = scroller.getBoundingClientRect()
+            const gapAfter = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+            // 情况 A：图片在视口上方长高 → 补 scrollTop，视野保持不动。
+            if (imgRect.bottom <= scRect.top) {
+              scroller.scrollTop += delta
+              return
+            }
+            // 情况 B：读者本来就在最底部（图片长高把底部顶下去）→ 继续贴底，
+            // 否则进入会话后会停在离底部几百像素的地方。
+            if (gapAfter <= delta + 8) scroller.scrollTop = scroller.scrollHeight
+          } catch {}
+        }
+        if (image.complete && image.naturalWidth > 0) settle()
+        else image.addEventListener('load', settle, { once: true })
       })
     }
   }, [segments, sessionId])

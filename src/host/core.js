@@ -18,7 +18,7 @@ import { createServer } from 'node:http'
 import { randomBytes, randomInt } from 'node:crypto'
 import { homedir, networkInterfaces } from 'node:os'
 import { join, basename, resolve as resolvePath, relative as relativePath, isAbsolute as isAbsolutePath, extname } from 'node:path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { textOfEventData, createMuxRuntime, createSseRuntime } from './sse.js'
@@ -28,8 +28,9 @@ import { createSubagentRpc } from './rpc/subagent.js'
 import { createPushRpc } from './rpc/push.js'
 import { ONLINE_GUARD_HTML, VIEWPORT_VH_HTML, MUTATION_BUS_HTML, mobilePageHtml, pushCheckPageHtml, manifestJson } from './pages.js'
 import { createHostState } from './state.js'
+import { listSessionFiles, normalizeSessionId, purgeSessionDir, purgeSessionFiles, purgeWorkspaceDir, sessionIdVariants } from './cleanup.js'
 import { normalizePublicBase, loadPublicBase, savePublicBase, loadDevices, persistDevices, protectedSessionsFile, loadProtectedSessionIds, createDeviceAuth } from './devices.js'
-import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
+import { USAGE_CACHE_TTL_MS, BALANCE_FETCH_TIMEOUT_MS, DEEPSEEK_BALANCE_URL, DEEPSEEK_BALANCE_NAME, DEEPSEEK_BALANCE_BASE_URL, SEND_MODE_DEFAULT, SEND_MODE_STEER, SEND_MODE_QUEUE, COMPRESSIBLE_TYPE, MIN_COMPRESS_BYTES, defaultDevicesFile, TOKEN_TTL_MS, IDLE_EXPIRE_MS, SWEEP_INTERVAL_MS, PENDING_TTL_MS, PENDING_SWEEP_MS, MAX_DEVICES, DEFAULT_MOBILE_PORT, DEFAULT_PAIR_CODE, SMALL_BODY, PROMPT_BODY, MOBILE_FILE_MAX_BYTES, COMMAND_EXEC_TIMEOUT_MS, SKILL_CATALOG_TIMEOUT_MS, PERMISSION_LABELS, PERMISSION_DESCS, permissionLabel, permissionDesc, SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, MAX_FOLLOWED_PER_DEVICE, FOLLOW_RETRY_MS, OBSERVE_TTL_MS, MAX_FOLLOW_RESTARTS, SSE_MAX_LIFETIME_MS, MUX_ALWAYS_FORWARDED, FOLLOW_ASSISTANT_STREAM, STREAM_SEEN_INDEX_MAX, STREAM_SEQ_SLOTS, COOKIE_NAME, MOBILE_ROOT, API_PREFIX, BUNDLE_URL, MANIFEST_URL, ICON_SVG_URL, THEME_URL, ICON_192_URL, ICON_512_URL, APPLE_TOUCH_URL, WHALE_URL, PUSH_CHECK_URL, SHOT_PREFIX, SHOT_NAME, SHOT_TYPES, SHOT_DIR, FILE_PREFIX, FILE_TOKEN_TTL_MS, PLUGIN_VERSION, UPDATE_FETCH_TIMEOUT_MS, compareVersions } from './config.js'
 import { assetCache, asset, bundleVersion, assetText, __dirname, ensureShotDir } from './assets.js'
 import { compressCache, compressFor, send, sendJson, sendHtml, sendText, sendBuffer, readBody, readJsonBody, parseCookies, isLoopback, lanIPv4Addresses } from './http.js'
 
@@ -897,9 +898,23 @@ export function createHost(ctx, config) {
     }
 
     const toEvents = (records) => records.map((r) => ({ event: r.event }))
+    // 「加载更早」的窗口起点必须是**用户看得见**的那条消息。
+    // 宿主会把 time-context / skill-catalog / 插件注入这类 user/message 写进日志，
+    // 手机端一律隐藏它们；若把这种行当成 turn 起点，窗口就会以 assistant/message
+    // 开头 —— 界面上下拉加载出现的第一行直接是思考/过程卡，自己的提问气泡不见了。
+    const TRIGGER_SOURCE_KINDS = new Set([
+      'agent-message', 'team-message', 'subagent-settled', 'webhook',
+      'schedule', 'tool-jobs', 'cordis-host-runner', 'goal',
+    ])
     const isUserMessage = (record) => {
       const event = record && record.event
-      return event !== null && typeof event === 'object' && event.type === 'user/message'
+      if (event === null || typeof event !== 'object' || event.type !== 'user/message') return false
+      const data = event.data
+      const source = data !== null && typeof data === 'object' ? data.source : undefined
+      const kind = source !== null && typeof source === 'object' && typeof source.kind === 'string' ? source.kind : ''
+      if (kind === '' || kind === 'user') return true
+      // 触发类唤醒消息要独立成卡片，属于可见行，可以作为窗口起点。
+      return TRIGGER_SOURCE_KINDS.has(kind)
     }
     const firstUserIndex = (records) => {
       for (let index = 0; index < records.length; index += 1) {
@@ -918,7 +933,9 @@ export function createHost(ctx, config) {
     }
 
     const first = await pageWindow(beforeSeq)
-    // 首屏（无 beforeSeq）与其他读取路径一律保持原样：只取最新一页，不做任何裁剪。
+    // 首屏（无 beforeSeq）：只取最新一页，**不做任何对齐/补齐**。
+    // 用户要求：点进会话直接看到最新的聊天记录（最底部），不要先对齐到「上一条提问」，
+    // 也不要为了对齐而多翻页 —— 那会让进入后的落点不可预期、还多一次宿主查询。
     if (beforeSeq === undefined) {
       return {
         events: toEvents(first.records),
@@ -1283,6 +1300,8 @@ export function createHost(ctx, config) {
   }
   // base64 会再胖 1/3：8MB 原图 ≈ 11MB JSON，手机上再大就卡了。
   const PREVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+  // 文本预览上限（与源码 FilePreviewSheet 的约定一致：256KiB）。
+  const PREVIEW_TEXT_MAX_BYTES = 256 * 1024
 
   /**
    * 四个 Agent 预设的中文名与一句话说明。
@@ -2947,6 +2966,129 @@ export function createHost(ctx, config) {
     return await operation()
   }
 
+  /** 会话 cwd（兼容 session- 前缀的两种 id 写法）。 */
+  function cwdOfSession(sessionId) {
+    for (const variant of sessionIdVariants(sessionId)) {
+      const cwd = sessionCwd(variant)
+      if (typeof cwd === 'string' && cwd !== '') return cwd
+    }
+    return ''
+  }
+
+  /**
+   * 会话「永久删除」：先归档（所有设备立即从列表消失）→ 会话目录进回收站 →
+   * 清投影缓存/待处理项 → 广播 session/removed。删除不可恢复。
+   * 运行中的会话一律拒绝，受保护会话需要明确 allowProtected。
+   */
+  async function purgeSession(sessionId, options = {}) {
+    const rawId = String(sessionId || '')
+    const id = normalizeSessionId(rawId)
+    if (id === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+    const protectedIds = loadProtectedSessionIds()
+    if (options.allowProtected !== true) {
+      const isProtected = protectedIds.has(rawId) || protectedIds.has(`session-${id}`) || protectedIds.has(id)
+      if (isProtected) return { ok: false, error: { code: 'protected', message: '该会话受保护，不能从手机端永久删除' } }
+    }
+    if (options.force !== true) {
+      try {
+        const { items = [] } = await sc().list({}, new AbortController().signal)
+        const item = items.find((it) => normalizeSessionId(it.sessionId) === id)
+        if (item && item.running === true) {
+          return { ok: false, error: { code: 'running', message: '会话正在运行，先停止再删除' } }
+        }
+      } catch {}
+      // 注意：不能只看 liveAgentOf()。宿主的 session.create/resolveAgent 会给
+      // 刚建的空会话挂一个活 Agent（非运行中），用它当判据会让「新建的空会话」
+      // 永远删不掉。是否真的在跑，以 controller.list() 的 running 为准。
+    }
+    // 墓碑：先归档，列表立刻不再显示（即使宿主内存里还有这条会话）。
+    for (const variant of sessionIdVariants(id)) {
+      try {
+        const reg = wr()
+        if (reg && typeof reg.archiveSession === 'function') await reg.archiveSession(variant, { stopActivity: true })
+      } catch {}
+    }
+    const result = purgeSessionDir(id)
+    if (!result.ok) return result
+    // 待处理审批/提问属于已删会话：放开等待链，避免桌面审批卡死。
+    for (const [rpcId, entry] of [...pending.approvals]) {
+      if (normalizeSessionId(entry.sessionId) !== id) continue
+      entry.resolve(undefined)
+      pending.approvals.delete(rpcId)
+      if (entry.approvalId !== undefined) pending.byApprovalId.delete(entry.approvalId)
+    }
+    for (const [rpcId, entry] of [...pending.questions]) {
+      if (normalizeSessionId(entry.sessionId) !== id) continue
+      entry.resolve(undefined)
+      pending.questions.delete(rpcId)
+    }
+    // 广播：手机端立刻把该行收起（两种 id 写法都发，客户端按自己的写法匹配）。
+    for (const variant of sessionIdVariants(id)) emitMux({ type: 'session/removed', sessionId: variant })
+    return { ok: true, value: { sessionId: id, dir: result.dir, bytes: result.bytes } }
+  }
+
+  /**
+   * 手机端目录浏览的 fs 兜底：宿主的 directoryPickerController 可能是
+   * native 模式（只有原生对话框，没有 list 能力），此时 picker.list 会抛
+   * 「needs the browse capability」。手机端没有原生对话框，必须自己列目录。
+   * 只列子目录（文件不能当工作区）；入口路径仍由调用方决定（默认 home）。
+   */
+  function listDirectoryWithFs(requested) {
+    const home = (() => {
+      try {
+        return realpathSync(homedir())
+      } catch {
+        return homedir()
+      }
+    })()
+    let dir
+    try {
+      dir = requested !== undefined && requested !== '' ? resolvePath(requested) : home
+      if (!statSync(dir).isDirectory()) {
+        return { ok: false, error: { code: 'bad-request', message: '不是目录' } }
+      }
+      dir = realpathSync(dir)
+    } catch (err) {
+      return { ok: false, error: { code: 'not-found', message: err && err.message ? err.message : '目录不存在' } }
+    }
+    let entries = []
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => {
+          try {
+            return entry.isDirectory() || (entry.isSymbolicLink() && statSync(join(dir, entry.name)).isDirectory())
+          } catch {
+            return false
+          }
+        })
+        .map((entry) => ({
+          name: entry.name,
+          path: join(dir, entry.name),
+          hidden: entry.name.startsWith('.'),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    } catch (err) {
+      return { ok: false, error: { code: 'list-failed', message: err && err.message ? err.message : '读取目录失败' } }
+    }
+    const MAX = 500
+    const truncated = entries.length > MAX
+    if (truncated) entries = entries.slice(0, MAX)
+    // 面包屑：从盘符/根开始逐段列出。
+    const crumbs = []
+    const parsed = resolvePath(dir)
+    const parts = parsed.split(/[\\/]+/).filter(Boolean)
+    if (parts.length > 0) {
+      const root = parsed.startsWith('/') ? '/' : `${parts[0]}\\`
+      crumbs.push({ name: parts[0], path: root })
+      let acc = root
+      for (let index = 1; index < parts.length; index += 1) {
+        acc = join(acc, parts[index])
+        crumbs.push({ name: parts[index], path: acc })
+      }
+    }
+    return { ok: true, value: { path: dir, home, crumbs, entries, truncated } }
+  }
+
   async function dispatchRpc(method, payload, rpcContext) {
     const controller = sc()
     // 注册表优先：已搬进 src/host/rpc/ 的域在这里命中，还没搬的继续落到下面的 switch。
@@ -3180,6 +3322,49 @@ export function createHost(ctx, config) {
         await controller.delete({ workspaceId: payload.workspaceId })
         return { ok: true, value: { deleted: true } }
       }
+      case 'workspace.purge': {
+        // 工作区级清理：先逐个删会话（受保护/运行中的跳过），再注销工作区；
+        // deleteWorkspaceFiles=true 时把整个目录搬进回收站（必须精确确认路径）。
+        const workspaceId = String(payload.workspaceId || '')
+        const registry = wr()
+        const workspaces = registry && typeof registry.list === 'function' ? registry.list() : []
+        const workspace = workspaces.find((item) => String(item.id) === workspaceId)
+        if (!workspace) return { ok: false, error: { code: 'not-found', message: '工作区不存在' } }
+        const sessionIds = Array.isArray(workspace.sessionIds) ? [...workspace.sessionIds] : []
+        const purged = []
+        const skipped = []
+        const failed = []
+        for (const sessionId of sessionIds) {
+          const result = await purgeSession(sessionId, { hard: payload.hard === true })
+          if (result.ok) purged.push(sessionId)
+          else if (result.error && (result.error.code === 'protected' || result.error.code === 'running')) {
+            skipped.push({ sessionId, reason: result.error.code })
+          } else {
+            failed.push({ sessionId, reason: result.error && result.error.message })
+          }
+        }
+        if (payload.deleteWorkspaceFiles === true) {
+          if (String(payload.confirmPath || '') !== String(workspace.path || '')) {
+            return { ok: false, error: { code: 'confirm-mismatch', message: '确认路径与工作区路径不一致' }, value: { purged, skipped, failed } }
+          }
+          const deleted = purgeWorkspaceDir(workspace.path, { pluginDir: __dirname })
+          if (!deleted.ok) return { ok: false, error: deleted.error, value: { purged, skipped, failed } }
+        }
+        const controller = wc()
+        if (!controller || typeof controller.delete !== 'function') {
+          return { ok: false, error: { code: 'unavailable', message: '工作区服务不可用' }, value: { purged, skipped, failed } }
+        }
+        try {
+          await controller.delete({ workspaceId })
+        } catch (err) {
+          return {
+            ok: false,
+            error: { code: 'workspace-delete-failed', message: err && err.message ? err.message : String(err) },
+            value: { purged, skipped, failed },
+          }
+        }
+        return { ok: true, value: { purged, skipped, failed } }
+      }
       case 'workspace.archiveSession': {
         // 契约（宿主 api-workspace-controller）：archiveSession({ sessionId, stopActivity })
         // → { archivedSessionIds }。registry 上这个方法接收 (sessionId, options)，
@@ -3221,6 +3406,26 @@ export function createHost(ctx, config) {
           return { ok: false, error: { code: 'unarchive-failed', message } }
         }
         return { ok: true, value: { archivedSessionIds: archived } }
+      }
+      case 'session.purge': {
+        // 永久删除会话：归档墓碑 + rm -rf 会话目录（不可恢复）。
+        return await purgeSession(payload.sessionId, {
+          allowProtected: payload.allowProtected === true,
+          force: payload.force === true,
+        })
+      }
+      case 'session.files.list': {
+        const sessionId = String(payload.sessionId || '')
+        if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+        const files = listSessionFiles(sessionId, cwdOfSession(sessionId))
+        return { ok: true, value: files }
+      }
+      case 'session.files.delete': {
+        const sessionId = String(payload.sessionId || '')
+        if (sessionId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 sessionId' } }
+        const result = purgeSessionFiles(sessionId, payload.paths, cwdOfSession(sessionId))
+        if (!result.ok) return result
+        return { ok: true, value: result }
       }
       case 'mobile.preferences': {
         // 手机 bundle 的启动探针；形态必须匹配 dsh-palm，否则会判定「连不上 host」。
@@ -3994,6 +4199,85 @@ export function createHost(ctx, config) {
         }
         return { ok: true, value: { mediaType, dataUrl: `data:${mediaType};base64,${data}` } }
       }
+      /**
+       * 手机端「添加文件」：把选中的文件落到会话工作区的 `.dsh-uploads/` 下，
+       * 返回相对路径。手机端拿到路径后写进 prompt 文本，agent 用普通文件工具
+       * 就能读到 —— DSH 的消息协议没有「附件」概念，路径是最稳的载体。
+       *
+       * 边界：必须已配对设备、必须有会话 cwd、文件名去危险字符、大小上限
+       * MOBILE_FILE_MAX_BYTES；只写 `.dsh-uploads/`，不动工作区其它位置。
+       */
+      case 'mobile.saveFile': {
+        const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+        const rawName = typeof payload?.name === 'string' ? payload.name : ''
+        const dataBase64 = typeof payload?.dataBase64 === 'string' ? payload.dataBase64 : ''
+        if (sessionId === '' || rawName === '' || dataBase64 === '') {
+          return { ok: false, error: { code: 'invalid-request', message: '缺少会话、文件名或内容' } }
+        }
+        const cwd = sessionCwd(sessionId)
+        if (cwd === '') {
+          return { ok: false, error: { code: 'no-workspace', message: '当前会话没有工作目录，无法保存文件' } }
+        }
+        const safeName = rawName
+          .replace(/[\/:*?"<>|]/g, '_')
+          .replace(/[\u0000-\u001f]/g, '_')
+          .replace(/^\.+/, '')
+          .slice(-120) || 'file'
+        let buffer
+        try {
+          buffer = Buffer.from(dataBase64, 'base64')
+        } catch {
+          return { ok: false, error: { code: 'bad-request', message: '文件内容不是合法的 base64' } }
+        }
+        if (buffer.length === 0) {
+          return { ok: false, error: { code: 'bad-request', message: '文件是空的' } }
+        }
+        if (buffer.length > MOBILE_FILE_MAX_BYTES) {
+          return {
+            ok: false,
+            error: { code: 'too-large', message: `文件超过 ${Math.round(MOBILE_FILE_MAX_BYTES / 1024 / 1024)}MB 上限` },
+          }
+        }
+        try {
+          const dir = join(cwd, '.dsh-uploads')
+          mkdirSync(dir, { recursive: true })
+          const target = join(dir, `${Date.now()}-${safeName}`)
+          writeFileSync(target, buffer)
+          return {
+            ok: true,
+            value: {
+              path: relativePath(cwd, target).split('\\').join('/'),
+              name: safeName,
+              bytes: buffer.length,
+            },
+          }
+        } catch (err) {
+          return { ok: false, error: { code: 'write-failed', message: String(err && err.message ? err.message : err) } }
+        }
+      }
+      /**
+       * 手机端「下载/预览」一个工作区文件：返回短时下载地址。
+       * 只接受会话工作区内的路径（realpath 校验，挡 ../ 与符号链接逃逸）。
+       */
+      case 'mobile.fileUrl': {
+        const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+        const requested = typeof payload?.path === 'string' ? payload.path.trim() : ''
+        const resolved = resolveInWorkspace(sessionId, requested)
+        if (resolved === null) {
+          return { ok: false, error: { code: 'forbidden', message: '只能下载工作区内的文件' } }
+        }
+        const token = randomBytes(16).toString('hex')
+        fileTokens.set(token, { realPath: resolved.realPath, expiresAt: Date.now() + FILE_TOKEN_TTL_MS })
+        // 顺手清掉过期令牌，避免长驻内存。
+        for (const [key, value] of fileTokens) if (value.expiresAt < Date.now()) fileTokens.delete(key)
+        return {
+          ok: true,
+          value: {
+            url: `${FILE_PREFIX}/${token}`,
+            name: basename(resolved.realPath),
+          },
+        }
+      }
       case 'mobile.readFile': {
         // 手机端 markdown 里的本地图片（`![](相对路径)`）走这里：
         // bundle 只把路径写进 <img data-local-src>，随后用 mobile.readFile
@@ -4031,9 +4315,6 @@ export function createHost(ctx, config) {
           return { ok: false, error: { code: 'forbidden', message: '只能读取工作区内的文件' } }
         }
         const mediaType = PREVIEW_IMAGE_MIME[extname(realPath).toLowerCase()]
-        if (mediaType === undefined) {
-          return { ok: false, error: { code: 'unsupported', message: '只支持图片预览' } }
-        }
         let stat
         try {
           stat = statSync(realPath)
@@ -4043,21 +4324,49 @@ export function createHost(ctx, config) {
         if (!stat.isFile()) {
           return { ok: false, error: { code: 'invalid-request', message: '不是文件' } }
         }
-        if (stat.size > PREVIEW_IMAGE_MAX_BYTES) {
-          return { ok: false, error: { code: 'too-large', message: '图片太大（上限 8MB）' } }
+        // 图片：直接给 data URL（聊天里的本地图片也走这条）。
+        if (mediaType !== undefined) {
+          if (stat.size > PREVIEW_IMAGE_MAX_BYTES) {
+            return { ok: false, error: { code: 'too-large', message: '图片太大（上限 8MB）' } }
+          }
+          let base64
+          try {
+            base64 = readFileSync(realPath).toString('base64')
+          } catch {
+            return { ok: false, error: { code: 'internal', message: '图片读取失败' } }
+          }
+          return {
+            ok: true,
+            value: {
+              kind: 'image',
+              mediaType,
+              dataUrl: `data:${mediaType};base64,${base64}`,
+              name: basename(realPath),
+              path: realPath,
+            },
+          }
         }
-        let base64
+        // 非图片：给**文本预览**（源码里的 FilePreviewSheet 早就支持 {kind:'text'}，
+        // 之前宿主这里只放行图片，于是 txt/md/json 全被判成「只支持图片预览」）。
+        // 判据：≤256KiB 且前 4KB 里没有 NUL（二进制直接拒绝，客户端会改给「下载」）。
+        if (stat.size > PREVIEW_TEXT_MAX_BYTES) {
+          return { ok: false, error: { code: 'too-large', message: '文件太大，无法预览，可下载查看' } }
+        }
+        let raw
         try {
-          base64 = readFileSync(realPath).toString('base64')
+          raw = readFileSync(realPath)
         } catch {
-          return { ok: false, error: { code: 'internal', message: '图片读取失败' } }
+          return { ok: false, error: { code: 'internal', message: '文件读取失败' } }
+        }
+        const head = raw.subarray(0, 4096)
+        if (head.includes(0)) {
+          return { ok: false, error: { code: 'unsupported', message: '该文件是二进制，无法预览，可下载查看' } }
         }
         return {
           ok: true,
           value: {
-            kind: 'image',
-            mediaType,
-            dataUrl: `data:${mediaType};base64,${base64}`,
+            kind: 'text',
+            text: raw.toString('utf8'),
             name: basename(realPath),
             path: realPath,
           },
@@ -4075,10 +4384,10 @@ export function createHost(ctx, config) {
         // home/crumbs/truncated），绝不用裸 fs.readdir 打开任意路径。
         //
         const picker = dp()
-        if (!picker || typeof picker.list !== 'function') {
-          return { ok: false, error: { code: 'unavailable', message: '目录浏览不可用（宿主未提供 directoryPickerController）' } }
-        }
         const requested = typeof payload?.path === 'string' && payload.path !== '' ? payload.path : undefined
+        if (!picker || typeof picker.list !== 'function') {
+          return listDirectoryWithFs(requested)
+        }
         try {
           const listing = await picker.list(requested, new AbortController().signal)
           // 契约（@deepseek-ai/dsh-host-directory-picker/types#DirectoryListing）：
@@ -4098,6 +4407,9 @@ export function createHost(ctx, config) {
             },
           }
         } catch (err) {
+          // native 模式的 picker 没有 list 能力：手机端退回自己的 fs 列目录。
+          const fallback = listDirectoryWithFs(requested)
+          if (fallback.ok === true) return fallback
           return {
             ok: false,
             error: {
@@ -4106,6 +4418,64 @@ export function createHost(ctx, config) {
             },
           }
         }
+      }
+      case 'mobile.roots': {
+        // 手机端目录浏览的「盘符」列表：Windows 下逐盘符探测可访问的根目录，
+        // 其它平台只给 /。仅返回目录根，不暴露文件。
+        const roots = []
+        if (process.platform === 'win32') {
+          for (let code = 65; code <= 90; code += 1) {
+            const letter = String.fromCharCode(code)
+            const path = `${letter}:\\`
+            try {
+              if (statSync(path).isDirectory()) roots.push({ name: `${letter}:`, path })
+            } catch {}
+          }
+        } else {
+          roots.push({ name: '/', path: '/' })
+        }
+        return { ok: true, value: { roots, home: homedir() } }
+      }
+      case 'mobile.mkdir': {
+        // 「新建工作区 → 新建文件夹」：宿主的 workspace.create 只接受**已存在**的
+        // 目录（realpath 必须成功），所以手机端要先在这里建目录，再走创建。
+        // 只允许在已存在的父目录下建**一段**名称，不接受多级路径/盘符。
+        const parent = typeof payload?.parent === 'string' ? payload.parent.trim() : ''
+        const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+        if (parent === '' || !isAbsolutePath(parent)) {
+          return { ok: false, error: { code: 'bad-request', message: '缺少有效的父目录' } }
+        }
+        if (name === '' || name === '.' || name === '..' || /[\\/]/.test(name)) {
+          return { ok: false, error: { code: 'bad-request', message: '文件夹名不能为空、不能包含路径分隔符' } }
+        }
+        if (/[<>:"|?*]/.test(name) || /[. ]$/.test(name)) {
+          return { ok: false, error: { code: 'bad-request', message: '文件夹名含有 Windows 不允许的字符' } }
+        }
+        if (name.length > 80) {
+          return { ok: false, error: { code: 'bad-request', message: '文件夹名太长（最多 80 个字符）' } }
+        }
+        let parentStat
+        try {
+          parentStat = statSync(parent)
+        } catch {
+          return { ok: false, error: { code: 'not-found', message: '父目录不存在' } }
+        }
+        if (!parentStat.isDirectory()) {
+          return { ok: false, error: { code: 'bad-request', message: '父路径不是目录' } }
+        }
+        const target = resolvePath(parent, name)
+        if (basename(target) !== name) {
+          return { ok: false, error: { code: 'bad-request', message: '非法的文件夹名' } }
+        }
+        if (existsSync(target)) {
+          return { ok: false, error: { code: 'exists', message: '同名文件或文件夹已存在' } }
+        }
+        try {
+          mkdirSync(target)
+        } catch (err) {
+          return { ok: false, error: { code: 'mkdir-failed', message: err && err.message ? err.message : String(err) } }
+        }
+        return { ok: true, value: { path: target, name } }
       }
       case 'mobile.previews': {
         // bundle 的调用点是 `(await m('mobile.previews', {sessionIds})).items`，
@@ -4288,7 +4658,9 @@ export function createHost(ctx, config) {
     try {
       const budget = method === 'session.prompt'
         ? PROMPT_BODY
-        : method === 'mobile.transcribe' ? 12 * 1024 * 1024 : SMALL_BODY
+        : method === 'mobile.transcribe' ? 12 * 1024 * 1024
+          : method === 'mobile.saveFile' ? MOBILE_FILE_MAX_BYTES + 4 * 1024 * 1024
+            : SMALL_BODY
       envelope = await readJsonBody(req, budget)
     } catch {
       sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'invalid json body' } })
@@ -4701,6 +5073,56 @@ export function createHost(ctx, config) {
   //   3. 显式拒绝 "."、".."；
   //   4. resolve(join(SHOT_DIR, name)) 后再用 relative(SHOT_DIR, full) 复核，
   //      落点不在目录内（以 .. 开头或成绝对路径）再 400。
+  // ── 文件下载：GET /m/file/<token> ──────────────────────────────────────────
+  // 手机端点击聊天里的文件路径时，先调 mobile.fileUrl 换一个短时令牌，再用它下载。
+  // 为什么不是直接把路径放 URL：路径里可能有中文/空格，更重要的是不想给出一个
+  // 「任意读工作区文件」的稳定地址；令牌 10 分钟后失效，且只映射一个已校验的绝对路径。
+  const fileTokens = new Map()
+
+  /** 校验一个路径必须落在会话工作区内，返回 realpath 或 null。 */
+  function resolveInWorkspace(sessionId, requested) {
+    const cwd = sessionCwd(sessionId)
+    if (cwd === '' || requested === '') return null
+    try {
+      const realRoot = realpathSync(cwd)
+      const realPath = realpathSync(resolvePath(realRoot, requested))
+      const rel = relativePath(realRoot, realPath)
+      const inside = rel === '' || (!isAbsolutePath(rel) && rel.split(/[\/]/)[0] !== '..')
+      return inside ? { realRoot, realPath } : null
+    } catch {
+      return null
+    }
+  }
+
+  function serveFileToken(req, res, path) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(res, 405, { ok: false, error: 'method not allowed' })
+    }
+    const token = path.length > FILE_PREFIX.length ? path.slice(FILE_PREFIX.length + 1) : ''
+    const hit = fileTokens.get(token)
+    if (hit === undefined || hit.expiresAt < Date.now()) {
+      fileTokens.delete(token)
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    let data
+    try {
+      data = readFileSync(hit.realPath)
+    } catch {
+      return sendJson(res, 404, { ok: false, error: 'not found' })
+    }
+    const name = basename(hit.realPath)
+    const ascii = name.replace(/[^ -~]/g, '_').replace(/[\\"]/g, '_')
+    try {
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(data.length),
+        'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        'Cache-Control': 'no-store',
+      })
+      res.end(req.method === 'HEAD' ? undefined : data)
+    } catch {}
+  }
+
   function serveShot(req, res, path) {
     const method = (req.method || 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'HEAD') {
@@ -4814,6 +5236,7 @@ export function createHost(ctx, config) {
     // 只读截图：/m/shot/<file>。放在 /m/api 之后是因为前缀互不重叠，放哪都一样；
     // 单独一个分支，绝不影响上面任何既有路由的行为。
     if (path === SHOT_PREFIX || path.startsWith(SHOT_PREFIX + '/')) return serveShot(req, res, path)
+    if (path === FILE_PREFIX || path.startsWith(FILE_PREFIX + '/')) return serveFileToken(req, res, path)
     sendJson(res, 404, { ok: false, error: 'not found' })
   }
 
@@ -4833,6 +5256,10 @@ export function createHost(ctx, config) {
       { kind: 'exact', path: WHALE_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'exact', path: THEME_URL, handler: (req, res) => routeRequest(req, res) },
       { kind: 'prefix', path: API_PREFIX, handler: (req, res) => routeRequest(req, res) },
+      // 截图路由也挂到 GUI 上：桌面聊天里内嵌图片必须与页面同源，否则会被
+      // CSP（img-src 'self'）/跨源策略拦掉，浏览器里就是一张裂图。
+      { kind: 'prefix', path: SHOT_PREFIX, handler: (req, res) => routeRequest(req, res) },
+      { kind: 'prefix', path: FILE_PREFIX, handler: (req, res) => routeRequest(req, res) },
     ]
     const disposers = routes.map((r) => ctx.webServer.register(r))
     return () => {

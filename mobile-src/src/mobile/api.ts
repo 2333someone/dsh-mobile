@@ -210,6 +210,28 @@ export async function checkUpdate(): Promise<UpdateCheckView> {
  * @param attachmentId - 事件里折出来的附件 id。
  * @returns 媒体类型与 data URL。
  */
+/**
+ * 把手机选中的文件上传到会话工作区的 `.dsh-uploads/`，返回相对路径。
+ *
+ * 为什么是「上传+路径」而不是附件：DSH 的消息协议只有文本/图片块，没有通用附件；
+ * agent 读文件是靠工具按路径读，所以把文件落到工作区、把路径写进 prompt 最稳。
+ */
+/**
+ * 换一个短时下载地址（GET /m/file/<token>）：聊天里的文件路径点开后用它下载。
+ * 只接受工作区内的文件，令牌 10 分钟过期。
+ */
+export async function fileUrl(sessionId: string, path: string): Promise<{ url: string; name: string }> {
+  return await callUnary<{ url: string; name: string }>('mobile.fileUrl', { sessionId, path })
+}
+
+export async function saveFile(
+  sessionId: string,
+  name: string,
+  dataBase64: string,
+): Promise<{ path: string; name: string; bytes: number }> {
+  return await callUnary<{ path: string; name: string; bytes: number }>('mobile.saveFile', { sessionId, name, dataBase64 })
+}
+
 export async function readAttachment(sessionId: string, attachmentId: string): Promise<{ mediaType: string; dataUrl: string }> {
   return await callUnary<{ mediaType: string; dataUrl: string }>('mobile.readAttachment', { sessionId, attachmentId })
 }
@@ -734,6 +756,18 @@ export async function readFile(path: string, sessionId?: string): Promise<FilePr
 /** Create a workspace from an existing host directory (does not mkdir). */
 export async function createWorkspace(path: string): Promise<WorkspaceCreateResult> {
   return await callUnary<WorkspaceCreateResult>('workspace.create', { path })
+}
+
+/** Create one directory under an existing parent directory (phone-side mkdir).
+ *  The host's workspace.create only accepts existing directories, so the
+ *  new-workspace flow creates the folder first and then registers it. */
+export async function makeDirectory(parent: string, name: string): Promise<{ path: string; name: string }> {
+  return await callUnary<{ path: string; name: string }>('mobile.mkdir', { parent, name })
+}
+
+/** Filesystem roots (Windows drive letters) for the directory browser. */
+export async function listDirectoryRoots(): Promise<{ roots: Array<{ name: string; path: string }>; home: string }> {
+  return await callUnary('mobile.roots', {})
 }
 
 /** Rename a workspace's display title (host validates trim/conflict). */

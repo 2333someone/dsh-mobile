@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { SessionModels } from '../api-proxy-types'
 import { errorText, staleHostHint } from './views/App.tsx'
-import { models, selectModel, sendCommand, respondApproval, respondQuestion, type CommandDescriptor } from './api.ts'
+import { models, selectModel, sendCommand, respondApproval, respondQuestion } from './api.ts'
 import type { PendingApproval, PendingQuestionItem } from './api.ts'
 import { latestBatchOf } from './question-batches.ts'
 import { Sheet } from './sheet.tsx'
@@ -55,11 +55,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** The composer's + menu: attach an image (gallery or camera) or run a slash command. */
-export function PlusSheet({ commands, onPickImage, onPickCamera, onPickCommand, onClose }: {
-  commands: CommandDescriptor[] | undefined
+/**
+ * 「＋ 添加内容」面板：**只放附件动作**（图片 / 拍照）。
+ *
+ * 早先这里还会把 `mobile.commands` 的斜杠命令（/goal、/plan…）一起列出来，
+ * 与「/」面板重复；当时用 dm-patches/add-sheet-filter.ts 在 DOM 层按 `/` 前缀
+ * 隐藏，结果面板会先渲染命令再消失（用户看到「点开后又加载出一些选项」）。
+ * 现在直接在源码里不渲染命令，该补丁已删除。
+ */
+export function PlusSheet({ onPickImage, onPickFile, onPickCamera, onClose }: {
   onPickImage(): void
+  onPickFile(): void
   onPickCamera(): void
-  onPickCommand(line: string): void
   onClose(): void
 }) {
   return (
@@ -76,6 +83,16 @@ export function PlusSheet({ commands, onPickImage, onPickCamera, onPickCommand, 
             <path d="M2 11.5 L5.5 8 L8 10.5 L10.5 8 L14 11.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
           </svg>
         </button>
+        <button type="button" role="menuitem" className="sheet-option" onClick={onPickFile}>
+          <span className="sheet-option-copy">
+            <span className="sheet-option-title">文件</span>
+            <span className="sheet-option-desc">从手机文件管理器选择</span>
+          </span>
+          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
+            <path d="M4 1.5h5.2L13 5.3V13a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13V3a1.5 1.5 0 0 1 1-1.5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            <path d="M9.2 1.7v3.6h3.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          </svg>
+        </button>
         <button type="button" role="menuitem" className="sheet-option" onClick={onPickCamera}>
           <span className="sheet-option-copy">
             <span className="sheet-option-title">拍照</span>
@@ -86,27 +103,6 @@ export function PlusSheet({ commands, onPickImage, onPickCamera, onPickCommand, 
             <circle cx="8" cy="8.75" r="2.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
           </svg>
         </button>
-        <div className="sheet-option-divider" role="separator" />
-        {commands === undefined ? (
-          <p className="sheet-note">命令加载中…</p>
-        ) : commands.length === 0 ? (
-          <p className="sheet-note">没有可用命令</p>
-        ) : (
-          commands.map(command => (
-            <button
-              key={command.name}
-              type="button"
-              role="menuitem"
-              className="sheet-option"
-              onClick={() => { onPickCommand(`/${command.name}`) }}
-            >
-              <span className="sheet-option-copy">
-                <span className="sheet-option-title">/{command.name}</span>
-                <span className="sheet-option-desc">{command.description}</span>
-              </span>
-            </button>
-          ))
-        )}
       </div>
     </Sheet>
   )

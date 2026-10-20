@@ -106,3 +106,68 @@ git push origin HEAD --tags && git push github HEAD --tags
    发布分支的包名是 `dsh-mobile-web`，所以**不要在本机 checkout 该分支后跑 pnpm install**，
    只在发布分支上执行 `npm publish` 即可；日常开发仍在 `main`。
 3. 市场收录由维护者核对包的归属/用途/发布记录，合并前可能要求补充中英文介绍或截图。
+
+---
+
+## 已完成的发布与收录（2026-10-20）
+
+| 项 | 状态 |
+| --- | --- |
+| npm | `dsh-mobile-web`：0.1.0 → **0.1.2（latest）** |
+| 源码仓库 | https://github.com/2333someone/dsh-mobile （已转 **public**） |
+| 市场收录 issue | https://github.com/polang233/dsh-plugin-index/issues/9 |
+| 市场收录 PR | https://github.com/polang233/dsh-plugin-index/pull/10 （只改 `data/sources.json`，+12 行） |
+| 镜像 | gitea `origin`、GitHub `github`、本机 `E:` 镜像三者一致 |
+
+## 更新机制（重要，别搞混）
+
+- **谁决定装哪个版本：npm**。用户点「更新」时 DSH 从 npm 拉新版本，**不看 GitHub**。
+- **GitHub 的作用**：市场审核时确认「源码公开 + 许可证明确」；转 public 是收录的硬条件。
+- **市场索引的作用**：只决定「能不能被搜到 / 能不能显示更新按钮」。
+  它默认跟踪 npm 的 `latest` 标签（见 CONTRIBUTING），所以发新版本后**不需要重新提交收录**。
+- **本机（`link:` 安装）不需要更新**：手机端资产改完刷新手机页即生效；宿主代码改完重载插件即可。
+
+## 发版清单
+
+```bash
+# 1) main 上改代码、验证、提交
+# 2) 把改动带到发布分支并 bump
+git checkout publish/dsh-mobile-web
+git checkout main -- <改动的文件>
+node -e "…把 package.json 的 version +1…"
+git commit -am "release: x.y.z — …" && npm publish
+# 3) 推三处
+git push origin <branch> && git push github <branch>
+git checkout main && git push origin main && git push github main
+cd E:/desk/dsh-mobile && git pull --ff-only
+```
+
+---
+
+## 发布纪律（2026-10-20 用户明确要求）
+
+> 代码提交/发布会跑在测试前面，是不允许的。**必须先在作者自己的环境实测通过，再对外发布。**
+
+固定流程：
+
+1. **改代码 → 提交到 main**；
+2. **本机（`link:` 安装）自测**：刷新手机页就是最新代码（资产按 mtime 读盘），逐项过下面清单；
+3. **用户点头后**，才做发布：`cd publish/dsh-mobile-web` → bump 版本 → `npm publish`；
+4. 发布后**确认无误**，再去市场提 PR / 重开 issue；
+5. 任何一步发现不对，先回滚（`npm dist-tag add <pkg>@<已验证版本> latest`），不要带着未验证版本往前推。
+
+### 自查清单（每次发布前至少过一遍）
+
+- [ ] 折叠栏：进聊天页不再闪「第二行」；头行单行省略、无横向滚动
+- [ ] 设置页：徽标细边框、右上角「?」可开说明、发送模式只有一行且在「对话」组
+- [ ] 插件页：说明是具体中文、`更多 N 个` 能原地展开/收起
+- [ ] 命令面板：文件/目标/计划(日历)/反馈/压缩/权限/模型(圆柱)/下载日志，图标风格一致
+- [ ] 代码块动作栏：复制=两张纸、下载、新窗口打开，均正常
+- [ ] 聊天：发消息、流式逐字、审批/提问、切换会话
+- [ ] `npm run smoke` = ALL PASS 6/6；手机页 `pageerror = 0`
+
+### 当前状态（2026-10-20）
+
+- npm `latest` 已从 0.1.2 **回退到 0.1.1**；0.1.2 仍可按精确版本安装用于测试
+  （`npm i dsh-mobile-web@0.1.2`），但普通安装/更新拿到的是 0.1.1。
+- 市场 issue #9 与 PR #10 均已**关闭**并留言「待作者实测后再提」，测试通过后重开。

@@ -71,6 +71,8 @@ export const DEFAULT_MOBILE_PORT = 19387
 export const DEFAULT_PAIR_CODE = '123456'
 export const SMALL_BODY = 64 * 1024
 export const PROMPT_BODY = 2 * 1024 * 1024
+/** 手机端「添加文件」的单个文件上限（宿主侧最终把关；客户端也会先挡一次）。 */
+export const MOBILE_FILE_MAX_BYTES = 24 * 1024 * 1024
 // 手机点命令后的单次执行上限：bundle 侧 mobile.commandExec 的 fetch 超时是 180s，
 // 宿主这里留 30s 余量，避免「前端已放弃、宿主还在 await」的悬挂。
 export const COMMAND_EXEC_TIMEOUT_MS = 150 * 1000
@@ -250,6 +252,10 @@ export const PUSH_CHECK_URL = '/m/push-check'
 //   https://<公网域名>:45632/m/shot/<file>.png
 // 安全取舍见 serveShot() 的注释（匿名只读 + 单层文件名白名单 + 扩展名白名单）。
 export const SHOT_PREFIX = '/m/shot'
+/** 文件下载路由前缀：GET /m/file/<token> → 会话工作区里的文件（带 Content-Disposition）。 */
+export const FILE_PREFIX = '/m/file'
+/** 下载令牌有效期（毫秒）。 */
+export const FILE_TOKEN_TTL_MS = 10 * 60 * 1000
 // 只允许单层文件名：不含 / \ : % 与空白，天然挡住目录穿越（.. 另做显式检查）。
 export const SHOT_NAME = /^[A-Za-z0-9._-]+$/
 export const SHOT_TYPES = {

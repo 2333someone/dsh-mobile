@@ -1442,7 +1442,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           </button>
         </div>
       </header>
-      <div className="mobile-scroll">
+      <div className="mobile-scroll dm-settings-page">
         {error !== undefined && <p className="mobile-error mobile-pad" role="alert">{error}</p>}
 
         <div className="settings-search">
@@ -1542,7 +1542,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             <ToggleRow
               icon={<VibrateIcon />}
               title="震动"
-              desc="任务完成、审批到达时轻震一下"
+              desc="任务完成、审批到达时轻震一下（页面在前台时）"
               value={haptics}
               onChange={(next) => { setHaptics(next); setHapticsState(next) }}
             />

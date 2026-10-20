@@ -19,7 +19,6 @@ import { installDmPages } from './dm-pages/index.ts'
 import { installPageMotion } from './dm-pages/page-motion.ts'
 import { installDmToolbar } from './dm-toolbar/index.ts'
 import { installDmPatches } from './dm-patches/index.ts'
-import { installInputCenter } from './dm-patches/input-center.ts'
 
 // Apply the persisted (or default system) theme and the local display
 // preferences before first paint, so the page never flashes the wrong look.
@@ -41,7 +40,6 @@ installDmPages()
 installDmToolbar()
 // 迁移 C：行为补丁（原 index.js 的 *_HTML 注入）。
 installDmPatches()
-installInputCenter()
 
 const root = document.getElementById('root')
 if (root === null) throw new Error('mobile: #root missing')
