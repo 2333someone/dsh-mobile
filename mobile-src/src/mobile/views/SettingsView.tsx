@@ -1542,7 +1542,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             <ToggleRow
               icon={<VibrateIcon />}
               title="震动"
-              desc="任务完成、审批到达时轻震一下"
+              desc="任务完成、审批到达时轻震一下（页面在前台时）"
               value={haptics}
               onChange={(next) => { setHaptics(next); setHapticsState(next) }}
             />
