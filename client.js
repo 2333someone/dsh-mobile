@@ -8,7 +8,7 @@
  * loopback 校验）。样式走主题 token，动画遵循 prefers-reduced-motion。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-mobile',
+  id: 'dsh-mobile-web',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -830,7 +830,7 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
-          id: 'dsh-mobile',
+          id: 'dsh-mobile-web',
           order: 100,
           label: '掌上 dsh',
         }, MobileSettings))

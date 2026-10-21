@@ -1,5 +1,5 @@
 {
-  "name": "dsh-mobile",
+  "name": "dsh-mobile-web",
   "version": "0.1.0",
   "description": "掌上 dsh —— 手机端完整聊天界面（复用 dsh-palm 手机 bundle）：6 位码配对、设备信任、工作区/会话/聊天，可经公网反代访问。",
   "type": "module",
@@ -29,7 +29,6 @@
     "src/host"
   ],
   "license": "MIT",
-  "private": true,
   "engines": {
     "node": ">=20.0.0"
   },
@@ -42,10 +41,7 @@
     },
     "client": {
       "platform": "web",
-      "immediately": true,
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-settings"
-      ]
+      "immediately": true
     }
   },
   "scripts": {

@@ -19,7 +19,7 @@
 # reverse-proxy origin; it is never contacted at startup.
 - insert:
     - id: dsh-mobile
-      name: 'dsh-mobile'
+      name: 'dsh-mobile-web'
       config:
         enabled: true
         mobilePort: 19387
