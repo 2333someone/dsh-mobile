@@ -171,3 +171,20 @@ cd E:/desk/dsh-mobile && git pull --ff-only
 - npm `latest` 已从 0.1.2 **回退到 0.1.1**；0.1.2 仍可按精确版本安装用于测试
   （`npm i dsh-mobile-web@0.1.2`），但普通安装/更新拿到的是 0.1.1。
 - 市场 issue #9 与 PR #10 均已**关闭**并留言「待作者实测后再提」，测试通过后重开。
+
+## ⚠️ 发布分支的 `cordis.patch.yml` 与 main 不同（必须保持）
+
+bundle patch 里的 `name` 是**模块名**，必须等于**安装后 profile 里的包名**：
+
+| 安装方式 | profile 依赖名 | patch 里的 `name` |
+|---|---|---|
+| 本机 `link:` / Git 安装 | `dsh-mobile`（仓库目录名 = package.json name） | `dsh-mobile` → 即 **main** 里的版本 |
+| npm 按名字安装 | `dsh-mobile-web` | `dsh-mobile-web` → **publish 分支**里的版本 |
+
+2026-10-21 踩过：把 main 的 `name: 'dsh-mobile'` 原样发到 npm 后，别人按名字安装会报
+`ERR_MODULE_NOT_FOUND: Cannot find package 'dsh-mobile' imported from …\profiles\desktop\`，
+插件行激活失败、设置里的「掌上 dsh」页面不出现。0.1.5 起 publish 分支固定写成
+`name: 'dsh-mobile-web'`。
+
+因此**每次从 main 合并到 publish 分支时**，`cordis.patch.yml` 的冲突要保留 publish 侧的
+`name: 'dsh-mobile-web'`（`id` 保持 `dsh-mobile` 不变）。
