@@ -753,7 +753,20 @@ export function createHost(ctx, config) {
     const pending = fixed !== ''
       ? { code: fixed, expiresAt: Number.MAX_SAFE_INTEGER, fixed: true }
       : (state.pairToken && now <= state.pairToken.expiresAt ? { code: state.pairToken.code, expiresAt: state.pairToken.expiresAt, fixed: false } : null)
-    sendJson(res, 200, { ok: true, addresses: accessAddresses(), devices: devicesView, pending })
+    // 诊断：插件只把 webServer 当必需服务，其余靠 ctx.get 惰性读；缺哪个这里能一眼看到。
+    const optionalServices = [
+      'sessionController', 'workspaceRegistry', 'workspaceController', 'subagents',
+      'directoryPickerController', 'credentials', 'deepseekAccount',
+      'permissionPresets', 'sessions', 'agents',
+    ]
+    const missingServices = optionalServices.filter((name) => {
+      try {
+        return (typeof ctx.get === 'function' ? ctx.get(name) : undefined) === undefined
+      } catch {
+        return true
+      }
+    })
+    sendJson(res, 200, { ok: true, addresses: accessAddresses(), devices: devicesView, pending, missingServices })
   }
 
   function revokeDevice(req, res) {
@@ -772,8 +785,10 @@ export function createHost(ctx, config) {
   }
 
   // ── RPC adapter (dsh-palm protocol) ───────────────────────────────────────
-  const sc = () => ctx.sessionController
-  const wr = () => ctx.workspaceRegistry
+  // 惰性读取（不写 inject）：缺服务时返回 undefined，调用点自行降级，
+  // 避免 Cordis 把整个插件卡在 pending 而永不激活（见 index.js 顶部注释）。
+  const sc = () => (typeof ctx.get === 'function' ? ctx.get('sessionController') : undefined)
+  const wr = () => (typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined)
   // 与上面同款：ctx.get 是「按名取服务」的宽容读法，取不到返回 undefined 而不抛。
   // 调用处一律先判空，再决定降级（空列表 / 报错），绝不直接对 undefined 取方法。
   const wc = () => (typeof ctx.get === 'function' ? ctx.get('workspaceController') : undefined)
@@ -5380,7 +5395,12 @@ export function createHost(ctx, config) {
           if (controllerRef.signal.aborted) return
         }
         if (disposed || controllerRef.signal.aborted) return
-        const frames = sc().control(controllerRef.signal)
+        const sc2 = sc()
+        if (sc2 === undefined) {
+          // 宿主没提供 sessionController：静默停在这里，等下次重连再试。
+          return
+        }
+        const frames = sc2.control(controllerRef.signal)
         for await (const frame of frames) {
           if (disposed || controllerRef.signal.aborted) return
           if (!frame) continue
