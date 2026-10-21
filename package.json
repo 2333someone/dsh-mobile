@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile-web",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "掌上 dsh —— DSH 的手机端完整聊天界面：6 位码配对、设备信任、工作区/会话/聊天、SSE 实时流，可经局域网或公网反代访问。",
   "type": "module",
   "main": "index.js",
